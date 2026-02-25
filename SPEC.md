@@ -296,6 +296,19 @@ Use NUL-delimited output for path safety.
   - Toggle clears full patch cache and reloads selected file.
   - Stale async results are dropped by generation guard.
 
+### F6a. Manual refresh
+- Scope: keybinding `r` to reload current compare range.
+- Behavior:
+  - Increment cache generation, clear patch cache, reload metadata.
+  - Preserve selected file by path when still present; if removed, select nearest valid row.
+  - Reuse same refresh pipeline as initial load and async patch loading.
+  - Ignore stale async responses using generation guard.
+- Acceptance criteria:
+  - Pressing `r` updates file list and patch data to current repository state.
+  - No stale patch content is displayed after refresh.
+  - UI remains responsive during refresh.
+  - `r` appears in key-help text.
+
 ### F7. Edge-case safety
 - Scope: binary files, submodule changes, oversized patches.
 - Acceptance criteria:
@@ -322,16 +335,17 @@ Use NUL-delimited output for path safety.
 | T7 | Patch pane and hunk navigation | T5, T6 | `go test ./internal/ui -run TestHunkNavigation` |
 | T8 | Async lazy patch loading, cache, viewport virtualization | T7 | `go test ./internal/review ./internal/ui -run TestLazyLoad` |
 | T9 | Directional search index and UI wiring | T7 | `go test ./internal/search ./internal/ui -run TestDirectionalSearch` |
-| T10 | Whitespace toggle, full cache invalidation, generation guard | T8 | `go test ./internal/diff ./internal/ui -run TestWhitespaceGeneration` |
+| T9a | Manual refresh action (`r`), generation bump, full cache invalidation, metadata reload, selection reconciliation | T8 | `go test ./internal/review ./internal/ui -run TestManualRefresh` |
+| T10 | Whitespace toggle (calls shared cache-reset helper from T9a) | T8, T9a | `go test ./internal/diff ./internal/ui -run TestWhitespaceGeneration` |
 | T11 | Edge-case hardening (binary/submodule/oversize) | T5, T8 | `go test ./internal/diff ./internal/ui -run TestEdgeCases` |
 | T12 | End-to-end fixtures, tmux smoke checks, release checklist | T1-T11 | `go test ./... && go test -race ./... && ./scripts/bench.sh` |
 
 ### Dependency graph
 ```text
-T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T10 -> T12
-                 |                |      |      |
-                 +-> T5 ----------+      +-> T9-+
-                                         +-> T11+
+T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T9a -> T10 -> T12
+                 |                |      |             |
+                 +-> T5 ----------+      +-> T9 ------+
+                                         +-> T11 -----+
 ```
 
 ## Dependencies
@@ -368,7 +382,7 @@ T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T10 -> T12
 ## Success Criteria (v0.1)
 
 ### Functional
-- All MVP features F1-F8 satisfy acceptance criteria.
+- All MVP features F1-F8 (including F6a) satisfy acceptance criteria.
 - Full keyboard-only review loop is complete and reliable.
 
 ### Correctness
@@ -385,3 +399,131 @@ T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T10 -> T12
 
 ### Release gate
 When all criteria above pass and non-goals remain intact, we tag `v0.1.0`.
+
+## Post-v0.1 Roadmap
+
+### Watch Mode (`--watch`) — v0.2, Polling-First
+
+#### Objective
+Continuously monitor divergence from the configured base/head and auto-refresh when fingerprint changes.
+
+#### CLI
+- `--watch` (bool): enable watch loop.
+- `--watch-interval` (duration, default `2s`, min `500ms`).
+
+#### Fingerprint design
+- Baseline fingerprint command:
+  - `git rev-parse HEAD refs/remotes/origin/main`
+- Optional extended fingerprint (config-gated):
+  - Include `git status --porcelain` hash for working-tree sensitivity.
+- Fingerprint change is the only trigger for auto-refresh.
+
+#### Refresh behavior
+- On fingerprint change:
+  - Execute same refresh path as manual `r` (F6a).
+  - Increment generation, clear cache, reload metadata.
+- Debounce rule:
+  - If refresh already in flight, skip new trigger and evaluate on next tick.
+
+#### State additions
+- `WatchEnabled bool`
+- `WatchInterval time.Duration`
+- `LastFingerprint string`
+- `RefreshInFlight bool`
+- `LastRefreshAt time.Time`
+
+#### Acceptance criteria
+- No-refresh churn when fingerprint is stable.
+- Auto-refresh occurs within one watch interval after fingerprint change.
+- No stale patch state after rapid successive repository updates.
+
+### Idle Screen and Auto-Refresh — v0.2
+
+#### Behavior
+- If launched with `--watch` and no divergence, show idle screen:
+  - Compare target summary.
+  - Watch interval.
+  - Last fingerprint check time.
+  - Key hints (`q`, `r`).
+- On first detected divergence, transition automatically to normal review view.
+
+#### Acceptance criteria
+- Idle view displays without attempting unnecessary patch loads.
+- Transition to review view is automatic and non-disruptive.
+
+### `party.sh` Integration — v0.2
+
+#### Launch contract
+`party.sh` launches `scry` in a dedicated tmux pane as a long-lived process in watch mode.
+
+Recommended launch pattern:
+```bash
+cd <repo> && scry --base origin/main --head HEAD --watch --watch-interval 2s
+```
+
+#### Requirements
+- Process must remain attached to pane and recover cleanly from pane resize.
+- Exit behavior must be explicit (`q` in pane or pane kill).
+- No dependency on Claude/Codex panes; Scry is independently restartable.
+
+### PR Resolver (`--pr`) — v0.2
+
+#### Objective
+Resolve compare refs from a PR identifier while reusing existing diff pipeline.
+
+#### CLI
+- `--pr <number|url|branch>`
+
+#### Behavior
+- Resolve base/head refs via `gh` (`gh pr view`/`gh api`).
+- Feed resolved refs into existing compare resolver.
+- Fallback with actionable error when `gh` unavailable or unauthenticated.
+
+#### Acceptance criteria
+- `--pr` and manual `--base/--head` produce equivalent diff outputs when refs match.
+
+### Review Queue Mode — v0.2
+
+#### Objective
+Track review progress per file for a compare range.
+
+#### Model
+- States: `unseen`, `seen`, `needs-second-look`.
+- Key by compare fingerprint + file path.
+- Persist under `.git/scry/review-state.json`.
+
+#### UX
+- Key to cycle state on selected file.
+- Navigation to next unresolved (`unseen` or `needs-second-look`).
+
+#### Acceptance criteria
+- State survives app restart for same compare fingerprint.
+- State resets automatically when compare fingerprint changes.
+
+### Additional Future Features
+
+#### AI handoff slice export
+- Export selected file/hunk/context as structured markdown or plain text for agent prompts.
+
+#### Noise gate profiles
+- Toggle filters for generated/vendor/lockfile-heavy paths.
+
+#### Changed symbols jump list
+- Symbol-level navigation for supported languages when parsing is available.
+
+#### Trust overlay
+- Rank risky file categories (auth, migrations, infra) higher in navigation.
+
+#### Delta-since-last-review mode
+- Compare from last reviewed commit fingerprint to current head to avoid rereading unchanged hunks.
+
+### Roadmap Priority Order (v0.2)
+1. Watch mode (`--watch`) with polling fingerprint.
+2. Idle screen + auto-transition.
+3. PR resolver (`--pr`).
+4. Review queue mode.
+5. Noise gate profiles.
+6. AI handoff slice export.
+7. Delta-since-last-review mode.
+8. Changed symbols jump list.
+9. Trust overlay.
