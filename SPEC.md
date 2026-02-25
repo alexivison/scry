@@ -3,7 +3,7 @@
 ## Project Overview
 `Scry` is a minimal, read-only terminal UI for reviewing Git branch diffs with pull-request semantics.
 
-The product goal is narrow and intentional: provide the fastest keyboard-only workflow to inspect what changed between two refs, especially in tmux-heavy AI-assisted coding workflows.
+The product goal is narrow and intentional: provide the fastest keyboard-only workflow to inspect what changed between two refs. It works in any terminal, with particular attention to tmux compatibility.
 
 ## Goals
 - Deliver a focused diff review tool, not a general Git client.
@@ -451,20 +451,9 @@ Continuously monitor divergence from the configured base/head and auto-refresh w
 - Idle view displays without attempting unnecessary patch loads.
 - Transition to review view is automatic and non-disruptive.
 
-### `party.sh` Integration — v0.2
+### tmux Session Integration — v0.2
 
-#### Launch contract
-`party.sh` launches `scry` in a dedicated tmux pane as a long-lived process in watch mode.
-
-Recommended launch pattern:
-```bash
-cd <repo> && scry --base origin/main --head HEAD --watch --watch-interval 2s
-```
-
-#### Requirements
-- Process must remain attached to pane and recover cleanly from pane resize.
-- Exit behavior must be explicit (`q` in pane or pane kill).
-- No dependency on Claude/Codex panes; Scry is independently restartable.
+See [docs/integrations/tmux-session.md](docs/integrations/tmux-session.md) for details on launching Scry as a long-lived process in a tmux session alongside other tools.
 
 ### PR Resolver (`--pr`) — v0.2
 
@@ -502,9 +491,6 @@ Track review progress per file for a compare range.
 
 ### Additional Future Features
 
-#### AI handoff slice export
-- Export selected file/hunk/context as structured markdown or plain text for agent prompts.
-
 #### Noise gate profiles
 - Toggle filters for generated/vendor/lockfile-heavy paths.
 
@@ -517,13 +503,21 @@ Track review progress per file for a compare range.
 #### Delta-since-last-review mode
 - Compare from last reviewed commit fingerprint to current head to avoid rereading unchanged hunks.
 
+### Optional Integrations
+
+#### Clipboard/export slice
+- Export selected file/hunk/context as structured markdown or plain text for external tools.
+
+#### tmux session launcher
+- See [docs/integrations/tmux-session.md](docs/integrations/tmux-session.md).
+
 ### Roadmap Priority Order (v0.2)
 1. Watch mode (`--watch`) with polling fingerprint.
 2. Idle screen + auto-transition.
 3. PR resolver (`--pr`).
 4. Review queue mode.
 5. Noise gate profiles.
-6. AI handoff slice export.
+6. Clipboard/export slice.
 7. Delta-since-last-review mode.
 8. Changed symbols jump list.
 9. Trust overlay.
