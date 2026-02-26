@@ -22,7 +22,8 @@ The product goal is narrow and intentional: provide the fastest keyboard-only wo
 
 ### Layered design
 1. Source Resolution
-- Resolve repository, refs, and compare mode (`three-dot` default, `two-dot` optional).
+- Resolve repository context, refs, and compare mode (`three-dot` default, `two-dot` optional).
+- Detect linked worktrees and resolve `GitDir` / `GitCommonDir` separately from `WorktreeRoot`.
 
 2. Git Command Boundary
 - Execute all `git` calls through a single runner abstraction.
@@ -75,6 +76,16 @@ scry/
 
 ### Core types
 ```go
+// RepoContext is resolved once at startup via git rev-parse.
+// In a linked worktree, .git is a file (not a directory), so code
+// must NEVER construct paths via WorktreeRoot + ".git" + "...".
+type RepoContext struct {
+    WorktreeRoot     string // git rev-parse --show-toplevel
+    GitDir           string // git rev-parse --absolute-git-dir (per-worktree)
+    GitCommonDir     string // git rev-parse --git-common-dir (shared across worktrees)
+    IsLinkedWorktree bool   // GitDir != GitCommonDir after path canonicalization
+}
+
 type CompareMode string
 
 const (
@@ -83,7 +94,7 @@ const (
 )
 
 type CompareRequest struct {
-    RepoRoot         string
+    Repo             RepoContext
     BaseRef          string
     HeadRef          string
     Mode             CompareMode
@@ -92,7 +103,7 @@ type CompareRequest struct {
 }
 
 type ResolvedCompare struct {
-    RepoRoot  string
+    Repo      RepoContext
     BaseRef   string
     HeadRef   string
     MergeBase string
@@ -150,7 +161,7 @@ type CompareResolver interface {
 }
 
 type CommandRunner interface {
-    Run(ctx context.Context, repoRoot, bin string, args ...string) ([]byte, error)
+    Run(ctx context.Context, workDir, bin string, args ...string) ([]byte, error)
 }
 
 type MetadataService interface {
@@ -207,6 +218,15 @@ type AppState struct {
 
 ### Command strategy
 
+#### Repository context resolution
+Resolved once at startup, before compare resolution:
+- `WorktreeRoot` = `git rev-parse --show-toplevel`
+- `GitDir` = `git rev-parse --absolute-git-dir`
+- `GitCommonDir` = canonicalized `git rev-parse --git-common-dir`
+- `IsLinkedWorktree` = `GitDir != GitCommonDir`
+
+All subsequent `git` commands execute with `WorktreeRoot` as working directory. No code path may construct paths via `WorktreeRoot + ".git" + "..."` — in a linked worktree, `.git` is a file, not a directory. Use `GitDir` or `GitCommonDir` for any state storage paths.
+
 #### Compare resolution
 - Three-dot mode (default):
   - `git merge-base <base> <head>`
@@ -258,11 +278,13 @@ Use NUL-delimited output for path safety.
 ## MVP Feature List and Acceptance Criteria
 
 ### F1. Compare target resolution
-- Scope: `--base`, `--head`, `--mode=three-dot|two-dot`.
+- Scope: `--base`, `--head`, `--mode=three-dot|two-dot`, repo context.
 - Acceptance criteria:
   - Default mode is `three-dot`.
   - Invalid refs return clear errors.
   - Active compare range is visible in status UI.
+  - Works identically in main checkout and linked worktrees.
+  - `RepoContext` correctly distinguishes `GitDir` from `GitCommonDir` in linked worktrees.
 
 ### F2. Deterministic file list with status and counts
 - Scope: merged metadata pipeline.
@@ -328,7 +350,7 @@ Use NUL-delimited output for path safety.
 |---|---|---|---|
 | T1 | Repository bootstrap, `pflag` CLI, config model | none | `go test ./cmd/scry ./internal/config` |
 | T2 | `gitexec` runner with timeout and stderr-rich errors | T1 | `go test ./internal/gitexec` |
-| T3 | Source resolver with three-dot default and two-dot option | T2 | `go test ./internal/source ./internal/model` |
+| T3 | Source resolver with three-dot default, two-dot option, and worktree-safe repo context | T2 | `go test ./internal/source ./internal/model` |
 | T4 | Metadata parser and explicit `name-status`/`numstat` merge | T2, T3 | `go test ./internal/diff -run TestMetadataMerge` |
 | T5 | Patch parser/loader service and domain mapping | T2, T3 | `go test ./internal/diff -run TestLoadPatch` |
 | T6 | Bubble Tea shell with synchronous bootstrap data render | T1, T4 | `go test ./internal/ui -run TestShellRender` |
@@ -338,7 +360,7 @@ Use NUL-delimited output for path safety.
 | T9a | Manual refresh action (`r`), generation bump, full cache invalidation, metadata reload, selection reconciliation | T8 | `go test ./internal/review ./internal/ui -run TestManualRefresh` |
 | T10 | Whitespace toggle (calls shared cache-reset helper from T9a) | T8, T9a | `go test ./internal/diff ./internal/ui -run TestWhitespaceGeneration` |
 | T11 | Edge-case hardening (binary/submodule/oversize) | T5, T8 | `go test ./internal/diff ./internal/ui -run TestEdgeCases` |
-| T12 | End-to-end fixtures, tmux smoke checks, release checklist | T1-T11 | `go test ./... && go test -race ./... && ./scripts/bench.sh` |
+| T12 | End-to-end fixtures (including linked worktree), tmux smoke checks, release checklist | T1-T11 | `go test ./... && go test -race ./... && ./scripts/bench.sh` |
 
 ### Dependency graph
 ```text
@@ -378,6 +400,7 @@ T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T9a -> T10 -> T12
 | Terminal compatibility issues | Capability checks, graceful style fallback, tmux smoke tests |
 | Scope creep into full Git client | Strict non-goals and task-scope enforcement |
 | External command failures | Structured command errors surfaced in status pane |
+| Linked worktree `.git` path failure | `RepoContext` resolved at startup; `.git` paths derived from `GitDir`/`GitCommonDir`, never from string concatenation on `WorktreeRoot` |
 
 ## Success Criteria (v0.1)
 
@@ -386,8 +409,9 @@ T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T9a -> T10 -> T12
 - Full keyboard-only review loop is complete and reliable.
 
 ### Correctness
-- Golden fixtures verify metadata and patch parity with `git diff` across simple, rename, binary, submodule, and large cases.
+- Golden fixtures verify metadata and patch parity with `git diff` across simple, rename, binary, submodule, large, and linked worktree cases.
 - No stale patch state appears after whitespace mode transitions.
+- Linked worktree fixtures confirm identical diff output and correct `RepoContext` resolution.
 
 ### Reliability
 - `go test ./...` and `go test -race ./...` pass.
@@ -417,6 +441,7 @@ Continuously monitor divergence from the configured base/head and auto-refresh w
 - Optional extended fingerprint (config-gated):
   - Include `git status --porcelain` hash for working-tree sensitivity.
 - Fingerprint change is the only trigger for auto-refresh.
+- Worktree note: `HEAD` is per-worktree, but remote-tracking refs (e.g. `refs/remotes/origin/main`) are shared across all worktrees. A `git fetch` in any sibling worktree mutates the shared ref and will trigger refresh in all watchers that include it in their fingerprint. This is expected behavior but should be documented for multi-agent setups.
 
 #### Refresh behavior
 - On fingerprint change:
@@ -479,7 +504,7 @@ Track review progress per file for a compare range.
 #### Model
 - States: `unseen`, `seen`, `needs-second-look`.
 - Key by compare fingerprint + file path.
-- Persist under `.git/scry/review-state.json`.
+- Persist under `${GitDir}/scry/review-state.json` (per-worktree by default; isolates concurrent agent sessions).
 
 #### UX
 - Key to cycle state on selected file.
