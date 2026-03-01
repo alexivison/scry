@@ -12,7 +12,7 @@ The product goal is narrow and intentional: provide the fastest keyboard-only wo
 - Provide deterministic, scriptable behavior with clear CLI flags and exit codes.
 
 ## Explicit Non-Goals (v0.1)
-- No staging, committing, rebasing, cherry-picking, or conflict resolution.
+- No staging, committing, rebasing, cherry-picking, or conflict resolution. *(v0.2 introduces opt-in AI-assisted commit via `--commit`; all other write operations remain non-goals.)*
 - No inline PR comments or code review thread management.
 - No plugin system.
 - No syntax-aware/AST diff mode by default.
@@ -389,6 +389,10 @@ T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T9a -> T10 -> T12
 - `cobra` (not required for v0.1 single-command CLI)
 - `go-git`/libgit2 bindings (Git CLI remains source of truth for v0.1)
 
+### v0.2 additions (AI commit generator)
+- `github.com/anthropics/anthropic-sdk-go` (Claude API client, initial provider)
+- Future: `github.com/openai/openai-go` (OpenAI provider), local model adapters (Ollama)
+
 ## Risks and Mitigations
 
 | Risk | Mitigation |
@@ -496,6 +500,68 @@ Resolve compare refs from a PR identifier while reusing existing diff pipeline.
 #### Acceptance criteria
 - `--pr` and manual `--base/--head` produce equivalent diff outputs when refs match.
 
+### AI Commit Message Generator — v0.2
+
+#### Objective
+Generate a contextual commit message from the current diff using an LLM, then optionally execute the commit. This extends Scry from a read-only review tool into an assist-and-act workflow while keeping the core diff experience unchanged.
+
+#### CLI
+- `--commit` (bool): enter commit-generation mode after review.
+- `--commit-provider` (string, default `claude`): LLM provider to use (`claude` initially; future: `openai`, `ollama`, `custom`).
+- `--commit-model` (string): override default model for the selected provider (e.g. `claude-sonnet-4-20250514`).
+- `--commit-auto` (bool, default `false`): skip interactive confirmation and commit immediately with the generated message. Requires `--commit`.
+
+#### Keybinding
+- `c` in file-list pane: trigger commit message generation from the current diff.
+
+#### Behavior
+1. **Diff collection**: gather the full unified diff for the current compare range (reuse existing `PatchService` pipeline).
+2. **Prompt construction**: build a structured prompt containing:
+   - The complete unified diff.
+   - File-level summary (paths, statuses, line counts).
+   - Instruction to produce a conventional-commit-style message with a concise subject line (≤72 chars) and optional body.
+3. **LLM request**: send prompt to the configured provider.
+4. **Interactive confirmation**:
+   - Display the generated message in a confirmation pane.
+   - Keys: `Enter` to accept and commit, `e` to edit in `$EDITOR` before committing, `r` to regenerate, `Esc` to cancel.
+5. **Commit execution**: run `git commit -m "<message>"` via `gitexec` runner against `WorktreeRoot`.
+6. **Post-commit**: show commit SHA in status bar, refresh diff view (generation bump, cache clear).
+
+#### Provider abstraction
+```go
+type CommitMessageProvider interface {
+    Generate(ctx context.Context, diff string, files []FileSummary) (string, error)
+}
+```
+- Initial implementation: `ClaudeProvider` using the Anthropic Messages API.
+- Provider selected at startup via `--commit-provider` flag.
+- API keys read from environment variables (`ANTHROPIC_API_KEY`, future: `OPENAI_API_KEY`).
+
+#### State additions
+```go
+type CommitState struct {
+    GeneratedMessage string
+    Provider         string
+    InFlight         bool
+    Err              error
+}
+```
+
+#### Error handling
+- Missing API key: surface actionable error in status bar, do not crash.
+- LLM request failure (network, rate limit, invalid response): display error, allow retry via `r`.
+- Commit failure (nothing staged, hook rejection): display git stderr in status pane.
+
+#### Acceptance criteria
+- Generated message accurately reflects the diff content and follows conventional commit style.
+- `Enter` executes `git commit` and the new commit SHA is visible.
+- `Esc` cancels without side effects.
+- `e` opens `$EDITOR` with the generated message; on save, commit proceeds.
+- `r` regenerates with a fresh LLM call.
+- `--commit-auto` mode commits without interactive confirmation.
+- Provider abstraction allows adding new backends without modifying core logic.
+- Missing or invalid API key produces a clear, non-crashing error.
+
 ### Review Queue Mode — v0.2
 
 #### Objective
@@ -539,10 +605,11 @@ Track review progress per file for a compare range.
 ### Roadmap Priority Order (v0.2)
 1. Watch mode (`--watch`) with polling fingerprint.
 2. Idle screen + auto-transition.
-3. PR resolver (`--pr`).
-4. Review queue mode.
-5. Noise gate profiles.
-6. Clipboard/export slice.
-7. Delta-since-last-review mode.
-8. Changed symbols jump list.
-9. Trust overlay.
+3. AI commit message generator (`--commit`).
+4. PR resolver (`--pr`).
+5. Review queue mode.
+6. Noise gate profiles.
+7. Clipboard/export slice.
+8. Delta-since-last-review mode.
+9. Changed symbols jump list.
+10. Trust overlay.
