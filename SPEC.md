@@ -192,7 +192,8 @@ type PatchService interface {
     //   - Parse failure: return (FilePatch{}, wrapped error).
     //
     // Callers check error type for fallback UI; Summary is always populated on sentinel errors.
-    LoadPatch(ctx context.Context, cmp ResolvedCompare, filePath string) (FilePatch, error)
+    // ignoreWhitespace controls whether -w is appended to the git diff command.
+    LoadPatch(ctx context.Context, cmp ResolvedCompare, filePath string, ignoreWhitespace bool) (FilePatch, error)
 }
 
 // Sentinel errors for PatchService edge cases.
