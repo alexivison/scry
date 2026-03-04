@@ -28,3 +28,12 @@ func TestRunDefaults(t *testing.T) {
 		t.Errorf("exit code = %d, want 0", code)
 	}
 }
+
+func TestRunHelpExitsZero(t *testing.T) {
+	t.Parallel()
+
+	code := runWith([]string{"--help"})
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}

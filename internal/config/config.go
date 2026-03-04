@@ -37,6 +37,10 @@ func Parse(args []string) (Config, error) {
 		return Config{}, err
 	}
 
+	if fs.NArg() > 0 {
+		return Config{}, fmt.Errorf("unexpected argument: %s", fs.Arg(0))
+	}
+
 	cm, err := parseCompareMode(mode)
 	if err != nil {
 		return Config{}, err

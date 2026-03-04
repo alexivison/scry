@@ -70,3 +70,12 @@ func TestParseInvalidFlag(t *testing.T) {
 		t.Fatal("expected error for unknown flag, got nil")
 	}
 }
+
+func TestParseRejectsPositionalArgs(t *testing.T) {
+	t.Parallel()
+
+	_, err := Parse([]string{"unexpected-arg"})
+	if err == nil {
+		t.Fatal("expected error for positional argument, got nil")
+	}
+}
