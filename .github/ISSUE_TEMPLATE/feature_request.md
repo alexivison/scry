@@ -20,4 +20,4 @@ Any other approaches you've thought about.
 
 ## Scope check
 
-Please verify against the [non-goals in SPEC.md](../../SPEC.md#explicit-non-goals-v01) before submitting. Features involving write operations (staging, committing, rebasing) are intentionally out of scope.
+Please verify against the [non-goals in SPEC.md](../../docs/SPEC.md#explicit-non-goals-v01) before submitting. Features involving write operations (staging, committing, rebasing) are intentionally out of scope.

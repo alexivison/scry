@@ -41,17 +41,17 @@ Scry has strict module boundaries. Please respect them:
 - **`gitexec`** — The only package that runs subprocess commands.
 - **`app`** — Wiring only. No business logic.
 
-See [SPEC.md](SPEC.md) for the full architecture reference.
+See [SPEC.md](docs/SPEC.md) for the full architecture reference.
 
 ### Testing
 
-- Every feature needs tests. See the task breakdown in SPEC.md for expected test patterns.
+- Every feature needs tests. See the task breakdown in [docs/SPEC.md](docs/SPEC.md) for expected test patterns.
 - Use `testdata/repos/` fixture repositories for integration tests.
 - Golden tests go in `testdata/golden/`.
 
 ### Scope discipline
 
-Scry is deliberately minimal. Before proposing a feature, check the non-goals in [SPEC.md](SPEC.md). If your idea adds write operations, plugin infrastructure, or broad Git client functionality, it is likely out of scope for the foreseeable future.
+Scry is deliberately minimal. Before proposing a feature, check the non-goals in [SPEC.md](docs/SPEC.md). If your idea adds write operations, plugin infrastructure, or broad Git client functionality, it is likely out of scope for the foreseeable future.
 
 ## Submitting changes
 

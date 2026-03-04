@@ -85,7 +85,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Architecture
 
-See [SPEC.md](SPEC.md) for the full technical specification, architecture, and implementation plan.
+See [docs/SPEC.md](docs/SPEC.md) for the full technical specification, architecture, and implementation plan.
 
 ## License
 
