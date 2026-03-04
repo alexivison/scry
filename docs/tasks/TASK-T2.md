@@ -7,11 +7,11 @@ T1 (project scaffold, model types).
 - `internal/gitexec/` — GitRunner implementation, GitRunnerConfig, structured errors.
 
 ## Deliverables
-- [ ] `GitRunner` interface implementation with `RunGit(ctx, args...)`.
-- [ ] `GitRunnerConfig` with `WorkDir` and `Timeout` (default 30s).
-- [ ] Structured error type wrapping stderr, exit code, and command args.
-- [ ] Context cancellation and timeout enforcement.
-- [ ] Constructor: `NewGitRunner(cfg GitRunnerConfig) GitRunner`.
+- [x] `GitRunner` interface implementation with `RunGit(ctx, args...)`.
+- [x] `GitRunnerConfig` with `WorkDir` and `Timeout` (default 30s).
+- [x] Structured error type wrapping stderr, exit code, and command args.
+- [x] Context cancellation and timeout enforcement.
+- [x] Constructor: `NewGitRunner(cfg GitRunnerConfig) GitRunner`.
 
 ## Design Notes
 - Runner is the sole subprocess boundary. No other package may exec git.
