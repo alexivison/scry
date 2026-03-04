@@ -99,15 +99,14 @@ type CompareRequest struct {
     HeadRef          string
     Mode             CompareMode
     IgnoreWhitespace bool
-    DetectRenames    bool
 }
 
 type ResolvedCompare struct {
     Repo      RepoContext
     BaseRef   string
     HeadRef   string
-    MergeBase string
-    DiffRange string
+    MergeBase string // SHA of merge-base in three-dot mode; empty string in two-dot mode.
+    DiffRange string // Range string passed to git diff: "base...head" or "base..head".
 }
 
 type FileStatus string
@@ -133,6 +132,13 @@ type FileSummary struct {
 }
 
 type LineKind string
+
+const (
+    LineContext    LineKind = "context"
+    LineAdded     LineKind = "added"
+    LineDeleted   LineKind = "deleted"
+    LineNoNewline LineKind = "no-newline" // "No newline at end of file"
+)
 
 type DiffLine struct {
     Kind  LineKind
@@ -160,8 +166,16 @@ type CompareResolver interface {
     Resolve(ctx context.Context, req CompareRequest) (ResolvedCompare, error)
 }
 
-type CommandRunner interface {
-    Run(ctx context.Context, workDir, bin string, args ...string) ([]byte, error)
+// GitRunner is the sole subprocess boundary. WorkDir is fixed at
+// construction time (see bootstrap sequence below).
+type GitRunner interface {
+    RunGit(ctx context.Context, args ...string) ([]byte, error)
+}
+
+// GitRunnerConfig controls runner behavior.
+type GitRunnerConfig struct {
+    WorkDir string        // Working directory for all git commands.
+    Timeout time.Duration // Per-command timeout. Default: 30s.
 }
 
 type MetadataService interface {
@@ -169,8 +183,24 @@ type MetadataService interface {
 }
 
 type PatchService interface {
+    // LoadPatch returns the parsed patch for a single file.
+    //
+    // Edge-case return contract:
+    //   - Oversized patch (>50k lines or >8 MiB raw): return (FilePatch{Summary: valid, Hunks: nil}, ErrOversized).
+    //   - Binary file: return (FilePatch{Summary: valid, Hunks: nil}, ErrBinaryFile).
+    //   - Submodule: return (FilePatch{Summary: valid, Hunks: nil}, ErrSubmodule).
+    //   - Parse failure: return (FilePatch{}, wrapped error).
+    //
+    // Callers check error type for fallback UI; Summary is always populated on sentinel errors.
     LoadPatch(ctx context.Context, cmp ResolvedCompare, filePath string) (FilePatch, error)
 }
+
+// Sentinel errors for PatchService edge cases.
+var (
+    ErrOversized  = errors.New("patch exceeds size threshold")
+    ErrBinaryFile = errors.New("binary file")
+    ErrSubmodule  = errors.New("submodule change")
+)
 
 type SearchDirection int
 
@@ -180,6 +210,8 @@ const (
 )
 
 type Index interface {
+    // Build constructs the search index from parsed lines. Input is
+    // already validated by the patch parser; this operation is infallible.
     Build(patch FilePatch)
     Find(query string, fromLine int, dir SearchDirection) (line int, ok bool)
 }
@@ -197,6 +229,13 @@ const (
 
 type LoadStatus string
 
+const (
+    LoadIdle    LoadStatus = "idle"
+    LoadLoading LoadStatus = "loading"
+    LoadLoaded  LoadStatus = "loaded"
+    LoadFailed  LoadStatus = "failed"
+)
+
 type PatchLoadState struct {
     Status     LoadStatus
     Patch      *FilePatch
@@ -207,7 +246,7 @@ type PatchLoadState struct {
 type AppState struct {
     Compare          ResolvedCompare
     Files            []FileSummary
-    SelectedFile     int
+    SelectedFile     int // Index into Files. -1 when Files is empty.
     Patches          map[string]PatchLoadState
     CacheGeneration  int
     IgnoreWhitespace bool
@@ -216,16 +255,48 @@ type AppState struct {
 }
 ```
 
+### CLI config model
+```go
+// Config is parsed from CLI flags in cmd/scry and threaded into app bootstrap.
+type Config struct {
+    BaseRef          string      // --base; default: "" (resolved to @{upstream})
+    HeadRef          string      // --head; default: "" (resolved to HEAD)
+    Mode             CompareMode // --mode; default: CompareThreeDot
+    IgnoreWhitespace bool        // --ignore-whitespace; default: false
+}
+```
+
 ### Command strategy
 
+#### Bootstrap sequence
+Startup proceeds in two phases to resolve the circular dependency between `GitRunner` (needs `WorktreeRoot`) and `RepoContext` (needs git commands):
+
+1. **Phase 1 — Discovery runner:** Construct a temporary `GitRunner` bound to the process working directory (`os.Getwd()`). Use it to execute the `rev-parse` commands below.
+2. **Phase 2 — Repo-scoped runner:** Construct the permanent `GitRunner` bound to `RepoContext.WorktreeRoot`. This runner is threaded through all subsequent operations.
+
 #### Repository context resolution
-Resolved once at startup, before compare resolution:
+Resolved once at startup (phase 1), before compare resolution:
 - `WorktreeRoot` = `git rev-parse --show-toplevel`
 - `GitDir` = `git rev-parse --absolute-git-dir`
 - `GitCommonDir` = canonicalized `git rev-parse --git-common-dir`
 - `IsLinkedWorktree` = `GitDir != GitCommonDir`
 
-All subsequent `git` commands execute with `WorktreeRoot` as working directory. No code path may construct paths via `WorktreeRoot + ".git" + "..."` — in a linked worktree, `.git` is a file, not a directory. Use `GitDir` or `GitCommonDir` for any state storage paths.
+All subsequent `git` commands (phase 2 onward) execute with `WorktreeRoot` as working directory. No code path may construct paths via `WorktreeRoot + ".git" + "..."` — in a linked worktree, `.git` is a file, not a directory. Use `GitDir` or `GitCommonDir` for any state storage paths.
+
+#### Default ref resolution
+- `--head` omitted: defaults to `HEAD`.
+- `--base` omitted: resolve upstream via `git rev-parse --symbolic-full-name --verify @{upstream}`.
+- If upstream is absent or unresolvable: fatal error with actionable message (*"No upstream branch found. Set upstream with `git branch --set-upstream-to` or pass `--base` explicitly."*).
+- Rename detection: always-on (`-M` in all diff commands). No user-facing toggle in v0.1.
+
+#### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Clean exit (includes empty diff, normal quit, runtime errors surfaced in UI) |
+| `1` | Unrecoverable runtime failure forcing abnormal termination after TUI started |
+| `2` | Usage/config error (invalid flags, bad mode value) |
+| `128` | Fatal startup failure before TUI (not a repo, `git` missing, refs unresolvable) |
 
 #### Compare resolution
 - Three-dot mode (default):
@@ -264,9 +335,19 @@ Use NUL-delimited output for path safety.
   - Reload selected file.
 - Async responses include generation id and are discarded if stale.
 
+#### Oversized patch threshold
+- Dual gate: if `lineCount > 50,000` OR `rawPatchBytes > 8 MiB`, do not parse or render full patch.
+- Show file metadata (additions/deletions/status) with fallback message: *"Patch too large to display (N lines, M bytes). Use `git diff -- <path>` to view."*
+
+#### Search semantics
+- Smart-case matching per-query: if the query contains any uppercase rune, the entire match is case-sensitive; otherwise case-insensitive.
+- Wrap-around: forward search past the last line wraps to the first; backward search past the first wraps to the last.
+- Start point: next line after cursor for forward (`Enter`), previous line before cursor for backward (`N`).
+- Plain substring match only in v0.1; no regex support.
+
 ### Terminal capability strategy
 - Require TTY for interactive mode; fail fast with actionable message otherwise.
-- Validate terminal dimensions; reject unusable sizes with guidance.
+- Minimum terminal dimensions: 80 columns, 24 rows. Reject smaller sizes with guidance (*"Terminal too small (NxM). Scry requires at least 80x24."*).
 - Detect color capability (`NO_COLOR`, `COLORTERM`, terminfo fallback) and degrade styles gracefully.
 - Detect tmux and handle resize events without layout corruption.
 
@@ -281,6 +362,8 @@ Use NUL-delimited output for path safety.
 - Scope: `--base`, `--head`, `--mode=three-dot|two-dot`, repo context.
 - Acceptance criteria:
   - Default mode is `three-dot`.
+  - `--head` defaults to `HEAD`; `--base` defaults to `@{upstream}`.
+  - Missing upstream without explicit `--base` produces fatal error with actionable message.
   - Invalid refs return clear errors.
   - Active compare range is visible in status UI.
   - Works identically in main checkout and linked worktrees.
@@ -295,8 +378,13 @@ Use NUL-delimited output for path safety.
 
 ### F3. Patch viewer and hunk navigation
 - Scope: unified patch rendering, `n/p` hunk navigation.
+- Navigation rules:
+  - `n` moves viewport to the next hunk header. At the last hunk, `n` is a no-op (no wrap).
+  - `p` moves viewport to the previous hunk header. At the first hunk, `p` is a no-op (no wrap).
+  - On file selection, viewport starts at the first hunk.
 - Acceptance criteria:
   - Hunk headers and line types render correctly.
+  - `n`/`p` at boundaries are no-ops (no wrap, no crash).
   - Navigation behavior is deterministic and documented.
 
 ### F4. Lazy loading and responsive rendering
@@ -309,7 +397,10 @@ Use NUL-delimited output for path safety.
 ### F5. Bidirectional patch search
 - Scope: `/` enter search, `Enter` next, `N` previous.
 - Acceptance criteria:
-  - Search supports forward and backward navigation.
+  - Smart-case matching: all-lowercase query is case-insensitive; any uppercase triggers case-sensitive.
+  - Forward search (`Enter`) starts from the line after the cursor; backward (`N`) from the line before.
+  - Search wraps around in both directions.
+  - Empty query is a no-op.
   - No-match state is explicit and stable.
 
 ### F6. Whitespace-ignore toggle with global cache reset
@@ -332,10 +423,11 @@ Use NUL-delimited output for path safety.
   - `r` appears in key-help text.
 
 ### F7. Edge-case safety
-- Scope: binary files, submodule changes, oversized patches.
+- Scope: binary files, submodule changes, oversized patches (>50k lines or >8 MiB).
 - Acceptance criteria:
   - Renderer never crashes on these cases.
-  - User sees clear fallback messaging.
+  - Oversized patches show metadata with actionable fallback message.
+  - User sees clear fallback messaging for binary and submodule entries.
 
 ### F8. Operational polish
 - Scope: key help, clean exit, CLI docs, tmux behavior.
@@ -353,21 +445,23 @@ Use NUL-delimited output for path safety.
 | T3 | Source resolver with three-dot default, two-dot option, and worktree-safe repo context | T2 | `go test ./internal/source ./internal/model` |
 | T4 | Metadata parser and explicit `name-status`/`numstat` merge | T2, T3 | `go test ./internal/diff -run TestMetadataMerge` |
 | T5 | Patch parser/loader service and domain mapping | T2, T3 | `go test ./internal/diff -run TestLoadPatch` |
-| T6 | Bubble Tea shell with synchronous bootstrap data render | T1, T4 | `go test ./internal/ui -run TestShellRender` |
+| T6 | Bubble Tea shell with synchronous bootstrap data render | T1, T3, T4 | `go test ./internal/ui -run TestShellRender` |
 | T7 | Patch pane and hunk navigation | T5, T6 | `go test ./internal/ui -run TestHunkNavigation` |
 | T8 | Async lazy patch loading, cache, viewport virtualization | T7 | `go test ./internal/review ./internal/ui -run TestLazyLoad` |
 | T9 | Directional search index and UI wiring | T7 | `go test ./internal/search ./internal/ui -run TestDirectionalSearch` |
 | T9a | Manual refresh action (`r`), generation bump, full cache invalidation, metadata reload, selection reconciliation | T8 | `go test ./internal/review ./internal/ui -run TestManualRefresh` |
 | T10 | Whitespace toggle (calls shared cache-reset helper from T9a) | T8, T9a | `go test ./internal/diff ./internal/ui -run TestWhitespaceGeneration` |
 | T11 | Edge-case hardening (binary/submodule/oversize) | T5, T8 | `go test ./internal/diff ./internal/ui -run TestEdgeCases` |
-| T12 | End-to-end fixtures (including linked worktree), tmux smoke checks, release checklist | T1-T11 | `go test ./... && go test -race ./... && ./scripts/bench.sh` |
+| T12 | End-to-end fixtures (including linked worktree), tmux smoke checks, `scripts/bench.sh`, release checklist | T1-T11 | `go test ./... && go test -race ./... && ./scripts/bench.sh` |
 
 ### Dependency graph
 ```text
-T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T9a -> T10 -> T12
-                 |                |      |             |
-                 +-> T5 ----------+      +-> T9 ------+
-                                         +-> T11 -----+
+T1 -> T2 -> T3 ->+-> T4 -+-> T6 -> T7 -> T8 -> T9a -> T10 -> T12
+                 |        |         |      |             |
+                 +-> T5 --+         +      +-> T9 ------+
+                                    |      +-> T11 -----+
+                                    |
+                          (T6 also depends on T1, T3)
 ```
 
 ## Dependencies
@@ -376,10 +470,12 @@ T1 -> T2 -> T3 ->+-> T4 -> T6 -> T7 -> T8 -> T9a -> T10 -> T12
 - `github.com/charmbracelet/bubbletea`
 - `github.com/charmbracelet/lipgloss`
 - `github.com/charmbracelet/bubbles`
-- `sourcegraph.com/sourcegraph/go-diff`
+- `github.com/sourcegraph/go-diff`
 - `github.com/spf13/pflag`
-- `github.com/stretchr/testify`
 - `golang.org/x/sync/errgroup`
+
+### Testing
+- Standard library `testing` package only (no testify). Table-driven tests with `t.Parallel()`.
 
 ### External binaries
 - Required: `git`
