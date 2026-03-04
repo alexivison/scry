@@ -123,7 +123,7 @@ func TestRunGitTimeout(t *testing.T) {
 
 	r := NewGitRunner(GitRunnerConfig{
 		WorkDir: t.TempDir(),
-		Timeout: 1 * time.Millisecond,
+		Timeout: 1 * time.Nanosecond,
 	})
 
 	_, err := r.RunGit(context.Background(), "version")
