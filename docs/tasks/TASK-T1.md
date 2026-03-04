@@ -10,12 +10,12 @@ None.
 - `go.mod` — Fix Go version to match CI matrix, add pflag dependency.
 
 ## Deliverables
-- [ ] `Config` struct with pflag bindings for `--base`, `--head`, `--mode`, `--ignore-whitespace`.
-- [ ] `--help` output documents all v0.1 flags.
-- [ ] Exit code 2 on invalid flag usage.
-- [ ] All core domain types from spec defined in `internal/model/`.
-- [ ] Sentinel errors (`ErrOversized`, `ErrBinaryFile`, `ErrSubmodule`) in model package.
-- [ ] `go.mod` version aligned with CI matrix.
+- [x] `Config` struct with pflag bindings for `--base`, `--head`, `--mode`, `--ignore-whitespace`.
+- [x] `--help` output documents all v0.1 flags.
+- [x] Exit code 2 on invalid flag usage.
+- [x] All core domain types from spec defined in `internal/model/`.
+- [x] Sentinel errors (`ErrOversized`, `ErrBinaryFile`, `ErrSubmodule`) in model package.
+- [x] `go.mod` version aligned with CI matrix.
 
 ## Out of Scope
 - Git command execution (T2).
