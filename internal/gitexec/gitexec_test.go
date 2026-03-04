@@ -21,7 +21,7 @@ func TestRunGitVersion(t *testing.T) {
 	t.Parallel()
 
 	r := NewGitRunner(GitRunnerConfig{WorkDir: t.TempDir()})
-	out, err := r.RunGit(t.Context(), "version")
+	out, err := r.RunGit(context.Background(), "version")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,11 +37,11 @@ func TestRunGitUsesWorkDir(t *testing.T) {
 	r := NewGitRunner(GitRunnerConfig{WorkDir: dir})
 
 	// init a repo so rev-parse works
-	if _, err := r.RunGit(t.Context(), "init"); err != nil {
+	if _, err := r.RunGit(context.Background(), "init"); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
 
-	out, err := r.RunGit(t.Context(), "rev-parse", "--show-toplevel")
+	out, err := r.RunGit(context.Background(), "rev-parse", "--show-toplevel")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRunGitNonZeroExit(t *testing.T) {
 	r := NewGitRunner(GitRunnerConfig{WorkDir: t.TempDir()})
 
 	// rev-parse in a non-repo directory should fail
-	_, err := r.RunGit(t.Context(), "rev-parse", "HEAD")
+	_, err := r.RunGit(context.Background(), "rev-parse", "HEAD")
 	if err == nil {
 		t.Fatal("expected error for non-repo rev-parse, got nil")
 	}
@@ -106,7 +106,7 @@ func TestRunGitContextCancellation(t *testing.T) {
 		Timeout: 5 * time.Second,
 	})
 
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
 	_, err := r.RunGit(ctx, "version")
@@ -126,7 +126,7 @@ func TestRunGitTimeout(t *testing.T) {
 		Timeout: 1 * time.Millisecond,
 	})
 
-	_, err := r.RunGit(t.Context(), "version")
+	_, err := r.RunGit(context.Background(), "version")
 	if err == nil {
 		t.Fatal("expected error for timed-out command, got nil")
 	}
@@ -141,12 +141,12 @@ func TestRunGitMultipleArgs(t *testing.T) {
 	dir := t.TempDir()
 	r := NewGitRunner(GitRunnerConfig{WorkDir: dir})
 
-	if _, err := r.RunGit(t.Context(), "init"); err != nil {
+	if _, err := r.RunGit(context.Background(), "init"); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
 
 	// git log with multiple flags in an empty repo should fail gracefully
-	_, err := r.RunGit(t.Context(), "log", "--oneline", "-1")
+	_, err := r.RunGit(context.Background(), "log", "--oneline", "-1")
 	if err == nil {
 		t.Fatal("expected error for git log in empty repo, got nil")
 	}
