@@ -1,6 +1,13 @@
 package main
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/alexivison/scry/internal/config"
+	flag "github.com/spf13/pflag"
+)
 
 var (
 	version = "dev"
@@ -8,5 +15,22 @@ var (
 )
 
 func main() {
+	os.Exit(runWith(os.Args[1:]))
+}
+
+func runWith(args []string) int {
+	cfg, err := config.Parse(args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
+		return 2
+	}
+
+	// TODO(T6): bootstrap app and launch TUI using cfg.
+	_ = cfg
+
 	fmt.Printf("scry %s (%s)\n", version, commit)
+	return 0
 }
