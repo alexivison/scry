@@ -66,7 +66,8 @@ func Run(cfg config.Config) int {
 		Patches:          make(map[string]model.PatchLoadState),
 	}
 
-	m := ui.NewModel(state)
+	patchSvc := &diff.PatchService{Runner: boot.Runner}
+	m := ui.NewModel(state, ui.WithPatchLoader(patchSvc))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
