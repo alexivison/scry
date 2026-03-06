@@ -273,9 +273,14 @@ func (m *Model) executeSearch(dir search.SearchDirection) {
 	}
 
 	currentDiff := m.patchViewport.ViewportLineToDiffLine(m.patchViewport.ScrollOffset)
+	onHeader := m.patchViewport.IsHunkHeader(m.patchViewport.ScrollOffset)
 	var from int
 	if dir == search.SearchNext {
-		from = currentDiff + 1
+		if onHeader {
+			from = currentDiff
+		} else {
+			from = currentDiff + 1
+		}
 	} else {
 		from = currentDiff - 1
 	}
@@ -291,6 +296,8 @@ func (m *Model) searchFrom(from int, dir search.SearchDirection) {
 	line, ok := m.searchIndex.Find(m.State.SearchQuery, from, dir)
 	if !ok {
 		m.searchNotFound = fmt.Sprintf("Pattern not found: %s", m.State.SearchQuery)
+		m.patchViewport.SearchQuery = ""
+		m.patchViewport.MatchLine = -1
 		return
 	}
 

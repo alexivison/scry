@@ -237,6 +237,14 @@ func (vp *PatchViewport) TotalLines() int {
 	return len(vp.lines)
 }
 
+// IsHunkHeader reports whether the given viewport line is a hunk header.
+func (vp *PatchViewport) IsHunkHeader(vpLine int) bool {
+	if vpLine < 0 || vpLine >= len(vp.lines) {
+		return false
+	}
+	return vp.lines[vpLine].typ == lineTypeHunkHeader
+}
+
 // DiffLineToViewportLine converts a DiffLine index (0-based across all hunks,
 // headers excluded) to the corresponding viewport line index (headers included).
 func (vp *PatchViewport) DiffLineToViewportLine(diffIdx int) int {
