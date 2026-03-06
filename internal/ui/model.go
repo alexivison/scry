@@ -154,6 +154,14 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneFiles
 		m.patchViewport = nil
 		m.patchErr = ""
+	case "j", "down":
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollDown()
+		}
+	case "k", "up":
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollUp()
+		}
 	case "n":
 		if m.patchViewport != nil {
 			m.patchViewport.NextHunk()

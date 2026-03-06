@@ -299,3 +299,61 @@ func TestHunkLineOffset(t *testing.T) {
 		})
 	}
 }
+
+func TestScrollDownUp(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		setup      func(vp *PatchViewport)
+		action     func(vp *PatchViewport)
+		wantOffset int
+	}{
+		"scroll down from top": {
+			setup:      func(_ *PatchViewport) {},
+			action:     func(vp *PatchViewport) { vp.ScrollDown() },
+			wantOffset: 1,
+		},
+		"scroll up from offset 1": {
+			setup:      func(vp *PatchViewport) { vp.ScrollOffset = 1 },
+			action:     func(vp *PatchViewport) { vp.ScrollUp() },
+			wantOffset: 0,
+		},
+		"scroll up at top is no-op": {
+			setup:      func(_ *PatchViewport) {},
+			action:     func(vp *PatchViewport) { vp.ScrollUp() },
+			wantOffset: 0,
+		},
+		"scroll down at bottom is no-op": {
+			setup: func(vp *PatchViewport) {
+				vp.ScrollOffset = vp.TotalLines() - 1
+			},
+			action: func(vp *PatchViewport) { vp.ScrollDown() },
+			wantOffset: -1, // sentinel: use TotalLines()-1
+		},
+		"multiple scroll downs": {
+			setup: func(_ *PatchViewport) {},
+			action: func(vp *PatchViewport) {
+				vp.ScrollDown()
+				vp.ScrollDown()
+				vp.ScrollDown()
+			},
+			wantOffset: 3,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			vp := NewPatchViewport(threeHunkPatch())
+			tc.setup(vp)
+			tc.action(vp)
+			want := tc.wantOffset
+			if want == -1 {
+				want = vp.TotalLines() - 1
+			}
+			if vp.ScrollOffset != want {
+				t.Errorf("ScrollOffset = %d, want %d", vp.ScrollOffset, want)
+			}
+		})
+	}
+}

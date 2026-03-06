@@ -528,6 +528,39 @@ func TestPatchPaneQQuits(t *testing.T) {
 	}
 }
 
+func TestPatchPaneLineScroll(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	if um.patchViewport.ScrollOffset != 0 {
+		t.Fatalf("initial scroll = %d, want 0", um.patchViewport.ScrollOffset)
+	}
+
+	// j scrolls down
+	updated2, _ := um.Update(keyMsg('j'))
+	um2 := updated2.(Model)
+	if um2.patchViewport.ScrollOffset != 1 {
+		t.Errorf("after j: scroll = %d, want 1", um2.patchViewport.ScrollOffset)
+	}
+
+	// k scrolls back up
+	updated3, _ := um2.Update(keyMsg('k'))
+	um3 := updated3.(Model)
+	if um3.patchViewport.ScrollOffset != 0 {
+		t.Errorf("after k: scroll = %d, want 0", um3.patchViewport.ScrollOffset)
+	}
+
+	// k at top is no-op
+	updated4, _ := um3.Update(keyMsg('k'))
+	um4 := updated4.(Model)
+	if um4.patchViewport.ScrollOffset != 0 {
+		t.Errorf("k at top: scroll = %d, want 0", um4.patchViewport.ScrollOffset)
+	}
+}
+
 func TestPatchPaneViewRendersDiff(t *testing.T) {
 	t.Parallel()
 

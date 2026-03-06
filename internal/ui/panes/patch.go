@@ -91,6 +91,20 @@ func (vp *PatchViewport) PrevHunk() {
 	vp.ScrollOffset = vp.hunkLineOffset(vp.CurrentHunk)
 }
 
+// ScrollDown moves the viewport one line down. No-op at the bottom.
+func (vp *PatchViewport) ScrollDown() {
+	if vp.ScrollOffset < len(vp.lines)-1 {
+		vp.ScrollOffset++
+	}
+}
+
+// ScrollUp moves the viewport one line up. No-op at the top.
+func (vp *PatchViewport) ScrollUp() {
+	if vp.ScrollOffset > 0 {
+		vp.ScrollOffset--
+	}
+}
+
 // Render produces the visible portion of the patch for the current viewport.
 func (vp *PatchViewport) Render() string {
 	if len(vp.Patch.Hunks) == 0 {
