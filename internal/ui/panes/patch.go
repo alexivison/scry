@@ -177,9 +177,13 @@ func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool
 }
 
 func highlightMatch(line, query string, baseStyle lipgloss.Style) string {
-	lower := strings.ToLower(line)
-	lowerQ := strings.ToLower(query)
-	idx := strings.Index(lower, lowerQ)
+	caseSensitive := strings.ToLower(query) != query
+	var idx int
+	if caseSensitive {
+		idx = strings.Index(line, query)
+	} else {
+		idx = strings.Index(strings.ToLower(line), strings.ToLower(query))
+	}
 	if idx < 0 {
 		return baseStyle.Render(line)
 	}

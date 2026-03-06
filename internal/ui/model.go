@@ -272,13 +272,20 @@ func (m *Model) executeSearch(dir search.SearchDirection) {
 		return
 	}
 
-	// Convert current viewport scroll offset to DiffLine index for search start.
 	currentDiff := m.patchViewport.ViewportLineToDiffLine(m.patchViewport.ScrollOffset)
 	var from int
 	if dir == search.SearchNext {
 		from = currentDiff + 1
 	} else {
 		from = currentDiff - 1
+	}
+
+	m.searchFrom(from, dir)
+}
+
+func (m *Model) searchFrom(from int, dir search.SearchDirection) {
+	if m.State.SearchQuery == "" || m.searchIndex == nil || m.patchViewport == nil {
+		return
 	}
 
 	line, ok := m.searchIndex.Find(m.State.SearchQuery, from, dir)
@@ -306,19 +313,7 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.State.SearchQuery = m.searchInput
 		m.searchInput = ""
-		// Execute initial forward search from top (line 0)
-		if m.searchIndex != nil && m.patchViewport != nil {
-			line, ok := m.searchIndex.Find(m.State.SearchQuery, 0, search.SearchNext)
-			if !ok {
-				m.searchNotFound = fmt.Sprintf("Pattern not found: %s", m.State.SearchQuery)
-			} else {
-				m.searchNotFound = ""
-				vpLine := m.patchViewport.DiffLineToViewportLine(line)
-				m.patchViewport.ScrollOffset = vpLine
-				m.patchViewport.MatchLine = vpLine
-				m.patchViewport.SearchQuery = m.State.SearchQuery
-			}
-		}
+		m.searchFrom(0, search.SearchNext)
 	case tea.KeyBackspace:
 		if len(m.searchInput) > 0 {
 			m.searchInput = m.searchInput[:len(m.searchInput)-1]
