@@ -95,6 +95,7 @@ func (vp *PatchViewport) PrevHunk() {
 func (vp *PatchViewport) ScrollDown() {
 	if vp.ScrollOffset < len(vp.lines)-1 {
 		vp.ScrollOffset++
+		vp.syncCurrentHunk()
 	}
 }
 
@@ -102,7 +103,20 @@ func (vp *PatchViewport) ScrollDown() {
 func (vp *PatchViewport) ScrollUp() {
 	if vp.ScrollOffset > 0 {
 		vp.ScrollOffset--
+		vp.syncCurrentHunk()
 	}
+}
+
+// syncCurrentHunk derives CurrentHunk from ScrollOffset so that n/p
+// navigate relative to the hunk the user is actually viewing.
+func (vp *PatchViewport) syncCurrentHunk() {
+	for i := len(vp.Patch.Hunks) - 1; i >= 0; i-- {
+		if vp.ScrollOffset >= vp.hunkLineOffset(i) {
+			vp.CurrentHunk = i
+			return
+		}
+	}
+	vp.CurrentHunk = 0
 }
 
 // Render produces the visible portion of the patch for the current viewport.

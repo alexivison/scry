@@ -357,3 +357,90 @@ func TestScrollDownUp(t *testing.T) {
 		})
 	}
 }
+
+func TestScrollSyncsCurrentHunk(t *testing.T) {
+	t.Parallel()
+
+	// threeHunkPatch layout:
+	// line 0: hunk0 header
+	// line 1-3: hunk0 lines (3)
+	// line 4: hunk1 header
+	// line 5-8: hunk1 lines (4)
+	// line 9: hunk2 header
+	// line 10-12: hunk2 lines (3)
+
+	t.Run("scroll into hunk1 then p goes to hunk0", func(t *testing.T) {
+		t.Parallel()
+		vp := NewPatchViewport(threeHunkPatch())
+		// Scroll to line 5 (inside hunk1)
+		for i := 0; i < 5; i++ {
+			vp.ScrollDown()
+		}
+		if vp.CurrentHunk != 1 {
+			t.Fatalf("after scroll to line 5: CurrentHunk = %d, want 1", vp.CurrentHunk)
+		}
+		// p should go to hunk0
+		vp.PrevHunk()
+		if vp.CurrentHunk != 0 {
+			t.Errorf("after p: CurrentHunk = %d, want 0", vp.CurrentHunk)
+		}
+		if vp.ScrollOffset != 0 {
+			t.Errorf("after p: ScrollOffset = %d, want 0", vp.ScrollOffset)
+		}
+	})
+
+	t.Run("scroll into hunk2 then n is no-op", func(t *testing.T) {
+		t.Parallel()
+		vp := NewPatchViewport(threeHunkPatch())
+		// Scroll to line 10 (inside hunk2, the last hunk)
+		for i := 0; i < 10; i++ {
+			vp.ScrollDown()
+		}
+		if vp.CurrentHunk != 2 {
+			t.Fatalf("after scroll to line 10: CurrentHunk = %d, want 2", vp.CurrentHunk)
+		}
+		// n at last hunk is no-op
+		vp.NextHunk()
+		if vp.CurrentHunk != 2 {
+			t.Errorf("n at last: CurrentHunk = %d, want 2", vp.CurrentHunk)
+		}
+	})
+
+	t.Run("scroll into hunk1 then n goes to hunk2", func(t *testing.T) {
+		t.Parallel()
+		vp := NewPatchViewport(threeHunkPatch())
+		// Scroll to line 6 (inside hunk1)
+		for i := 0; i < 6; i++ {
+			vp.ScrollDown()
+		}
+		if vp.CurrentHunk != 1 {
+			t.Fatalf("after scroll to line 6: CurrentHunk = %d, want 1", vp.CurrentHunk)
+		}
+		vp.NextHunk()
+		if vp.CurrentHunk != 2 {
+			t.Errorf("after n: CurrentHunk = %d, want 2", vp.CurrentHunk)
+		}
+		if vp.ScrollOffset != 9 {
+			t.Errorf("after n: ScrollOffset = %d, want 9", vp.ScrollOffset)
+		}
+	})
+
+	t.Run("scroll up back into hunk0 syncs correctly", func(t *testing.T) {
+		t.Parallel()
+		vp := NewPatchViewport(threeHunkPatch())
+		// Scroll into hunk1
+		for i := 0; i < 5; i++ {
+			vp.ScrollDown()
+		}
+		if vp.CurrentHunk != 1 {
+			t.Fatalf("CurrentHunk = %d, want 1", vp.CurrentHunk)
+		}
+		// Scroll back up into hunk0
+		for i := 0; i < 3; i++ {
+			vp.ScrollUp()
+		}
+		if vp.CurrentHunk != 0 {
+			t.Errorf("after scroll up: CurrentHunk = %d, want 0", vp.CurrentHunk)
+		}
+	})
+}
