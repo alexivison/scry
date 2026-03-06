@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
@@ -67,6 +68,14 @@ func WithPatchLoader(pl PatchLoader) ModelOption {
 	return func(m *Model) { m.patchLoader = pl }
 }
 
+// PatchLoadedMsg is sent when an async patch load completes.
+type PatchLoadedMsg struct {
+	Path  string
+	Patch model.FilePatch
+	Gen   int
+	Err   error
+}
+
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	return nil
@@ -86,6 +95,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sizeErr = ""
 		}
 		return m, nil
+
+	case PatchLoadedMsg:
+		return m.handlePatchLoaded(msg)
 
 	case tea.KeyMsg:
 		if m.tooSmall {
@@ -118,8 +130,8 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-			m.loadSelectedPatch()
 			m.State.FocusPane = model.PanePatch
+			return m.selectFile()
 		}
 	case "q":
 		m.quitting = true
@@ -130,21 +142,76 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) loadSelectedPatch() {
-	if m.patchLoader == nil {
-		return
-	}
+// selectFile checks the cache and either uses a cached result or fires an async load.
+func (m Model) selectFile() (tea.Model, tea.Cmd) {
 	file := m.State.Files[m.State.SelectedFile]
-	fp, err := m.patchLoader.LoadPatch(context.Background(), m.State.Compare, file.Path, m.State.IgnoreWhitespace)
-	if err != nil {
-		m.patchErr = err.Error()
+	path := file.Path
+
+	// Cache hit: use cached result directly.
+	if ps, hit := review.CacheLookup(m.State, path); hit {
+		m.applyPatchResult(ps)
+		return m, nil
+	}
+
+	if m.patchLoader == nil {
+		return m, nil
+	}
+
+	// Cache miss: mark loading and fire async Cmd.
+	review.MarkLoading(&m.State, path)
+	m.patchViewport = nil
+	m.patchErr = ""
+
+	gen := m.State.CacheGeneration
+	cmp := m.State.Compare
+	ignoreWS := m.State.IgnoreWhitespace
+	loader := m.patchLoader
+
+	cmd := func() tea.Msg {
+		fp, err := loader.LoadPatch(context.Background(), cmp, path, ignoreWS)
+		return PatchLoadedMsg{Path: path, Patch: fp, Gen: gen, Err: err}
+	}
+
+	return m, cmd
+}
+
+func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
+	if review.IsStaleGeneration(msg.Gen, m.State.CacheGeneration) {
+		return m, nil
+	}
+
+	var patch *model.FilePatch
+	if msg.Err == nil {
+		patch = &msg.Patch
+	}
+	review.CacheStore(&m.State, msg.Path, patch, msg.Err)
+
+	// Only update viewport if this message is for the currently selected file.
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		selected := m.State.Files[m.State.SelectedFile].Path
+		if selected == msg.Path {
+			m.applyPatchResult(m.State.Patches[msg.Path])
+		}
+	}
+
+	return m, nil
+}
+
+// applyPatchResult sets the viewport or error from a PatchLoadState.
+func (m *Model) applyPatchResult(ps model.PatchLoadState) {
+	if ps.Err != nil {
+		m.patchErr = ps.Err.Error()
 		m.patchViewport = nil
 		return
 	}
 	m.patchErr = ""
-	vp := panes.NewPatchViewport(fp)
+	if ps.Patch == nil {
+		m.patchViewport = nil
+		return
+	}
+	vp := panes.NewPatchViewport(*ps.Patch)
 	vp.Width = m.width
-	vp.Height = m.height - 1 // reserve 1 line for status bar
+	vp.Height = m.height - 1
 	m.patchViewport = vp
 }
 
@@ -294,6 +361,15 @@ func (m Model) viewPatch() string {
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
 	}
+
+	// Show loading indicator when the selected file is still loading.
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		path := m.State.Files[m.State.SelectedFile].Path
+		if ps, ok := m.State.Patches[path]; ok && ps.Status == model.LoadLoading {
+			return "Loading..."
+		}
+	}
+
 	if m.patchViewport == nil {
 		return "No patch loaded."
 	}
