@@ -18,6 +18,9 @@ type PatchViewport struct {
 	Width        int
 	Height       int
 
+	SearchQuery string // current search query for highlighting
+	MatchLine   int    // viewport line of the current match (-1 = none)
+
 	// Pre-computed flat line list for rendering.
 	lines []patchLine
 }
@@ -140,18 +143,20 @@ func (vp *PatchViewport) Render() string {
 
 	visible := vp.lines[start:end]
 	rendered := make([]string, 0, len(visible))
-	for _, pl := range visible {
+	for i, pl := range visible {
+		absLine := start + i
 		switch pl.typ {
 		case lineTypeHunkHeader:
 			rendered = append(rendered, hunkHeaderStyle.Render(pl.header))
 		case lineTypeDiff:
-			rendered = append(rendered, renderDiffLine(pl.diff, vp.Width))
+			isMatch := vp.SearchQuery != "" && absLine == vp.MatchLine
+			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch))
 		}
 	}
 	return strings.Join(rendered, "\n")
 }
 
-func renderDiffLine(dl model.DiffLine, width int) string {
+func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
@@ -164,7 +169,25 @@ func renderDiffLine(dl model.DiffLine, width int) string {
 		line = truncateToWidth(line, width)
 	}
 
+	if highlight && query != "" {
+		return highlightMatch(line, query, style)
+	}
+
 	return style.Render(line)
+}
+
+func highlightMatch(line, query string, baseStyle lipgloss.Style) string {
+	lower := strings.ToLower(line)
+	lowerQ := strings.ToLower(query)
+	idx := strings.Index(lower, lowerQ)
+	if idx < 0 {
+		return baseStyle.Render(line)
+	}
+	hlStyle := baseStyle.Reverse(true)
+	before := line[:idx]
+	match := line[idx : idx+len(query)]
+	after := line[idx+len(query):]
+	return baseStyle.Render(before) + hlStyle.Render(match) + baseStyle.Render(after)
 }
 
 func diffLineStyle(kind model.LineKind) (string, lipgloss.Style) {
@@ -208,6 +231,45 @@ func truncateToWidth(s string, maxWidth int) string {
 // TotalLines returns the total number of rendered lines (headers + diff lines).
 func (vp *PatchViewport) TotalLines() int {
 	return len(vp.lines)
+}
+
+// DiffLineToViewportLine converts a DiffLine index (0-based across all hunks,
+// headers excluded) to the corresponding viewport line index (headers included).
+func (vp *PatchViewport) DiffLineToViewportLine(diffIdx int) int {
+	count := 0
+	for i, pl := range vp.lines {
+		if pl.typ == lineTypeDiff {
+			if count == diffIdx {
+				return i
+			}
+			count++
+		}
+	}
+	return 0
+}
+
+// ViewportLineToDiffLine converts a viewport line index to the DiffLine index.
+// If the viewport line is a hunk header, it returns the index of the next DiffLine.
+func (vp *PatchViewport) ViewportLineToDiffLine(vpLine int) int {
+	if vpLine < 0 {
+		vpLine = 0
+	}
+	if vpLine >= len(vp.lines) {
+		vpLine = len(vp.lines) - 1
+	}
+	count := 0
+	for i, pl := range vp.lines {
+		if pl.typ == lineTypeDiff {
+			if i >= vpLine {
+				return count
+			}
+			count++
+		}
+	}
+	if count > 0 {
+		return count - 1
+	}
+	return 0
 }
 
 // Styles for patch rendering.
