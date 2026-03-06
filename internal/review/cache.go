@@ -3,8 +3,9 @@ package review
 
 import "github.com/alexivison/scry/internal/model"
 
-// CacheLookup returns a cached PatchLoadState if the path has a Loaded or Failed
-// entry in the current generation. The second return value is false on miss.
+// CacheLookup returns a cached PatchLoadState if the path has a Loaded entry
+// in the current generation. Failed entries are not cached so that the user
+// can retry by pressing Enter again.
 func CacheLookup(state model.AppState, path string) (model.PatchLoadState, bool) {
 	ps, ok := state.Patches[path]
 	if !ok {
@@ -13,7 +14,7 @@ func CacheLookup(state model.AppState, path string) (model.PatchLoadState, bool)
 	if ps.Generation != state.CacheGeneration {
 		return model.PatchLoadState{}, false
 	}
-	if ps.Status != model.LoadLoaded && ps.Status != model.LoadFailed {
+	if ps.Status != model.LoadLoaded {
 		return model.PatchLoadState{}, false
 	}
 	return ps, true

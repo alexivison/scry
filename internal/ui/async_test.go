@@ -300,3 +300,46 @@ func TestLazyLoadConcurrentSelectionDiscardsPrevious(t *testing.T) {
 		t.Error("patchViewport should remain nil when PatchLoadedMsg is for a non-selected file")
 	}
 }
+
+func TestLazyLoadRetryAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	loader := &countingPatchLoader{
+		patches: map[string]model.FilePatch{
+			"main.go": samplePatch(),
+		},
+	}
+	state := sampleState()
+	state.CacheGeneration = 1
+	// Pre-populate cache with a failed entry for main.go.
+	state.Patches["main.go"] = model.PatchLoadState{
+		Status:     model.LoadFailed,
+		Err:        model.ErrOversized,
+		Generation: 1,
+	}
+	m := NewModel(state, WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	// Press Enter on main.go — should trigger a new async load (not use cached failure).
+	_, cmd := m.Update(enterMsg())
+	if cmd == nil {
+		t.Fatal("Enter on a failed file should return a Cmd to retry the load")
+	}
+	if loader.calls.Load() != 0 {
+		t.Errorf("LoadPatch should not be called synchronously, got %d calls", loader.calls.Load())
+	}
+
+	// Execute the Cmd to simulate async completion.
+	msg := cmd()
+	loadedMsg, ok := msg.(PatchLoadedMsg)
+	if !ok {
+		t.Fatalf("Cmd returned %T, want PatchLoadedMsg", msg)
+	}
+	if loadedMsg.Err != nil {
+		t.Fatalf("retry should succeed, got err: %v", loadedMsg.Err)
+	}
+	if loader.calls.Load() != 1 {
+		t.Errorf("LoadPatch should be called once on retry, got %d", loader.calls.Load())
+	}
+}

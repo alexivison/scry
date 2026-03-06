@@ -57,6 +57,19 @@ func TestCacheLookupMiss(t *testing.T) {
 			},
 			path: "main.go",
 		},
+		"failed status not a hit": {
+			state: model.AppState{
+				Patches: map[string]model.PatchLoadState{
+					"main.go": {
+						Status:     model.LoadFailed,
+						Err:        model.ErrBinaryFile,
+						Generation: 1,
+					},
+				},
+				CacheGeneration: 1,
+			},
+			path: "main.go",
+		},
 	}
 
 	for name, tc := range tests {
