@@ -7,13 +7,13 @@ T2 (GitRunner), T3 (ResolvedCompare).
 - `internal/diff/metadata.go` — MetadataService implementation, NUL-delimited parsing, merge logic.
 
 ## Deliverables
-- [ ] `MetadataService.ListFiles()` returning `[]FileSummary` in `--name-status -z` emission order.
-- [ ] Parse `git diff --name-status -z -M <range>` for ordering, status, rename pairs.
-- [ ] Parse `git diff --numstat -z -M <range>` for additions/deletions/binary markers.
-- [ ] Merge by canonical key: `Path` for non-rename, `OldPath + "\x00" + Path` for rename/copy.
-- [ ] Missing counts default to `0/0` with non-fatal debug warning.
-- [ ] Binary detection from numstat (`-` values).
-- [ ] All FileStatus variants handled (A/M/D/R/C/T/U).
+- [x] `MetadataService.ListFiles()` returning `[]FileSummary` in `--name-status -z` emission order.
+- [x] Parse `git diff --name-status -z -M <range>` for ordering, status, rename pairs.
+- [x] Parse `git diff --numstat -z -M <range>` for additions/deletions/binary markers.
+- [x] Merge by canonical key: `Path` for non-rename, `OldPath + "\x00" + Path` for rename/copy.
+- [x] Missing counts default to `0/0` with non-fatal debug warning.
+- [x] Binary detection from numstat (`-` values).
+- [x] All FileStatus variants handled (A/M/D/R/C/T/U).
 
 ## Test Strategy
 - Mock GitRunner returning known NUL-delimited output.
@@ -27,5 +27,5 @@ T2 (GitRunner), T3 (ResolvedCompare).
 
 ## Verification
 ```
-go test ./internal/diff -run TestMetadataMerge
+go test ./internal/diff -count=1
 ```
