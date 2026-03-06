@@ -43,6 +43,7 @@ type Model struct {
 	searchInput    string        // text being typed in search mode
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
+	refreshErr     string        // shown in status bar when metadata reload fails
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -133,6 +134,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// r triggers refresh from any pane.
+		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch {
+			return m.startRefresh()
+		}
 		if m.showHelp {
 			return m.updateHelp(msg)
 		}
@@ -162,8 +167,6 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.State.FocusPane = model.PanePatch
 			return m.selectFile()
 		}
-	case "r":
-		return m.startRefresh()
 	case "q":
 		m.quitting = true
 		return m, tea.Quit
@@ -234,6 +237,7 @@ func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 	review.ClearPatches(&m.State)
 	m.patchViewport = nil
 	m.patchErr = ""
+	m.refreshErr = ""
 	m.searchIndex = nil
 	m.searchNotFound = ""
 
@@ -257,9 +261,10 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 	if msg.Err != nil {
-		m.patchErr = fmt.Sprintf("refresh failed: %v", msg.Err)
+		m.refreshErr = fmt.Sprintf("refresh failed: %v", msg.Err)
 		return m, nil
 	}
+	m.refreshErr = ""
 
 	// Remember selected path for reconciliation.
 	var selectedPath string
@@ -358,8 +363,6 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
 		}
-	case "r":
-		return m.startRefresh()
 	case "q":
 		m.quitting = true
 		return m, tea.Quit
@@ -539,6 +542,14 @@ func formatCounts(f model.FileSummary) string {
 }
 
 func (m Model) viewStatusBar() string {
+	if m.refreshErr != "" {
+		bar := " " + m.refreshErr
+		gap := m.width - lipgloss.Width(bar)
+		if gap > 0 {
+			bar += strings.Repeat(" ", gap)
+		}
+		return searchNotFoundStyle.Width(m.width).Render(bar)
+	}
 	if m.searchNotFound != "" {
 		bar := " " + m.searchNotFound
 		gap := m.width - lipgloss.Width(bar)

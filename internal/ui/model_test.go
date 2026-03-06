@@ -991,6 +991,33 @@ func TestManualRefreshFromPatchPane(t *testing.T) {
 	}
 }
 
+func TestManualRefreshFromSearchPaneTypesR(t *testing.T) {
+	t.Parallel()
+
+	// In search pane, r should type 'r' into search input, not trigger refresh.
+	m := modelWithRefresh(sampleFiles())
+	um := enterAndLoad(t, m)
+
+	// Enter search mode.
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+	if um2.State.FocusPane != model.PaneSearch {
+		t.Fatalf("expected PaneSearch, got %q", um2.State.FocusPane)
+	}
+
+	genBefore := um2.State.CacheGeneration
+	updated2, _ := um2.Update(keyMsg('r'))
+	um3 := updated2.(Model)
+
+	// Generation should NOT change — r should type into search input.
+	if um3.State.CacheGeneration != genBefore {
+		t.Errorf("CacheGeneration changed in search pane: %d, want %d", um3.State.CacheGeneration, genBefore)
+	}
+	if um3.searchInput != "r" {
+		t.Errorf("searchInput = %q, want %q", um3.searchInput, "r")
+	}
+}
+
 func TestManualRefreshEmptyResult(t *testing.T) {
 	t.Parallel()
 
@@ -1045,11 +1072,17 @@ func TestManualRefreshMetadataErrorSurfaced(t *testing.T) {
 	updated2, _ := um.Update(msg)
 	um2 := updated2.(Model)
 
-	if um2.patchErr == "" {
-		t.Error("patchErr should be set when metadata reload fails")
+	if um2.refreshErr == "" {
+		t.Error("refreshErr should be set when metadata reload fails")
 	}
-	if !strings.Contains(um2.patchErr, "refresh failed") {
-		t.Errorf("patchErr = %q, want it to contain 'refresh failed'", um2.patchErr)
+	if !strings.Contains(um2.refreshErr, "refresh failed") {
+		t.Errorf("refreshErr = %q, want it to contain 'refresh failed'", um2.refreshErr)
+	}
+
+	// Error should be visible in status bar from file list pane.
+	view := um2.View()
+	if !strings.Contains(view, "refresh failed") {
+		t.Errorf("View() from file list should show refresh error, got:\n%s", view)
 	}
 }
 
