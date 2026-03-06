@@ -240,8 +240,12 @@ func TestLazyLoadPatchLoadedMsgWithError(t *testing.T) {
 	if ps.Status != model.LoadFailed {
 		t.Errorf("Status = %q, want %q", ps.Status, model.LoadFailed)
 	}
-	if um.patchErr == "" {
-		t.Error("patchErr should be set on error")
+	// Sentinel errors (ErrBinaryFile) produce a fallback message, not patchErr.
+	if um.patchFallback == "" {
+		t.Error("patchFallback should be set for sentinel error")
+	}
+	if um.patchErr != "" {
+		t.Errorf("patchErr should be empty for sentinel error, got %q", um.patchErr)
 	}
 }
 
