@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -10,22 +11,31 @@ import (
 
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/terminal"
+	"github.com/alexivison/scry/internal/ui/panes"
 )
+
+// PatchLoader loads a file's unified diff.
+type PatchLoader interface {
+	LoadPatch(ctx context.Context, cmp model.ResolvedCompare, filePath string, ignoreWhitespace bool) (model.FilePatch, error)
+}
 
 // Model is the top-level Bubble Tea model for scry.
 type Model struct {
-	State    model.AppState
-	showHelp bool
-	width    int
-	height   int
-	quitting bool
-	tooSmall bool // terminal below minimum dimensions
-	sizeErr  string
+	State         model.AppState
+	patchLoader   PatchLoader
+	patchViewport *panes.PatchViewport
+	patchErr      string
+	showHelp      bool
+	width         int
+	height        int
+	quitting      bool
+	tooSmall      bool // terminal below minimum dimensions
+	sizeErr       string
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
 // when the file list is empty, 0 otherwise.
-func NewModel(state model.AppState) Model {
+func NewModel(state model.AppState, opts ...ModelOption) Model {
 	if len(state.Files) == 0 {
 		state.SelectedFile = -1
 	} else {
@@ -42,7 +52,19 @@ func NewModel(state model.AppState) Model {
 	if state.Patches == nil {
 		state.Patches = make(map[string]model.PatchLoadState)
 	}
-	return Model{State: state}
+	m := Model{State: state}
+	for _, opt := range opts {
+		opt(&m)
+	}
+	return m
+}
+
+// ModelOption configures optional Model dependencies.
+type ModelOption func(*Model)
+
+// WithPatchLoader sets the PatchLoader used to load file diffs on Enter.
+func WithPatchLoader(pl PatchLoader) ModelOption {
+	return func(m *Model) { m.patchLoader = pl }
 }
 
 // Init implements tea.Model.
@@ -76,6 +98,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showHelp {
 			return m.updateHelp(msg)
 		}
+		if m.State.FocusPane == model.PanePatch {
+			return m.updatePatch(msg)
+		}
 		return m.updateFiles(msg)
 	}
 	return m, nil
@@ -93,7 +118,49 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+			m.loadSelectedPatch()
 			m.State.FocusPane = model.PanePatch
+		}
+	case "q":
+		m.quitting = true
+		return m, tea.Quit
+	case "?":
+		m.showHelp = true
+	}
+	return m, nil
+}
+
+func (m *Model) loadSelectedPatch() {
+	if m.patchLoader == nil {
+		return
+	}
+	file := m.State.Files[m.State.SelectedFile]
+	fp, err := m.patchLoader.LoadPatch(context.Background(), m.State.Compare, file.Path, m.State.IgnoreWhitespace)
+	if err != nil {
+		m.patchErr = err.Error()
+		m.patchViewport = nil
+		return
+	}
+	m.patchErr = ""
+	vp := panes.NewPatchViewport(fp)
+	vp.Width = m.width
+	vp.Height = m.height - 1 // reserve 1 line for status bar
+	m.patchViewport = vp
+}
+
+func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "h":
+		m.State.FocusPane = model.PaneFiles
+		m.patchViewport = nil
+		m.patchErr = ""
+	case "n":
+		if m.patchViewport != nil {
+			m.patchViewport.NextHunk()
+		}
+	case "p":
+		if m.patchViewport != nil {
+			m.patchViewport.PrevHunk()
 		}
 	case "q":
 		m.quitting = true
@@ -131,6 +198,8 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		b.WriteString(m.viewHelp())
+	} else if m.State.FocusPane == model.PanePatch {
+		b.WriteString(m.viewPatch())
 	} else {
 		b.WriteString(m.viewFileList())
 	}
@@ -213,12 +282,26 @@ func (m Model) viewStatusBar() string {
 	return statusBarStyle.Width(m.width).Render(bar)
 }
 
+func (m Model) viewPatch() string {
+	if m.patchErr != "" {
+		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
+	}
+	if m.patchViewport == nil {
+		return "No patch loaded."
+	}
+	m.patchViewport.Width = m.width
+	m.patchViewport.Height = m.height - 1 // reserve status bar
+	return m.patchViewport.Render()
+}
+
 func (m Model) viewHelp() string {
 	help := []string{
 		"Key Bindings",
 		"",
 		"  j/k     navigate file list",
 		"  Enter   select file",
+		"  n/p     next/previous hunk",
+		"  h/Esc   back to file list",
 		"  q       quit",
 		"  ?       toggle help",
 	}

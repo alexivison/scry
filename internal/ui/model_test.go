@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alexivison/scry/internal/model"
 )
 
@@ -40,6 +43,62 @@ func keyMsg(r rune) tea.Msg {
 
 func enterMsg() tea.Msg {
 	return tea.KeyMsg{Type: tea.KeyEnter}
+}
+
+func escMsg() tea.Msg {
+	return tea.KeyMsg{Type: tea.KeyEscape}
+}
+
+func intP(n int) *int { return &n }
+
+type mockPatchLoader struct {
+	patches map[string]model.FilePatch
+	err     error
+}
+
+func (m *mockPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, filePath string, _ bool) (model.FilePatch, error) {
+	if m.err != nil {
+		return model.FilePatch{}, m.err
+	}
+	if fp, ok := m.patches[filePath]; ok {
+		return fp, nil
+	}
+	return model.FilePatch{}, nil
+}
+
+func samplePatch() model.FilePatch {
+	return model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{
+			{
+				Header: "func init()", OldStart: 1, OldLen: 3, NewStart: 1, NewLen: 4,
+				Lines: []model.DiffLine{
+					{Kind: model.LineContext, OldNo: intP(1), NewNo: intP(1), Text: "package main"},
+					{Kind: model.LineAdded, NewNo: intP(2), Text: `import "os"`},
+				},
+			},
+			{
+				Header: "func main()", OldStart: 10, OldLen: 3, NewStart: 11, NewLen: 4,
+				Lines: []model.DiffLine{
+					{Kind: model.LineContext, OldNo: intP(10), NewNo: intP(11), Text: "func main() {"},
+					{Kind: model.LineDeleted, OldNo: intP(11), Text: "old()"},
+					{Kind: model.LineAdded, NewNo: intP(12), Text: "new()"},
+				},
+			},
+		},
+	}
+}
+
+func modelWithLoader() Model {
+	loader := &mockPatchLoader{
+		patches: map[string]model.FilePatch{
+			"main.go": samplePatch(),
+		},
+	}
+	m := NewModel(sampleState(), WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+	return m
 }
 
 // --- NewModel tests ---
@@ -336,5 +395,151 @@ func TestViewRenameShowsArrow(t *testing.T) {
 	// Renamed files should show old → new
 	if !strings.Contains(view, "old.go") || !strings.Contains(view, "new.go") {
 		t.Error("View() missing rename paths")
+	}
+}
+
+// --- Patch pane integration tests ---
+
+func TestEnterLoadsPatchAndSwitchesFocus(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	if um.State.FocusPane != model.PanePatch {
+		t.Errorf("FocusPane = %q, want %q", um.State.FocusPane, model.PanePatch)
+	}
+	if um.patchViewport == nil {
+		t.Fatal("patchViewport should not be nil after Enter")
+	}
+}
+
+func TestEnterWithLoadError(t *testing.T) {
+	t.Parallel()
+
+	loader := &mockPatchLoader{err: fmt.Errorf("git error")}
+	m := NewModel(sampleState(), WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	if um.State.FocusPane != model.PanePatch {
+		t.Errorf("FocusPane = %q, want %q", um.State.FocusPane, model.PanePatch)
+	}
+	if um.patchErr == "" {
+		t.Error("patchErr should be set on load error")
+	}
+	view := um.View()
+	if !strings.Contains(view, "Error loading patch") {
+		t.Errorf("View() should show error, got:\n%s", view)
+	}
+}
+
+func TestPatchPaneEscReturnsToFiles(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	updated2, _ := um.Update(escMsg())
+	um2 := updated2.(Model)
+
+	if um2.State.FocusPane != model.PaneFiles {
+		t.Errorf("FocusPane = %q, want %q after Esc", um2.State.FocusPane, model.PaneFiles)
+	}
+	if um2.patchViewport != nil {
+		t.Error("patchViewport should be nil after Esc")
+	}
+}
+
+func TestPatchPaneHReturnsToFiles(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	updated2, _ := um.Update(keyMsg('h'))
+	um2 := updated2.(Model)
+
+	if um2.State.FocusPane != model.PaneFiles {
+		t.Errorf("FocusPane = %q, want %q after h", um2.State.FocusPane, model.PaneFiles)
+	}
+}
+
+func TestPatchPaneHunkNavigation(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	if um.patchViewport.CurrentHunk != 0 {
+		t.Fatalf("initial hunk = %d, want 0", um.patchViewport.CurrentHunk)
+	}
+
+	// n -> next hunk
+	updated2, _ := um.Update(keyMsg('n'))
+	um2 := updated2.(Model)
+	if um2.patchViewport.CurrentHunk != 1 {
+		t.Errorf("after n: hunk = %d, want 1", um2.patchViewport.CurrentHunk)
+	}
+
+	// n at last hunk -> no-op
+	updated3, _ := um2.Update(keyMsg('n'))
+	um3 := updated3.(Model)
+	if um3.patchViewport.CurrentHunk != 1 {
+		t.Errorf("n at last: hunk = %d, want 1", um3.patchViewport.CurrentHunk)
+	}
+
+	// p -> prev hunk
+	updated4, _ := um3.Update(keyMsg('p'))
+	um4 := updated4.(Model)
+	if um4.patchViewport.CurrentHunk != 0 {
+		t.Errorf("after p: hunk = %d, want 0", um4.patchViewport.CurrentHunk)
+	}
+
+	// p at first hunk -> no-op
+	updated5, _ := um4.Update(keyMsg('p'))
+	um5 := updated5.(Model)
+	if um5.patchViewport.CurrentHunk != 0 {
+		t.Errorf("p at first: hunk = %d, want 0", um5.patchViewport.CurrentHunk)
+	}
+}
+
+func TestPatchPaneQQuits(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	updated2, cmd := um.Update(keyMsg('q'))
+	um2 := updated2.(Model)
+	if !um2.quitting {
+		t.Error("q in patch pane should quit")
+	}
+	if cmd == nil {
+		t.Error("q should return tea.Quit command")
+	}
+}
+
+func TestPatchPaneViewRendersDiff(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	updated, _ := m.Update(enterMsg())
+	um := updated.(Model)
+
+	view := um.View()
+	if !strings.Contains(view, "func init()") {
+		t.Errorf("patch view missing hunk header, got:\n%s", view)
+	}
+	if !strings.Contains(view, "package main") {
+		t.Errorf("patch view missing context line, got:\n%s", view)
 	}
 }
