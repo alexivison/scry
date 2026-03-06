@@ -8,14 +8,14 @@ T2 (GitRunner), T3 (ResolvedCompare).
 - `go.mod` — Add `github.com/sourcegraph/go-diff` dependency.
 
 ## Deliverables
-- [ ] `PatchService.LoadPatch(ctx, cmp, filePath, ignoreWhitespace bool)` executing `git diff --patch --no-color --no-ext-diff -M <range> -- <file>`. Note: signature adds `ignoreWhitespace` parameter since whitespace state lives in `AppState`, not `ResolvedCompare`.
-- [ ] Append `-w` to git diff command when `ignoreWhitespace` is true.
-- [ ] Parse unified diff into `FilePatch` with `[]Hunk` and `[]DiffLine`.
-- [ ] Map diff lines to `LineKind` constants (Context/Added/Deleted/NoNewline).
-- [ ] Populate `OldNo`/`NewNo` line numbers on each DiffLine.
-- [ ] Oversized patch gate: check raw byte count (>8 MiB) before parsing. Line count check (>50k) after parsing.
-- [ ] Sentinel error returns: `ErrOversized` (valid Summary, nil Hunks), `ErrBinaryFile`, `ErrSubmodule`.
-- [ ] Parse failures return wrapped error with empty FilePatch.
+- [x] `PatchService.LoadPatch(ctx, cmp, filePath, ignoreWhitespace bool)` executing `git diff --patch --no-color --no-ext-diff -M <range> -- <file>`. Note: signature adds `ignoreWhitespace` parameter since whitespace state lives in `AppState`, not `ResolvedCompare`.
+- [x] Append `-w` to git diff command when `ignoreWhitespace` is true.
+- [x] Parse unified diff into `FilePatch` with `[]Hunk` and `[]DiffLine`.
+- [x] Map diff lines to `LineKind` constants (Context/Added/Deleted/NoNewline).
+- [x] Populate `OldNo`/`NewNo` line numbers on each DiffLine.
+- [x] Oversized patch gate: check raw byte count (>8 MiB) before parsing. Line count check (>50k) after parsing.
+- [x] Sentinel error returns: `ErrOversized` (valid Summary, nil Hunks), `ErrBinaryFile`, `ErrSubmodule`.
+- [x] Parse failures return wrapped error with empty FilePatch.
 
 ## Test Strategy
 - Mock GitRunner returning known patch output.
