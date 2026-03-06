@@ -444,3 +444,80 @@ func TestScrollSyncsCurrentHunk(t *testing.T) {
 		}
 	})
 }
+
+// threeHunkPatch viewport line layout:
+// 0: hunk0 header
+// 1: "package main"   (DiffLine 0)
+// 2: `import "os"`    (DiffLine 1)
+// 3: ""               (DiffLine 2)
+// 4: hunk1 header
+// 5: "func main() {"  (DiffLine 3)
+// 6: "\told()"        (DiffLine 4)
+// 7: "\tnew()"        (DiffLine 5)
+// 8: "}"              (DiffLine 6)
+// 9: hunk2 header
+// 10: "func helper()" (DiffLine 7)
+// 11: "\tlog.Println()" (DiffLine 8)
+// 12: "}"             (DiffLine 9)
+
+func TestDiffLineToViewportLine(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(threeHunkPatch())
+
+	tests := map[string]struct {
+		diffIdx int
+		wantVP  int
+	}{
+		"first diff line":         {diffIdx: 0, wantVP: 1},
+		"second diff line":        {diffIdx: 1, wantVP: 2},
+		"last in hunk0":           {diffIdx: 2, wantVP: 3},
+		"first in hunk1":          {diffIdx: 3, wantVP: 5},
+		"last in hunk1":           {diffIdx: 6, wantVP: 8},
+		"first in hunk2":          {diffIdx: 7, wantVP: 10},
+		"last diff line":          {diffIdx: 9, wantVP: 12},
+		"out of range returns 0":  {diffIdx: 99, wantVP: 0},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := vp.DiffLineToViewportLine(tc.diffIdx)
+			if got != tc.wantVP {
+				t.Errorf("DiffLineToViewportLine(%d) = %d, want %d", tc.diffIdx, got, tc.wantVP)
+			}
+		})
+	}
+}
+
+func TestViewportLineToDiffLine(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(threeHunkPatch())
+
+	tests := map[string]struct {
+		vpLine   int
+		wantDiff int
+	}{
+		"hunk header maps to next diff line": {vpLine: 0, wantDiff: 0},
+		"first diff line":                    {vpLine: 1, wantDiff: 0},
+		"second diff line":                   {vpLine: 2, wantDiff: 1},
+		"hunk1 header maps to first hunk1 diff": {vpLine: 4, wantDiff: 3},
+		"first diff in hunk1":                {vpLine: 5, wantDiff: 3},
+		"last diff in hunk1":                 {vpLine: 8, wantDiff: 6},
+		"hunk2 header":                       {vpLine: 9, wantDiff: 7},
+		"last diff line":                     {vpLine: 12, wantDiff: 9},
+		"negative clamps to 0":               {vpLine: -5, wantDiff: 0},
+		"beyond end clamps to last":          {vpLine: 100, wantDiff: 9},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := vp.ViewportLineToDiffLine(tc.vpLine)
+			if got != tc.wantDiff {
+				t.Errorf("ViewportLineToDiffLine(%d) = %d, want %d", tc.vpLine, got, tc.wantDiff)
+			}
+		})
+	}
+}

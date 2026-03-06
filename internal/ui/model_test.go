@@ -583,3 +583,223 @@ func TestPatchPaneViewRendersDiff(t *testing.T) {
 		t.Errorf("patch view missing context line, got:\n%s", view)
 	}
 }
+
+// --- Search tests ---
+
+// enterPatchPane returns a Model in patch pane with samplePatch loaded.
+// Uses enterAndLoad to complete the async load cycle (T8).
+func enterPatchPane(t *testing.T) Model {
+	t.Helper()
+	m := modelWithLoader()
+	um := enterAndLoad(t, m)
+	if um.State.FocusPane != model.PanePatch {
+		t.Fatalf("expected PanePatch, got %q", um.State.FocusPane)
+	}
+	if um.patchViewport == nil {
+		t.Fatal("patchViewport should not be nil after enterAndLoad")
+	}
+	return um
+}
+
+func TestDirectionalSearchSlashEntersSearchMode(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// / enters search mode
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+	if um2.State.FocusPane != model.PaneSearch {
+		t.Errorf("FocusPane = %q, want %q", um2.State.FocusPane, model.PaneSearch)
+	}
+}
+
+func TestDirectionalSearchEscCancelsSearch(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// Enter search mode, type something, then Escape
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+
+	updated2, _ := um2.Update(keyMsg('m'))
+	um3 := updated2.(Model)
+
+	updated3, _ := um3.Update(escMsg())
+	um4 := updated3.(Model)
+
+	if um4.State.FocusPane != model.PanePatch {
+		t.Errorf("FocusPane = %q, want %q after Esc", um4.State.FocusPane, model.PanePatch)
+	}
+	// Escape should NOT set the search query
+	if um4.State.SearchQuery != "" {
+		t.Errorf("SearchQuery = %q, want empty after Esc", um4.State.SearchQuery)
+	}
+}
+
+func TestDirectionalSearchEnterExecutesSearch(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// / to enter search, type "main", Enter to execute
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+
+	for _, r := range "main" {
+		updated, _ = um2.Update(keyMsg(r))
+		um2 = updated.(Model)
+	}
+
+	updated, _ = um2.Update(enterMsg())
+	um3 := updated.(Model)
+
+	if um3.State.FocusPane != model.PanePatch {
+		t.Errorf("FocusPane = %q, want %q after search Enter", um3.State.FocusPane, model.PanePatch)
+	}
+	if um3.State.SearchQuery != "main" {
+		t.Errorf("SearchQuery = %q, want %q", um3.State.SearchQuery, "main")
+	}
+	// Cursor at scroll 0 (hunk header), search starts from DiffLine 0 (no +1 on header).
+	// DiffLine 0 = "package main" (match) → viewport line 1.
+	if um3.patchViewport.ScrollOffset != 1 {
+		t.Errorf("ScrollOffset = %d, want 1 (viewport line of first match from cursor)", um3.patchViewport.ScrollOffset)
+	}
+}
+
+func TestDirectionalSearchEnterNextMatch(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// Search for "main" — matches DiffLine 0 ("package main") and DiffLine 2 ("func main() {")
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+	for _, r := range "main" {
+		updated, _ = um2.Update(keyMsg(r))
+		um2 = updated.(Model)
+	}
+	updated, _ = um2.Update(enterMsg())
+	um3 := updated.(Model)
+
+	// First match from cursor (scroll 0, hunk header): DiffLine 0 ("package main") → viewport line 1
+	if um3.patchViewport.ScrollOffset != 1 {
+		t.Fatalf("first match: ScrollOffset = %d, want 1", um3.patchViewport.ScrollOffset)
+	}
+
+	// Enter in patch pane → next from DiffLine 0+1=1: DiffLine 2 ("func main() {") → viewport line 4
+	updated, _ = um3.Update(enterMsg())
+	um4 := updated.(Model)
+	if um4.patchViewport.ScrollOffset != 4 {
+		t.Errorf("second match: ScrollOffset = %d, want 4", um4.patchViewport.ScrollOffset)
+	}
+}
+
+func TestDirectionalSearchShiftNPrevMatch(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// Search for "main"
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+	for _, r := range "main" {
+		updated, _ = um2.Update(keyMsg(r))
+		um2 = updated.(Model)
+	}
+	updated, _ = um2.Update(enterMsg())
+	um3 := updated.(Model)
+
+	// First match from cursor (hunk header): DiffLine 0 ("package main") → viewport line 1
+	if um3.patchViewport.ScrollOffset != 1 {
+		t.Fatalf("first match: ScrollOffset = %d, want 1", um3.patchViewport.ScrollOffset)
+	}
+
+	// Shift-N → backward from DiffLine 0-1=-1, wraps to DiffLine 4.
+	// DiffLine 4 "new()" no, DiffLine 3 "old()" no, DiffLine 2 "func main() {" yes → viewport line 4
+	updated, _ = um3.Update(keyMsg('N'))
+	um4 := updated.(Model)
+	if um4.patchViewport.ScrollOffset != 4 {
+		t.Errorf("prev match (wrap): ScrollOffset = %d, want 4", um4.patchViewport.ScrollOffset)
+	}
+}
+
+func TestDirectionalSearchNoMatchShowsStatus(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// Search for "zzzzz" — no match
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+	for _, r := range "zzzzz" {
+		updated, _ = um2.Update(keyMsg(r))
+		um2 = updated.(Model)
+	}
+	updated, _ = um2.Update(enterMsg())
+	um3 := updated.(Model)
+
+	view := um3.View()
+	if !strings.Contains(view, "Pattern not found: zzzzz") {
+		t.Errorf("expected 'Pattern not found: zzzzz' in view, got:\n%s", view)
+	}
+}
+
+func TestDirectionalSearchEmptyQueryNoop(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// Enter search mode, immediately press Enter (empty query)
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+
+	scrollBefore := um2.patchViewport.ScrollOffset
+
+	updated, _ = um2.Update(enterMsg())
+	um3 := updated.(Model)
+
+	if um3.State.SearchQuery != "" {
+		t.Errorf("SearchQuery = %q, want empty for empty search", um3.State.SearchQuery)
+	}
+	if um3.patchViewport.ScrollOffset != scrollBefore {
+		t.Errorf("ScrollOffset changed from %d to %d on empty query", scrollBefore, um3.patchViewport.ScrollOffset)
+	}
+}
+
+func TestDirectionalSearchEnterWithoutQueryNoOp(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// Enter in patch pane without prior search → should not change scroll
+	scrollBefore := um.patchViewport.ScrollOffset
+	updated, _ := um.Update(enterMsg())
+	um2 := updated.(Model)
+
+	if um2.patchViewport.ScrollOffset != scrollBefore {
+		t.Errorf("Enter without query: ScrollOffset changed from %d to %d", scrollBefore, um2.patchViewport.ScrollOffset)
+	}
+}
+
+func TestDirectionalSearchViewShowsInput(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	// Enter search mode
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+
+	// Type "test"
+	for _, r := range "test" {
+		updated, _ = um2.Update(keyMsg(r))
+		um2 = updated.(Model)
+	}
+
+	view := um2.View()
+	if !strings.Contains(view, "/test") {
+		t.Errorf("search input should show '/test', got:\n%s", view)
+	}
+}

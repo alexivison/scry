@@ -8,18 +8,18 @@ T7 (patch pane).
 - `internal/ui/` — Search input pane, `/` to enter search, `Enter`/`N` navigation, highlight matches.
 
 ## Deliverables
-- [ ] `Index.Build(patch)` constructs searchable index from DiffLine text. Infallible.
-- [ ] `Index.Find(query, fromLine, dir)` returns `(line, ok)`.
-- [ ] Smart-case per-query: any uppercase rune → case-sensitive; all lowercase → case-insensitive.
-- [ ] Plain substring matching (no regex).
-- [ ] Forward search (`Enter`): starts from line after cursor, wraps around past end.
-- [ ] Backward search (`N`): starts from line before cursor, wraps around past start.
-- [ ] Empty query is a no-op.
-- [ ] `/` enters search mode (PaneSearch): text input for query.
-- [ ] `Enter` in search mode executes search and returns to patch pane.
-- [ ] `Escape` in search mode cancels without searching.
-- [ ] No-match state: status bar shows "Pattern not found: <query>".
-- [ ] Match highlighting in patch pane (visual indication of matched text).
+- [x] `Index.Build(patch)` constructs searchable index from DiffLine text. Infallible.
+- [x] `Index.Find(query, fromLine, dir)` returns `(line, ok)`.
+- [x] Smart-case per-query: any uppercase rune → case-sensitive; all lowercase → case-insensitive.
+- [x] Plain substring matching (no regex).
+- [x] Forward search (`Enter`): starts from line after cursor, wraps around past end.
+- [x] Backward search (`N`): starts from line before cursor, wraps around past start.
+- [x] Empty query is a no-op.
+- [x] `/` enters search mode (PaneSearch): text input for query.
+- [x] `Enter` in search mode executes search and returns to patch pane.
+- [x] `Escape` in search mode cancels without searching.
+- [x] No-match state: status bar shows "Pattern not found: <query>".
+- [x] Match highlighting in patch pane (visual indication of matched text).
 
 ## Test Strategy
 - Unit test Index with known line sets: forward, backward, wrap-around.

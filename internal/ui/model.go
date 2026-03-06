@@ -11,6 +11,7 @@ import (
 
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
+	"github.com/alexivison/scry/internal/search"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
@@ -32,6 +33,10 @@ type Model struct {
 	quitting      bool
 	tooSmall      bool // terminal below minimum dimensions
 	sizeErr       string
+
+	searchInput    string        // text being typed in search mode
+	searchIndex    *search.Index // built when patch is loaded
+	searchNotFound string        // "Pattern not found: <query>" message
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -109,6 +114,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.showHelp {
 			return m.updateHelp(msg)
+		}
+		if m.State.FocusPane == model.PaneSearch {
+			return m.updateSearch(msg)
 		}
 		if m.State.FocusPane == model.PanePatch {
 			return m.updatePatch(msg)
@@ -213,6 +221,8 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.Width = m.width
 	vp.Height = m.height - 1
 	m.patchViewport = vp
+	m.searchIndex = search.Build(*ps.Patch)
+	m.searchNotFound = ""
 }
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -221,6 +231,9 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneFiles
 		m.patchViewport = nil
 		m.patchErr = ""
+		m.searchIndex = nil
+		m.State.SearchQuery = ""
+		m.searchNotFound = ""
 	case "j", "down":
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollDown()
@@ -233,6 +246,14 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.patchViewport.NextHunk()
 		}
+	case "N":
+		m.executeSearch(search.SearchPrev)
+	case "enter":
+		m.executeSearch(search.SearchNext)
+	case "/":
+		m.State.FocusPane = model.PaneSearch
+		m.searchInput = ""
+		m.searchNotFound = ""
 	case "p":
 		if m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
@@ -242,6 +263,71 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.showHelp = true
+	}
+	return m, nil
+}
+
+func (m *Model) executeSearch(dir search.SearchDirection) {
+	if m.State.SearchQuery == "" || m.searchIndex == nil || m.patchViewport == nil {
+		return
+	}
+
+	currentDiff := m.patchViewport.ViewportLineToDiffLine(m.patchViewport.ScrollOffset)
+	onHeader := m.patchViewport.IsHunkHeader(m.patchViewport.ScrollOffset)
+	var from int
+	if dir == search.SearchNext {
+		if onHeader {
+			from = currentDiff
+		} else {
+			from = currentDiff + 1
+		}
+	} else {
+		from = currentDiff - 1
+	}
+
+	m.searchFrom(from, dir)
+}
+
+func (m *Model) searchFrom(from int, dir search.SearchDirection) {
+	if m.State.SearchQuery == "" || m.searchIndex == nil || m.patchViewport == nil {
+		return
+	}
+
+	line, ok := m.searchIndex.Find(m.State.SearchQuery, from, dir)
+	if !ok {
+		m.searchNotFound = fmt.Sprintf("Pattern not found: %s", m.State.SearchQuery)
+		m.patchViewport.SearchQuery = ""
+		m.patchViewport.MatchLine = -1
+		return
+	}
+
+	m.searchNotFound = ""
+	vpLine := m.patchViewport.DiffLineToViewportLine(line)
+	m.patchViewport.ScrollOffset = vpLine
+	m.patchViewport.SyncCurrentHunk()
+	m.patchViewport.MatchLine = vpLine
+	m.patchViewport.SearchQuery = m.State.SearchQuery
+}
+
+func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.State.FocusPane = model.PanePatch
+		m.searchInput = ""
+	case tea.KeyEnter:
+		m.State.FocusPane = model.PanePatch
+		if m.searchInput == "" {
+			return m, nil
+		}
+		m.State.SearchQuery = m.searchInput
+		m.searchInput = ""
+		m.executeSearch(search.SearchNext)
+	case tea.KeyBackspace:
+		if len(m.searchInput) > 0 {
+			m.searchInput = m.searchInput[:len(m.searchInput)-1]
+		}
+	case tea.KeyRunes:
+		m.searchInput += string(msg.Runes)
 	}
 	return m, nil
 }
@@ -273,14 +359,18 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		b.WriteString(m.viewHelp())
-	} else if m.State.FocusPane == model.PanePatch {
+	} else if m.State.FocusPane == model.PaneSearch || m.State.FocusPane == model.PanePatch {
 		b.WriteString(m.viewPatch())
 	} else {
 		b.WriteString(m.viewFileList())
 	}
 
 	b.WriteString("\n")
-	b.WriteString(m.viewStatusBar())
+	if m.State.FocusPane == model.PaneSearch {
+		b.WriteString(m.viewSearchInput())
+	} else {
+		b.WriteString(m.viewStatusBar())
+	}
 
 	return b.String()
 }
@@ -347,6 +437,14 @@ func formatCounts(f model.FileSummary) string {
 }
 
 func (m Model) viewStatusBar() string {
+	if m.searchNotFound != "" {
+		bar := " " + m.searchNotFound
+		gap := m.width - lipgloss.Width(bar)
+		if gap > 0 {
+			bar += strings.Repeat(" ", gap)
+		}
+		return searchNotFoundStyle.Width(m.width).Render(bar)
+	}
 	left := fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
 	fileCount := fmt.Sprintf(" %d files ", len(m.State.Files))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(fileCount)
@@ -355,6 +453,15 @@ func (m Model) viewStatusBar() string {
 	}
 	bar := left + strings.Repeat(" ", gap) + fileCount
 	return statusBarStyle.Width(m.width).Render(bar)
+}
+
+func (m Model) viewSearchInput() string {
+	prompt := "/" + m.searchInput
+	gap := m.width - lipgloss.Width(prompt)
+	if gap > 0 {
+		prompt += strings.Repeat(" ", gap)
+	}
+	return statusBarStyle.Width(m.width).Render(prompt)
 }
 
 func (m Model) viewPatch() string {
@@ -396,6 +503,9 @@ func (m Model) viewHelp() string {
 var (
 	selectedStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
 	statusBarStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("235")).
-		Foreground(lipgloss.Color("252"))
+			Background(lipgloss.Color("235")).
+			Foreground(lipgloss.Color("252"))
+	searchNotFoundStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("1")).
+				Foreground(lipgloss.Color("15"))
 )
