@@ -587,13 +587,16 @@ func TestPatchPaneViewRendersDiff(t *testing.T) {
 // --- Search tests ---
 
 // enterPatchPane returns a Model in patch pane with samplePatch loaded.
+// Uses enterAndLoad to complete the async load cycle (T8).
 func enterPatchPane(t *testing.T) Model {
 	t.Helper()
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 	if um.State.FocusPane != model.PanePatch {
 		t.Fatalf("expected PanePatch, got %q", um.State.FocusPane)
+	}
+	if um.patchViewport == nil {
+		t.Fatal("patchViewport should not be nil after enterAndLoad")
 	}
 	return um
 }

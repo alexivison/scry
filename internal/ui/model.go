@@ -221,7 +221,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.Width = m.width
 	vp.Height = m.height - 1
 	m.patchViewport = vp
-	m.searchIndex = search.Build(fp)
+	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
 }
 
