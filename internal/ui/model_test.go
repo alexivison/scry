@@ -101,6 +101,21 @@ func modelWithLoader() Model {
 	return m
 }
 
+// enterAndLoad simulates pressing Enter and completing the async load cycle.
+// It calls Update(enterMsg()), executes the returned Cmd, and feeds the
+// resulting PatchLoadedMsg back through Update.
+func enterAndLoad(t *testing.T, m Model) Model {
+	t.Helper()
+	updated, cmd := m.Update(enterMsg())
+	um := updated.(Model)
+	if cmd == nil {
+		return um
+	}
+	msg := cmd()
+	updated2, _ := um.Update(msg)
+	return updated2.(Model)
+}
+
 // --- NewModel tests ---
 
 func TestNewModelNonEmpty(t *testing.T) {
@@ -404,8 +419,7 @@ func TestEnterLoadsPatchAndSwitchesFocus(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	if um.State.FocusPane != model.PanePatch {
 		t.Errorf("FocusPane = %q, want %q", um.State.FocusPane, model.PanePatch)
@@ -423,8 +437,7 @@ func TestEnterWithLoadError(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	if um.State.FocusPane != model.PanePatch {
 		t.Errorf("FocusPane = %q, want %q", um.State.FocusPane, model.PanePatch)
@@ -442,8 +455,7 @@ func TestPatchPaneEscReturnsToFiles(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	updated2, _ := um.Update(escMsg())
 	um2 := updated2.(Model)
@@ -460,8 +472,7 @@ func TestPatchPaneHReturnsToFiles(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	updated2, _ := um.Update(keyMsg('h'))
 	um2 := updated2.(Model)
@@ -475,8 +486,7 @@ func TestPatchPaneHunkNavigation(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	if um.patchViewport.CurrentHunk != 0 {
 		t.Fatalf("initial hunk = %d, want 0", um.patchViewport.CurrentHunk)
@@ -515,8 +525,7 @@ func TestPatchPaneQQuits(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	updated2, cmd := um.Update(keyMsg('q'))
 	um2 := updated2.(Model)
@@ -532,8 +541,7 @@ func TestPatchPaneLineScroll(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	if um.patchViewport.ScrollOffset != 0 {
 		t.Fatalf("initial scroll = %d, want 0", um.patchViewport.ScrollOffset)
@@ -565,8 +573,7 @@ func TestPatchPaneViewRendersDiff(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
-	updated, _ := m.Update(enterMsg())
-	um := updated.(Model)
+	um := enterAndLoad(t, m)
 
 	view := um.View()
 	if !strings.Contains(view, "func init()") {
