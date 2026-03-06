@@ -272,19 +272,31 @@ func TestLazyLoadConcurrentSelectionDiscardsPrevious(t *testing.T) {
 	updated4, _ := um3.Update(enterMsg())
 	um4 := updated4.(Model)
 
-	// Now a stale response arrives for main.go.
-	staleMsg := PatchLoadedMsg{
+	// Viewport should be nil — "new.go" is loading, no result yet.
+	if um4.patchViewport != nil {
+		t.Fatal("patchViewport should be nil while new.go is loading")
+	}
+
+	// A response arrives for main.go (not the currently selected file).
+	// Same generation, so it updates the cache, but should NOT set the viewport
+	// because the selected file is "new.go", not "main.go".
+	mainMsg := PatchLoadedMsg{
 		Path:  "main.go",
 		Patch: samplePatch(),
 		Gen:   1,
 	}
-	updated5, _ := um4.Update(staleMsg)
+	updated5, _ := um4.Update(mainMsg)
 	um5 := updated5.(Model)
 
-	// The stale message should still update the cache (same generation),
-	// but the viewport should show the currently selected file, not the stale one.
-	// The selected file is "new.go" (index 1).
 	if um5.State.SelectedFile != 1 {
 		t.Errorf("SelectedFile = %d, want 1", um5.State.SelectedFile)
+	}
+	// Cache should have main.go's result stored.
+	if ps, ok := um5.State.Patches["main.go"]; !ok || ps.Status != model.LoadLoaded {
+		t.Error("main.go should be cached as Loaded")
+	}
+	// Viewport must NOT be set — the response was for a non-selected file.
+	if um5.patchViewport != nil {
+		t.Error("patchViewport should remain nil when PatchLoadedMsg is for a non-selected file")
 	}
 }
