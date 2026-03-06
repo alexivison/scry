@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
@@ -850,7 +851,7 @@ func edgeCaseLoader() *mockPatchLoader {
 						Status: model.StatusModified,
 					},
 				},
-				err: model.ErrOversized,
+				err: &diff.OversizedError{Lines: 60000, Bytes: 2_500_000},
 			},
 		},
 	}
@@ -933,6 +934,12 @@ func TestEdgeCaseOversized(t *testing.T) {
 	view := um.View()
 	if !strings.Contains(view, "Patch too large to display") {
 		t.Errorf("oversized view should contain 'Patch too large to display', got:\n%s", view)
+	}
+	if !strings.Contains(view, "60000 lines") {
+		t.Errorf("oversized view should show line count, got:\n%s", view)
+	}
+	if !strings.Contains(view, "2500000 bytes") {
+		t.Errorf("oversized view should show byte count, got:\n%s", view)
 	}
 	if !strings.Contains(view, "huge.go") {
 		t.Errorf("oversized view should show path, got:\n%s", view)
@@ -1019,7 +1026,15 @@ func TestEdgeCaseBinaryRenamedShowsOldPath(t *testing.T) {
 			},
 		},
 	}
-	state := edgeCaseState("new.png")
+	state := model.AppState{
+		Compare: sampleCompare(),
+		Files: []model.FileSummary{
+			{Path: "new.png", OldPath: "old.png", Status: model.StatusRenamed, IsBinary: true},
+		},
+		SelectedFile: 0,
+		FocusPane:    model.PaneFiles,
+		Patches:      make(map[string]model.PatchLoadState),
+	}
 	m := NewModel(state, WithPatchLoader(loader))
 	m.width = 100
 	m.height = 30

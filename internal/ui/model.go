@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/search"
@@ -191,11 +192,9 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Preserve the FilePatch for sentinel errors so fallback rendering
-	// has access to Summary metadata (path, status, binary/submodule flags).
-	patch := &msg.Patch
-	if msg.Err != nil && !isSentinelError(msg.Err) {
-		patch = nil
+	var patch *model.FilePatch
+	if msg.Err == nil {
+		patch = &msg.Patch
 	}
 	review.CacheStore(&m.State, msg.Path, patch, msg.Err)
 
@@ -216,7 +215,12 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 		m.patchViewport = nil
 		m.searchIndex = nil
 
-		if fb := buildFallback(ps); fb != "" {
+		var summary model.FileSummary
+		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+			summary = m.State.Files[m.State.SelectedFile]
+		}
+
+		if fb := buildFallback(summary, ps.Err); fb != "" {
 			m.patchFallback = fb
 			m.patchErr = ""
 			return
@@ -247,15 +251,11 @@ func isSentinelError(err error) bool {
 }
 
 // buildFallback returns a user-facing fallback message for sentinel errors,
-// or "" if the error is not a sentinel.
-func buildFallback(ps model.PatchLoadState) string {
-	if ps.Err == nil {
+// or "" if the error is not a sentinel. Uses the FileSummary from the metadata
+// pipeline (not from PatchService) for full status/path info.
+func buildFallback(summary model.FileSummary, err error) string {
+	if err == nil {
 		return ""
-	}
-
-	var summary model.FileSummary
-	if ps.Patch != nil {
-		summary = ps.Patch.Summary
 	}
 
 	path := summary.Path
@@ -266,11 +266,16 @@ func buildFallback(ps model.PatchLoadState) string {
 	statusLine := fmt.Sprintf("  Status: %s", summary.Status)
 
 	switch {
-	case errors.Is(ps.Err, model.ErrBinaryFile):
+	case errors.Is(err, model.ErrBinaryFile):
 		return fmt.Sprintf("Binary file -- content not displayed\n\n%s\n%s", pathLine, statusLine)
-	case errors.Is(ps.Err, model.ErrSubmodule):
+	case errors.Is(err, model.ErrSubmodule):
 		return fmt.Sprintf("Submodule change\n\n%s\n%s", pathLine, statusLine)
-	case errors.Is(ps.Err, model.ErrOversized):
+	case errors.Is(err, model.ErrOversized):
+		var oe *diff.OversizedError
+		if errors.As(err, &oe) {
+			return fmt.Sprintf("Patch too large to display (%d lines, %d bytes).\nUse `git diff -- %s` to view.\n\n%s\n%s",
+				oe.Lines, oe.Bytes, path, pathLine, statusLine)
+		}
 		return fmt.Sprintf("Patch too large to display.\nUse `git diff -- %s` to view.\n\n%s\n%s", path, pathLine, statusLine)
 	default:
 		return ""
