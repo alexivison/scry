@@ -1029,6 +1029,30 @@ func TestManualRefreshNoMetadataLoaderNoop(t *testing.T) {
 	}
 }
 
+func TestManualRefreshMetadataErrorSurfaced(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	m.metadataLoader = &mockMetadataLoader{err: fmt.Errorf("git error")}
+
+	// Press r, execute the metadata Cmd, feed the error msg back.
+	updated, cmd := m.Update(keyMsg('r'))
+	um := updated.(Model)
+	if cmd == nil {
+		t.Fatal("r should return a Cmd")
+	}
+	msg := cmd()
+	updated2, _ := um.Update(msg)
+	um2 := updated2.(Model)
+
+	if um2.patchErr == "" {
+		t.Error("patchErr should be set when metadata reload fails")
+	}
+	if !strings.Contains(um2.patchErr, "refresh failed") {
+		t.Errorf("patchErr = %q, want it to contain 'refresh failed'", um2.patchErr)
+	}
+}
+
 func TestManualRefreshHelpShowsR(t *testing.T) {
 	t.Parallel()
 

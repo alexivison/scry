@@ -257,6 +257,7 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 	if msg.Err != nil {
+		m.patchErr = fmt.Sprintf("refresh failed: %v", msg.Err)
 		return m, nil
 	}
 
