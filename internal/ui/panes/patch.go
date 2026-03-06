@@ -133,8 +133,7 @@ func renderDiffLine(dl model.DiffLine, width int) string {
 	line := gutter + prefix + dl.Text
 
 	if width > 0 && lipgloss.Width(line) > width {
-		// Truncate to fit; we don't wrap.
-		line = line[:width]
+		line = truncateToWidth(line, width)
 	}
 
 	return style.Render(line)
@@ -163,6 +162,19 @@ func formatGutter(oldNo, newNo *int) string {
 		new = fmt.Sprintf("%4d", *newNo)
 	}
 	return old + " " + new + " "
+}
+
+// truncateToWidth trims a string to fit within a terminal-cell width budget.
+func truncateToWidth(s string, maxWidth int) string {
+	w := 0
+	for i, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > maxWidth {
+			return s[:i]
+		}
+		w += rw
+	}
+	return s
 }
 
 // TotalLines returns the total number of rendered lines (headers + diff lines).

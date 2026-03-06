@@ -220,7 +220,6 @@ func TestRenderLines(t *testing.T) {
 		patch       model.FilePatch
 		height      int
 		wantContain []string
-		wantAbsent  []string
 	}{
 		"renders hunk header": {
 			patch:       threeHunkPatch(),
@@ -270,11 +269,6 @@ func TestRenderLines(t *testing.T) {
 			for _, want := range tc.wantContain {
 				if !strings.Contains(output, want) {
 					t.Errorf("output missing %q\ngot:\n%s", want, output)
-				}
-			}
-			for _, absent := range tc.wantAbsent {
-				if strings.Contains(output, absent) {
-					t.Errorf("output should not contain %q\ngot:\n%s", absent, output)
 				}
 			}
 		})
