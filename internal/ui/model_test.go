@@ -66,6 +66,18 @@ func (m *mockPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, 
 	return model.FilePatch{}, nil
 }
 
+type mockMetadataLoader struct {
+	files []model.FileSummary
+	err   error
+}
+
+func (m *mockMetadataLoader) ListFiles(_ context.Context, _ model.ResolvedCompare) ([]model.FileSummary, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.files, nil
+}
+
 func samplePatch() model.FilePatch {
 	return model.FilePatch{
 		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},
@@ -801,5 +813,234 @@ func TestDirectionalSearchViewShowsInput(t *testing.T) {
 	view := um2.View()
 	if !strings.Contains(view, "/test") {
 		t.Errorf("search input should show '/test', got:\n%s", view)
+	}
+}
+
+// --- Manual refresh tests ---
+
+// modelWithRefresh creates a Model wired with both patch and metadata loaders.
+func modelWithRefresh(metaFiles []model.FileSummary) Model {
+	patchLoader := &mockPatchLoader{
+		patches: map[string]model.FilePatch{
+			"main.go": samplePatch(),
+		},
+	}
+	metaLoader := &mockMetadataLoader{files: metaFiles}
+	m := NewModel(sampleState(), WithPatchLoader(patchLoader), WithMetadataLoader(metaLoader))
+	m.width = 100
+	m.height = 30
+	return m
+}
+
+// refreshAndComplete simulates pressing r and completing the async metadata + patch cycle.
+func refreshAndComplete(t *testing.T, m Model) Model {
+	t.Helper()
+	updated, cmd := m.Update(keyMsg('r'))
+	um := updated.(Model)
+	if cmd == nil {
+		return um
+	}
+	// Execute metadata load Cmd.
+	msg := cmd()
+	updated2, cmd2 := um.Update(msg)
+	um2 := updated2.(Model)
+	if cmd2 == nil {
+		return um2
+	}
+	// Execute patch load Cmd triggered by MetadataLoadedMsg handler.
+	msg2 := cmd2()
+	updated3, _ := um2.Update(msg2)
+	return updated3.(Model)
+}
+
+func TestManualRefreshBumpsGeneration(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	genBefore := m.State.CacheGeneration
+
+	updated, _ := m.Update(keyMsg('r'))
+	um := updated.(Model)
+
+	if um.State.CacheGeneration != genBefore+1 {
+		t.Errorf("CacheGeneration = %d, want %d", um.State.CacheGeneration, genBefore+1)
+	}
+}
+
+func TestManualRefreshClearsCache(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	// Pre-populate cache.
+	m.State.Patches["main.go"] = model.PatchLoadState{
+		Status:     model.LoadLoaded,
+		Generation: m.State.CacheGeneration,
+	}
+
+	updated, _ := m.Update(keyMsg('r'))
+	um := updated.(Model)
+
+	if len(um.State.Patches) != 0 {
+		t.Errorf("Patches should be cleared on refresh, got %d entries", len(um.State.Patches))
+	}
+}
+
+func TestManualRefreshReturnsCmd(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+
+	_, cmd := m.Update(keyMsg('r'))
+
+	if cmd == nil {
+		t.Fatal("r should return a Cmd for async metadata reload")
+	}
+}
+
+func TestManualRefreshPreservesSelectionByPath(t *testing.T) {
+	t.Parallel()
+
+	// Start with SelectedFile=1 pointing at "new.go".
+	m := modelWithRefresh(sampleFiles())
+	m.State.SelectedFile = 1 // "new.go"
+
+	// Metadata reloads with same files but reordered: new.go moves to index 2.
+	reorderedFiles := []model.FileSummary{
+		{Path: "main.go", Status: model.StatusModified},
+		{Path: "old.go", Status: model.StatusDeleted},
+		{Path: "new.go", Status: model.StatusAdded},
+	}
+	m.metadataLoader = &mockMetadataLoader{files: reorderedFiles}
+
+	um := refreshAndComplete(t, m)
+
+	if um.State.SelectedFile != 2 {
+		t.Errorf("SelectedFile = %d, want 2 (new.go moved to index 2)", um.State.SelectedFile)
+	}
+}
+
+func TestManualRefreshSelectsNearestWhenFileRemoved(t *testing.T) {
+	t.Parallel()
+
+	// Start with 3 files, SelectedFile=2 pointing at "old.go".
+	m := modelWithRefresh(sampleFiles())
+	m.State.SelectedFile = 2 // "old.go"
+
+	// Metadata reloads without "old.go" — only 2 files remain.
+	reducedFiles := []model.FileSummary{
+		{Path: "main.go", Status: model.StatusModified},
+		{Path: "new.go", Status: model.StatusAdded},
+	}
+	m.metadataLoader = &mockMetadataLoader{files: reducedFiles}
+
+	um := refreshAndComplete(t, m)
+
+	// "old.go" removed, was at index 2. Nearest valid = 1 (clamped to len-1).
+	if um.State.SelectedFile != 1 {
+		t.Errorf("SelectedFile = %d, want 1 (nearest valid after removal)", um.State.SelectedFile)
+	}
+}
+
+func TestManualRefreshStaleMetadataDiscarded(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+
+	// Simulate r press.
+	updated, cmd := m.Update(keyMsg('r'))
+	um := updated.(Model)
+	staleGen := um.State.CacheGeneration
+
+	// Before the metadata response arrives, bump generation again (simulate another r).
+	um.State.CacheGeneration = staleGen + 1
+
+	// Now deliver the stale metadata msg.
+	if cmd != nil {
+		msg := cmd()
+		updated2, _ := um.Update(msg)
+		um2 := updated2.(Model)
+
+		// The stale MetadataLoadedMsg should be discarded — Files unchanged.
+		// The model was constructed with sampleFiles() originally.
+		if len(um2.State.Files) != len(sampleFiles()) {
+			t.Errorf("stale metadata should be discarded, Files len = %d, want %d",
+				len(um2.State.Files), len(sampleFiles()))
+		}
+	}
+}
+
+func TestManualRefreshFromPatchPane(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	// Enter patch pane.
+	um := enterAndLoad(t, m)
+	if um.State.FocusPane != model.PanePatch {
+		t.Fatalf("expected PanePatch, got %q", um.State.FocusPane)
+	}
+
+	genBefore := um.State.CacheGeneration
+	updated, cmd := um.Update(keyMsg('r'))
+	um2 := updated.(Model)
+
+	if um2.State.CacheGeneration != genBefore+1 {
+		t.Errorf("CacheGeneration = %d, want %d", um2.State.CacheGeneration, genBefore+1)
+	}
+	if cmd == nil {
+		t.Fatal("r from patch pane should return a Cmd")
+	}
+}
+
+func TestManualRefreshEmptyResult(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	// Metadata returns empty after refresh.
+	m.metadataLoader = &mockMetadataLoader{files: nil}
+
+	um := refreshAndComplete(t, m)
+
+	if len(um.State.Files) != 0 {
+		t.Errorf("Files len = %d, want 0", len(um.State.Files))
+	}
+	if um.State.SelectedFile != -1 {
+		t.Errorf("SelectedFile = %d, want -1 for empty files", um.State.SelectedFile)
+	}
+}
+
+func TestManualRefreshNoMetadataLoaderNoop(t *testing.T) {
+	t.Parallel()
+
+	// Model without metadata loader — r should be a no-op.
+	m := NewModel(sampleState())
+	m.width = 100
+	m.height = 30
+
+	updated, cmd := m.Update(keyMsg('r'))
+	um := updated.(Model)
+
+	// Generation should still bump and cache clear, but no Cmd returned.
+	if cmd != nil {
+		t.Error("r without metadata loader should not return a Cmd")
+	}
+	// Files should remain unchanged.
+	if len(um.State.Files) != len(sampleFiles()) {
+		t.Errorf("Files len = %d, want %d", len(um.State.Files), len(sampleFiles()))
+	}
+}
+
+func TestManualRefreshHelpShowsR(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(keyMsg('?'))
+	um := updated.(Model)
+
+	view := um.View()
+	if !strings.Contains(view, "r") {
+		t.Error("help text should mention r key")
 	}
 }
