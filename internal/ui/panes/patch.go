@@ -98,7 +98,7 @@ func (vp *PatchViewport) PrevHunk() {
 func (vp *PatchViewport) ScrollDown() {
 	if vp.ScrollOffset < len(vp.lines)-1 {
 		vp.ScrollOffset++
-		vp.syncCurrentHunk()
+		vp.SyncCurrentHunk()
 	}
 }
 
@@ -106,13 +106,13 @@ func (vp *PatchViewport) ScrollDown() {
 func (vp *PatchViewport) ScrollUp() {
 	if vp.ScrollOffset > 0 {
 		vp.ScrollOffset--
-		vp.syncCurrentHunk()
+		vp.SyncCurrentHunk()
 	}
 }
 
-// syncCurrentHunk derives CurrentHunk from ScrollOffset so that n/p
+// SyncCurrentHunk derives CurrentHunk from ScrollOffset so that n/p
 // navigate relative to the hunk the user is actually viewing.
-func (vp *PatchViewport) syncCurrentHunk() {
+func (vp *PatchViewport) SyncCurrentHunk() {
 	for i := len(vp.Patch.Hunks) - 1; i >= 0; i-- {
 		if vp.ScrollOffset >= vp.hunkLineOffset(i) {
 			vp.CurrentHunk = i

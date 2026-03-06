@@ -297,6 +297,7 @@ func (m *Model) searchFrom(from int, dir search.SearchDirection) {
 	m.searchNotFound = ""
 	vpLine := m.patchViewport.DiffLineToViewportLine(line)
 	m.patchViewport.ScrollOffset = vpLine
+	m.patchViewport.SyncCurrentHunk()
 	m.patchViewport.MatchLine = vpLine
 	m.patchViewport.SearchQuery = m.State.SearchQuery
 }
@@ -313,7 +314,7 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.State.SearchQuery = m.searchInput
 		m.searchInput = ""
-		m.searchFrom(0, search.SearchNext)
+		m.executeSearch(search.SearchNext)
 	case tea.KeyBackspace:
 		if len(m.searchInput) > 0 {
 			m.searchInput = m.searchInput[:len(m.searchInput)-1]

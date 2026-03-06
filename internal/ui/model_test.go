@@ -658,10 +658,10 @@ func TestDirectionalSearchEnterExecutesSearch(t *testing.T) {
 	if um3.State.SearchQuery != "main" {
 		t.Errorf("SearchQuery = %q, want %q", um3.State.SearchQuery, "main")
 	}
-	// samplePatch layout: DiffLine index 0 is "package main".
-	// Forward search from line 0 matches "package main" at DiffLine 0 → viewport line 1.
-	if um3.patchViewport.ScrollOffset != 1 {
-		t.Errorf("ScrollOffset = %d, want 1 (viewport line of first match)", um3.patchViewport.ScrollOffset)
+	// Cursor at scroll 0 (hunk header → DiffLine 0), search starts from DiffLine 1.
+	// DiffLine 1 = `import "os"` (no), DiffLine 2 = "func main() {" (match) → viewport line 4.
+	if um3.patchViewport.ScrollOffset != 4 {
+		t.Errorf("ScrollOffset = %d, want 4 (viewport line of first match from cursor)", um3.patchViewport.ScrollOffset)
 	}
 }
 
@@ -680,16 +680,16 @@ func TestDirectionalSearchEnterNextMatch(t *testing.T) {
 	updated, _ = um2.Update(enterMsg())
 	um3 := updated.(Model)
 
-	// First match: DiffLine 0 → viewport line 1
-	if um3.patchViewport.ScrollOffset != 1 {
-		t.Fatalf("first match: ScrollOffset = %d, want 1", um3.patchViewport.ScrollOffset)
+	// First match from cursor (scroll 0): DiffLine 2 ("func main() {") → viewport line 4
+	if um3.patchViewport.ScrollOffset != 4 {
+		t.Fatalf("first match: ScrollOffset = %d, want 4", um3.patchViewport.ScrollOffset)
 	}
 
-	// Enter in patch pane → next forward match: DiffLine 2 ("func main() {") → viewport line 4
+	// Enter in patch pane → next forward match from DiffLine 3: wraps to DiffLine 0 ("package main") → viewport line 1
 	updated, _ = um3.Update(enterMsg())
 	um4 := updated.(Model)
-	if um4.patchViewport.ScrollOffset != 4 {
-		t.Errorf("second match: ScrollOffset = %d, want 4", um4.patchViewport.ScrollOffset)
+	if um4.patchViewport.ScrollOffset != 1 {
+		t.Errorf("second match: ScrollOffset = %d, want 1", um4.patchViewport.ScrollOffset)
 	}
 }
 
@@ -708,16 +708,16 @@ func TestDirectionalSearchShiftNPrevMatch(t *testing.T) {
 	updated, _ = um2.Update(enterMsg())
 	um3 := updated.(Model)
 
-	// First match at viewport line 1 (DiffLine 0)
-	if um3.patchViewport.ScrollOffset != 1 {
-		t.Fatalf("first match: ScrollOffset = %d, want 1", um3.patchViewport.ScrollOffset)
+	// First match from cursor: DiffLine 2 ("func main() {") → viewport line 4
+	if um3.patchViewport.ScrollOffset != 4 {
+		t.Fatalf("first match: ScrollOffset = %d, want 4", um3.patchViewport.ScrollOffset)
 	}
 
-	// Shift-N → backward search, should wrap to last match: DiffLine 2 → viewport line 4
+	// Shift-N → backward from DiffLine 2-1=1: DiffLine 1 no, DiffLine 0 "package main" yes → viewport line 1
 	updated, _ = um3.Update(keyMsg('N'))
 	um4 := updated.(Model)
-	if um4.patchViewport.ScrollOffset != 4 {
-		t.Errorf("prev match (wrap): ScrollOffset = %d, want 4", um4.patchViewport.ScrollOffset)
+	if um4.patchViewport.ScrollOffset != 1 {
+		t.Errorf("prev match: ScrollOffset = %d, want 1", um4.patchViewport.ScrollOffset)
 	}
 }
 
