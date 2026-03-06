@@ -27,7 +27,7 @@ Scry does one thing well: show you what changed between two refs, with the same 
 
 ## Install
 
-### From source (requires Go 1.22+)
+### From source (requires Go 1.24+)
 
 ```bash
 go install github.com/alexivison/scry/cmd/scry@latest

@@ -20,12 +20,13 @@ func TestRunInvalidMode(t *testing.T) {
 	}
 }
 
-func TestRunDefaults(t *testing.T) {
+func TestRunDefaultsNonTTY(t *testing.T) {
 	t.Parallel()
 
+	// In a test process, stdin/stdout are not TTYs, so app.Run returns 128.
 	code := runWith([]string{})
-	if code != 0 {
-		t.Errorf("exit code = %d, want 0", code)
+	if code != 128 {
+		t.Errorf("exit code = %d, want 128 (non-TTY)", code)
 	}
 }
 

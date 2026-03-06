@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/alexivison/scry/internal/app"
 	"github.com/alexivison/scry/internal/config"
 	flag "github.com/spf13/pflag"
 )
@@ -28,9 +29,5 @@ func runWith(args []string) int {
 		return 2
 	}
 
-	// TODO(T6): bootstrap app and launch TUI using cfg.
-	_ = cfg
-
-	fmt.Printf("scry %s (%s)\n", version, commit)
-	return 0
+	return app.Run(cfg)
 }
