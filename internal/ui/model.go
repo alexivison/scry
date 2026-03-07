@@ -138,6 +138,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch {
 			return m.startRefresh()
 		}
+		// W toggles whitespace ignore from any pane (except help/search).
+		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch {
+			return m.toggleWhitespace()
+		}
 		if m.showHelp {
 			return m.updateHelp(msg)
 		}
@@ -254,6 +258,23 @@ func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 		return MetadataLoadedMsg{Files: files, Gen: gen, Err: err}
 	}
 	return m, cmd
+}
+
+// toggleWhitespace flips IgnoreWhitespace, resets the patch cache, and reloads
+// the selected file's patch. Unlike startRefresh, it does NOT reload metadata.
+func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
+	m.State.IgnoreWhitespace = !m.State.IgnoreWhitespace
+	review.BumpGeneration(&m.State)
+	review.ClearPatches(&m.State)
+	m.patchViewport = nil
+	m.patchErr = ""
+	m.searchIndex = nil
+	m.searchNotFound = ""
+
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		return m.selectFile()
+	}
+	return m, nil
 }
 
 func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) {
@@ -559,6 +580,9 @@ func (m Model) viewStatusBar() string {
 		return searchNotFoundStyle.Width(m.width).Render(bar)
 	}
 	left := fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+	if m.State.IgnoreWhitespace {
+		left += "[W] "
+	}
 	fileCount := fmt.Sprintf(" %d files ", len(m.State.Files))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(fileCount)
 	if gap < 0 {
@@ -606,6 +630,7 @@ func (m Model) viewHelp() string {
 		"  Enter   select file",
 		"  n/p     next/previous hunk",
 		"  r       refresh",
+		"  W       toggle whitespace ignore",
 		"  h/Esc   back to file list",
 		"  q       quit",
 		"  ?       toggle help",

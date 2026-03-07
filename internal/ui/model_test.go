@@ -1101,3 +1101,324 @@ func TestManualRefreshHelpShowsR(t *testing.T) {
 		t.Error("help text should mention r key")
 	}
 }
+
+// --- Whitespace toggle tests ---
+
+func TestWhitespaceToggleFlipsFlag(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	if m.State.IgnoreWhitespace {
+		t.Fatal("IgnoreWhitespace should start false")
+	}
+
+	updated, _ := m.Update(keyMsg('W'))
+	um := updated.(Model)
+
+	if !um.State.IgnoreWhitespace {
+		t.Error("after W: IgnoreWhitespace should be true")
+	}
+
+	updated2, _ := um.Update(keyMsg('W'))
+	um2 := updated2.(Model)
+
+	if um2.State.IgnoreWhitespace {
+		t.Error("after second W: IgnoreWhitespace should be false")
+	}
+}
+
+func TestWhitespaceToggleBumpsGeneration(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	genBefore := m.State.CacheGeneration
+
+	updated, _ := m.Update(keyMsg('W'))
+	um := updated.(Model)
+
+	if um.State.CacheGeneration != genBefore+1 {
+		t.Errorf("CacheGeneration = %d, want %d", um.State.CacheGeneration, genBefore+1)
+	}
+}
+
+func TestWhitespaceToggleClearsCache(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	oldGen := m.State.CacheGeneration
+	m.State.Patches["main.go"] = model.PatchLoadState{
+		Status:     model.LoadLoaded,
+		Generation: oldGen,
+	}
+	m.State.Patches["new.go"] = model.PatchLoadState{
+		Status:     model.LoadLoaded,
+		Generation: oldGen,
+	}
+
+	updated, _ := m.Update(keyMsg('W'))
+	um := updated.(Model)
+
+	// Old cache entries should be gone. selectFile() may have added a loading
+	// entry for the selected file, but no old-generation entries should remain.
+	for path, ps := range um.State.Patches {
+		if ps.Generation == oldGen {
+			t.Errorf("stale cache entry for %q with old generation %d should have been cleared", path, oldGen)
+		}
+	}
+}
+
+func TestWhitespaceToggleDoesNotReloadMetadata(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	originalFiles := make([]model.FileSummary, len(m.State.Files))
+	copy(originalFiles, m.State.Files)
+
+	// Replace metadata loader with one that returns different files.
+	m.metadataLoader = &mockMetadataLoader{
+		files: []model.FileSummary{{Path: "different.go", Status: model.StatusAdded}},
+	}
+
+	updated, cmd := m.Update(keyMsg('W'))
+	um := updated.(Model)
+
+	// W should NOT fire a metadata reload Cmd (unlike r).
+	// The cmd may be a patch load cmd, but never a metadata reload.
+	if cmd != nil {
+		msg := cmd()
+		if _, isMetadata := msg.(MetadataLoadedMsg); isMetadata {
+			t.Error("W should not trigger metadata reload")
+		}
+	}
+
+	// Files should remain unchanged.
+	if len(um.State.Files) != len(originalFiles) {
+		t.Errorf("Files len = %d, want %d (W should not reload metadata)", len(um.State.Files), len(originalFiles))
+	}
+}
+
+func TestWhitespaceToggleReloadsCurrentPatch(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	// Enter patch pane to have a selected file.
+	um := enterAndLoad(t, m)
+
+	// W should reload the patch for the selected file.
+	updated, cmd := um.Update(keyMsg('W'))
+	um2 := updated.(Model)
+	_ = um2
+
+	if cmd == nil {
+		t.Fatal("W from patch pane should return a Cmd for patch reload")
+	}
+
+	msg := cmd()
+	plm, ok := msg.(PatchLoadedMsg)
+	if !ok {
+		t.Fatalf("expected PatchLoadedMsg, got %T", msg)
+	}
+	if plm.Path != "main.go" {
+		t.Errorf("PatchLoadedMsg.Path = %q, want %q", plm.Path, "main.go")
+	}
+}
+
+func TestWhitespaceToggleFromFilePaneReloadsSelectedPatch(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	// Stay in files pane, select first file.
+	if m.State.FocusPane != model.PaneFiles {
+		t.Fatalf("expected PaneFiles, got %q", m.State.FocusPane)
+	}
+
+	updated, cmd := m.Update(keyMsg('W'))
+	um := updated.(Model)
+	_ = um
+
+	// Even from file pane, W should reload the current file's patch.
+	if cmd == nil {
+		t.Fatal("W from file pane should return a Cmd for patch reload")
+	}
+	msg := cmd()
+	plm, ok := msg.(PatchLoadedMsg)
+	if !ok {
+		t.Fatalf("expected PatchLoadedMsg, got %T", msg)
+	}
+	if plm.Path != "main.go" {
+		t.Errorf("PatchLoadedMsg.Path = %q, want %q", plm.Path, "main.go")
+	}
+}
+
+func TestWhitespaceToggleRapidWW(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	genBefore := m.State.CacheGeneration
+
+	// First W.
+	updated, cmd1 := m.Update(keyMsg('W'))
+	um := updated.(Model)
+
+	if !um.State.IgnoreWhitespace {
+		t.Error("after first W: IgnoreWhitespace should be true")
+	}
+	if um.State.CacheGeneration != genBefore+1 {
+		t.Errorf("after first W: gen = %d, want %d", um.State.CacheGeneration, genBefore+1)
+	}
+
+	// Second W before first async response arrives.
+	updated2, cmd2 := um.Update(keyMsg('W'))
+	um2 := updated2.(Model)
+
+	if um2.State.IgnoreWhitespace {
+		t.Error("after second W: IgnoreWhitespace should be false")
+	}
+	if um2.State.CacheGeneration != genBefore+2 {
+		t.Errorf("after second W: gen = %d, want %d", um2.State.CacheGeneration, genBefore+2)
+	}
+
+	// First Cmd's response should be stale (gen mismatch).
+	if cmd1 != nil {
+		msg := cmd1()
+		updated3, _ := um2.Update(msg)
+		um3 := updated3.(Model)
+		// Stale msg should be discarded — no viewport update.
+		if um3.patchViewport != nil {
+			t.Error("stale patch from first W should be discarded")
+		}
+	}
+
+	// Second Cmd's response should be accepted.
+	if cmd2 != nil {
+		msg := cmd2()
+		updated4, _ := um2.Update(msg)
+		um4 := updated4.(Model)
+		// The second response is current gen; verify it's applied if we're in patch pane.
+		_ = um4
+	}
+}
+
+func TestWhitespaceToggleStaleResponseDiscarded(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	um := enterAndLoad(t, m)
+
+	// Press W to toggle.
+	updated, cmd := um.Update(keyMsg('W'))
+	um2 := updated.(Model)
+	toggleGen := um2.State.CacheGeneration
+
+	// Simulate another toggle before the response arrives — bumps generation.
+	um2.State.CacheGeneration = toggleGen + 1
+
+	if cmd == nil {
+		t.Fatal("W should return a Cmd")
+	}
+	msg := cmd()
+	updated2, _ := um2.Update(msg)
+	um3 := updated2.(Model)
+
+	// The response had toggleGen, but state is now toggleGen+1.
+	// Stale response should be discarded — no loaded entry at the old gen.
+	if ps, exists := um3.State.Patches["main.go"]; exists {
+		if ps.Status == model.LoadLoaded && ps.Generation == toggleGen {
+			t.Error("stale patch should not be stored in cache")
+		}
+	}
+}
+
+func TestWhitespaceToggleStatusBarIndicator(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	view := m.View()
+	if strings.Contains(view, "[W]") {
+		t.Error("status bar should not show [W] when IgnoreWhitespace is false")
+	}
+
+	updated, _ := m.Update(keyMsg('W'))
+	um := updated.(Model)
+	view2 := um.View()
+	if !strings.Contains(view2, "[W]") {
+		t.Errorf("status bar should show [W] when IgnoreWhitespace is true, got:\n%s", view2)
+	}
+
+	// Toggle off.
+	updated2, _ := um.Update(keyMsg('W'))
+	um2 := updated2.(Model)
+	view3 := um2.View()
+	if strings.Contains(view3, "[W]") {
+		t.Error("status bar should not show [W] after toggling off")
+	}
+}
+
+func TestWhitespaceToggleHelpShowsW(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(keyMsg('?'))
+	um := updated.(Model)
+	view := um.View()
+
+	if !strings.Contains(view, "W") {
+		t.Error("help text should mention W key")
+	}
+}
+
+func TestWhitespaceToggleNotInSearchPane(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	um := enterAndLoad(t, m)
+
+	// Enter search mode.
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+	if um2.State.FocusPane != model.PaneSearch {
+		t.Fatalf("expected PaneSearch, got %q", um2.State.FocusPane)
+	}
+
+	genBefore := um2.State.CacheGeneration
+	updated2, _ := um2.Update(keyMsg('W'))
+	um3 := updated2.(Model)
+
+	// In search pane, W should type 'W' into search input, not toggle.
+	if um3.State.CacheGeneration != genBefore {
+		t.Errorf("CacheGeneration changed in search pane: %d, want %d", um3.State.CacheGeneration, genBefore)
+	}
+	if um3.searchInput != "W" {
+		t.Errorf("searchInput = %q, want %q", um3.searchInput, "W")
+	}
+}
+
+func TestWhitespaceToggleNotInHelpPane(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 100
+	m.height = 30
+
+	// Open help.
+	updated, _ := m.Update(keyMsg('?'))
+	um := updated.(Model)
+	if !um.showHelp {
+		t.Fatal("showHelp should be true")
+	}
+
+	genBefore := um.State.CacheGeneration
+	updated2, _ := um.Update(keyMsg('W'))
+	um2 := updated2.(Model)
+
+	// W in help mode should not toggle whitespace.
+	if um2.State.CacheGeneration != genBefore {
+		t.Errorf("CacheGeneration changed in help mode: %d, want %d", um2.State.CacheGeneration, genBefore)
+	}
+	if um2.State.IgnoreWhitespace {
+		t.Error("IgnoreWhitespace should not change in help mode")
+	}
+}
