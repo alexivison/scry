@@ -92,15 +92,22 @@ func TestLinkedWorktreeDiffParity(t *testing.T) {
 	t.Parallel()
 
 	mainDir := filepath.Join(fixtureDir, "linked-worktree", "main")
+	wtDir := filepath.Join(fixtureDir, "linked-worktree", "wt")
 
 	ctx := context.Background()
 
+	// Bootstrap from both worktrees.
 	mainResult, err := source.Bootstrap(ctx, mainDir)
 	if err != nil {
 		t.Fatalf("Bootstrap(main): %v", err)
 	}
+	wtResult, err := source.Bootstrap(ctx, wtDir)
+	if err != nil {
+		t.Fatalf("Bootstrap(wt): %v", err)
+	}
 
-	// Compare HEAD~1..HEAD in the main worktree (the second commit).
+	// Resolve the same commit range (HEAD~1..HEAD from main) via both runners.
+	// Both share the same object store, so the SHAs are identical.
 	base, err := mainResult.Runner.RunGit(ctx, "rev-parse", "HEAD~1")
 	if err != nil {
 		t.Fatalf("rev-parse HEAD~1: %v", err)
@@ -116,19 +123,38 @@ func TestLinkedWorktreeDiffParity(t *testing.T) {
 		DiffRange: strings.TrimSpace(base) + ".." + strings.TrimSpace(head),
 	}
 
-	metaSvc := &diff.MetadataService{Runner: mainResult.Runner}
-	files, err := metaSvc.ListFiles(ctx, cmp)
+	// ListFiles from main worktree runner.
+	mainSvc := &diff.MetadataService{Runner: mainResult.Runner}
+	mainFiles, err := mainSvc.ListFiles(ctx, cmp)
 	if err != nil {
-		t.Fatalf("ListFiles: %v", err)
+		t.Fatalf("ListFiles(main): %v", err)
 	}
 
-	if len(files) != 1 {
-		t.Fatalf("file count = %d, want 1", len(files))
+	// ListFiles from linked worktree runner.
+	wtSvc := &diff.MetadataService{Runner: wtResult.Runner}
+	wtFiles, err := wtSvc.ListFiles(ctx, cmp)
+	if err != nil {
+		t.Fatalf("ListFiles(wt): %v", err)
 	}
-	if files[0].Path != "file.txt" {
-		t.Errorf("path = %q, want %q", files[0].Path, "file.txt")
+
+	// Both should return identical results.
+	if len(mainFiles) != len(wtFiles) {
+		t.Fatalf("file count mismatch: main=%d, wt=%d", len(mainFiles), len(wtFiles))
 	}
-	if files[0].Status != model.StatusModified {
-		t.Errorf("status = %q, want %q", files[0].Status, model.StatusModified)
+	for i := range mainFiles {
+		if mainFiles[i] != wtFiles[i] {
+			t.Errorf("file[%d] mismatch:\n  main: %+v\n  wt:   %+v", i, mainFiles[i], wtFiles[i])
+		}
+	}
+
+	// Sanity check the content.
+	if len(mainFiles) != 1 {
+		t.Fatalf("file count = %d, want 1", len(mainFiles))
+	}
+	if mainFiles[0].Path != "file.txt" {
+		t.Errorf("path = %q, want %q", mainFiles[0].Path, "file.txt")
+	}
+	if mainFiles[0].Status != model.StatusModified {
+		t.Errorf("status = %q, want %q", mainFiles[0].Status, model.StatusModified)
 	}
 }

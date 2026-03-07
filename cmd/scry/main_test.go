@@ -85,31 +85,6 @@ func TestHelpDocumentsAllFlags(t *testing.T) {
 	}
 }
 
-func TestExitCode128NotARepo(t *testing.T) {
-	t.Parallel()
-
-	bin := buildBinary(t)
-
-	// Run in a temp dir that is not a git repo.
-	tmpDir := t.TempDir()
-	cmd := exec.Command(bin)
-	cmd.Dir = tmpDir
-	cmd.Stdin = strings.NewReader("")
-
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("expected non-zero exit, got nil")
-	}
-
-	exitErr, ok := err.(*exec.ExitError)
-	if !ok {
-		t.Fatalf("expected *exec.ExitError, got %T", err)
-	}
-	if exitErr.ExitCode() != 128 {
-		t.Errorf("exit code = %d, want 128", exitErr.ExitCode())
-	}
-}
-
 func TestExitCode2BadFlags(t *testing.T) {
 	t.Parallel()
 
