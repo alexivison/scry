@@ -1422,3 +1422,34 @@ func TestWhitespaceToggleNotInHelpPane(t *testing.T) {
 		t.Error("IgnoreWhitespace should not change in help mode")
 	}
 }
+
+func TestWhitespaceToggleClearsRefreshErr(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	m.metadataLoader = &mockMetadataLoader{err: fmt.Errorf("git error")}
+
+	// Trigger a failed refresh to set refreshErr.
+	updated, cmd := m.Update(keyMsg('r'))
+	um := updated.(Model)
+	if cmd != nil {
+		msg := cmd()
+		updated2, _ := um.Update(msg)
+		um = updated2.(Model)
+	}
+	if um.refreshErr == "" {
+		t.Fatal("refreshErr should be set after failed refresh")
+	}
+
+	// Press W — should clear refreshErr and show [W] indicator.
+	updated3, _ := um.Update(keyMsg('W'))
+	um2 := updated3.(Model)
+
+	if um2.refreshErr != "" {
+		t.Errorf("refreshErr = %q, want empty after W toggle", um2.refreshErr)
+	}
+	view := um2.View()
+	if !strings.Contains(view, "[W]") {
+		t.Errorf("status bar should show [W] after toggle, got:\n%s", view)
+	}
+}

@@ -268,6 +268,7 @@ func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
 	review.ClearPatches(&m.State)
 	m.patchViewport = nil
 	m.patchErr = ""
+	m.refreshErr = ""
 	m.searchIndex = nil
 	m.searchNotFound = ""
 
