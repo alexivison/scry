@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -96,8 +95,6 @@ func TestExitCode128NotARepo(t *testing.T) {
 	cmd := exec.Command(bin)
 	cmd.Dir = tmpDir
 	cmd.Stdin = strings.NewReader("")
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
 
 	err := cmd.Run()
 	if err == nil {

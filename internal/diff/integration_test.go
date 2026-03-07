@@ -160,16 +160,10 @@ func TestGoldenSimplePatchParity(t *testing.T) {
 	}
 
 	// Verify hunk line counts match between raw and parsed.
-	rawHunkCount := strings.Count(rawPatch, "\n@@")
-	if !strings.HasPrefix(rawPatch, "@@") {
-		// The @@ header is preceded by diff header lines.
-	}
-	if strings.Contains(rawPatch, "@@") {
-		rawHunkCount = 0
-		for _, line := range strings.Split(rawPatch, "\n") {
-			if strings.HasPrefix(line, "@@") {
-				rawHunkCount++
-			}
+	rawHunkCount := 0
+	for _, line := range strings.Split(rawPatch, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			rawHunkCount++
 		}
 	}
 	if len(fp.Hunks) != rawHunkCount {

@@ -104,11 +104,8 @@ setup_large() {
   $GIT add .
   $GIT commit -q -m "initial"
 
-  # Generate a file exceeding 50k lines.
-  python3 -c "
-for i in range(55000):
-    print(f'line {i}')
-" > big.txt
+  # Generate a file exceeding 50k lines (portable, no python dependency).
+  seq 0 54999 | awk '{print "line " $1}' > big.txt
   $GIT add .
   $GIT commit -q -m "large file"
 }
