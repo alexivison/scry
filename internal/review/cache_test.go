@@ -208,4 +208,40 @@ func TestIsStaleGeneration(t *testing.T) {
 	}
 }
 
+func TestBumpGeneration(t *testing.T) {
+	t.Parallel()
+
+	state := model.AppState{
+		Patches:         make(map[string]model.PatchLoadState),
+		CacheGeneration: 5,
+	}
+
+	BumpGeneration(&state)
+
+	if state.CacheGeneration != 6 {
+		t.Errorf("CacheGeneration = %d, want 6", state.CacheGeneration)
+	}
+}
+
+func TestClearPatches(t *testing.T) {
+	t.Parallel()
+
+	state := model.AppState{
+		Patches: map[string]model.PatchLoadState{
+			"a.go": {Status: model.LoadLoaded, Generation: 1},
+			"b.go": {Status: model.LoadLoading, Generation: 1},
+		},
+		CacheGeneration: 1,
+	}
+
+	ClearPatches(&state)
+
+	if len(state.Patches) != 0 {
+		t.Errorf("Patches length = %d, want 0", len(state.Patches))
+	}
+	if state.Patches == nil {
+		t.Error("Patches map should be empty, not nil")
+	}
+}
+
 func ptrPatch(fp model.FilePatch) *model.FilePatch { return &fp }

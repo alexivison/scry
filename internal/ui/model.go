@@ -21,22 +21,29 @@ type PatchLoader interface {
 	LoadPatch(ctx context.Context, cmp model.ResolvedCompare, filePath string, ignoreWhitespace bool) (model.FilePatch, error)
 }
 
+// MetadataLoader lists changed files for a compare range.
+type MetadataLoader interface {
+	ListFiles(ctx context.Context, cmp model.ResolvedCompare) ([]model.FileSummary, error)
+}
+
 // Model is the top-level Bubble Tea model for scry.
 type Model struct {
-	State         model.AppState
-	patchLoader   PatchLoader
-	patchViewport *panes.PatchViewport
-	patchErr      string
-	showHelp      bool
-	width         int
-	height        int
-	quitting      bool
-	tooSmall      bool // terminal below minimum dimensions
-	sizeErr       string
+	State          model.AppState
+	patchLoader    PatchLoader
+	metadataLoader MetadataLoader
+	patchViewport  *panes.PatchViewport
+	patchErr       string
+	showHelp       bool
+	width          int
+	height         int
+	quitting       bool
+	tooSmall       bool // terminal below minimum dimensions
+	sizeErr        string
 
 	searchInput    string        // text being typed in search mode
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
+	refreshErr     string        // shown in status bar when metadata reload fails
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -73,10 +80,22 @@ func WithPatchLoader(pl PatchLoader) ModelOption {
 	return func(m *Model) { m.patchLoader = pl }
 }
 
+// WithMetadataLoader sets the MetadataLoader used to reload file lists on refresh.
+func WithMetadataLoader(ml MetadataLoader) ModelOption {
+	return func(m *Model) { m.metadataLoader = ml }
+}
+
 // PatchLoadedMsg is sent when an async patch load completes.
 type PatchLoadedMsg struct {
 	Path  string
 	Patch model.FilePatch
+	Gen   int
+	Err   error
+}
+
+// MetadataLoadedMsg is sent when an async metadata reload completes.
+type MetadataLoadedMsg struct {
+	Files []model.FileSummary
 	Gen   int
 	Err   error
 }
@@ -104,6 +123,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PatchLoadedMsg:
 		return m.handlePatchLoaded(msg)
 
+	case MetadataLoadedMsg:
+		return m.handleMetadataLoaded(msg)
+
 	case tea.KeyMsg:
 		if m.tooSmall {
 			if msg.String() == "q" {
@@ -111,6 +133,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		}
+		// r triggers refresh from any pane.
+		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch {
+			return m.startRefresh()
 		}
 		if m.showHelp {
 			return m.updateHelp(msg)
@@ -202,6 +228,85 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	return m, nil
+}
+
+// startRefresh bumps the generation, clears the cache, and fires an async metadata reload.
+func (m Model) startRefresh() (tea.Model, tea.Cmd) {
+	review.BumpGeneration(&m.State)
+	review.ClearPatches(&m.State)
+	m.patchViewport = nil
+	m.patchErr = ""
+	m.refreshErr = ""
+	m.searchIndex = nil
+	m.searchNotFound = ""
+
+	if m.metadataLoader == nil {
+		return m, nil
+	}
+
+	gen := m.State.CacheGeneration
+	cmp := m.State.Compare
+	loader := m.metadataLoader
+
+	cmd := func() tea.Msg {
+		files, err := loader.ListFiles(context.Background(), cmp)
+		return MetadataLoadedMsg{Files: files, Gen: gen, Err: err}
+	}
+	return m, cmd
+}
+
+func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) {
+	if review.IsStaleGeneration(msg.Gen, m.State.CacheGeneration) {
+		return m, nil
+	}
+	if msg.Err != nil {
+		m.refreshErr = fmt.Sprintf("refresh failed: %v", msg.Err)
+		return m, nil
+	}
+	m.refreshErr = ""
+
+	// Remember selected path for reconciliation.
+	var selectedPath string
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		selectedPath = m.State.Files[m.State.SelectedFile].Path
+	}
+
+	m.State.Files = msg.Files
+
+	// Reconcile selection.
+	if len(m.State.Files) == 0 {
+		m.State.SelectedFile = -1
+		return m, nil
+	}
+
+	// Try to preserve selection by path.
+	if selectedPath != "" {
+		for i, f := range m.State.Files {
+			if f.Path == selectedPath {
+				m.State.SelectedFile = i
+				return m.loadSelectedPatch()
+			}
+		}
+	}
+
+	// Path not found: clamp to nearest valid index.
+	if m.State.SelectedFile >= len(m.State.Files) {
+		m.State.SelectedFile = len(m.State.Files) - 1
+	}
+	if m.State.SelectedFile < 0 {
+		m.State.SelectedFile = 0
+	}
+
+	return m.loadSelectedPatch()
+}
+
+// loadSelectedPatch fires an async patch load for the currently selected file
+// if in the patch pane.
+func (m Model) loadSelectedPatch() (tea.Model, tea.Cmd) {
+	if m.State.FocusPane == model.PanePatch && m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		return m.selectFile()
+	}
 	return m, nil
 }
 
@@ -437,6 +542,14 @@ func formatCounts(f model.FileSummary) string {
 }
 
 func (m Model) viewStatusBar() string {
+	if m.refreshErr != "" {
+		bar := " " + m.refreshErr
+		gap := m.width - lipgloss.Width(bar)
+		if gap > 0 {
+			bar += strings.Repeat(" ", gap)
+		}
+		return searchNotFoundStyle.Width(m.width).Render(bar)
+	}
 	if m.searchNotFound != "" {
 		bar := " " + m.searchNotFound
 		gap := m.width - lipgloss.Width(bar)
@@ -492,6 +605,7 @@ func (m Model) viewHelp() string {
 		"  j/k     navigate file list",
 		"  Enter   select file",
 		"  n/p     next/previous hunk",
+		"  r       refresh",
 		"  h/Esc   back to file list",
 		"  q       quit",
 		"  ?       toggle help",
