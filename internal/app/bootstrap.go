@@ -67,7 +67,7 @@ func Run(cfg config.Config) int {
 	}
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
-	m := ui.NewModel(state, ui.WithPatchLoader(patchSvc))
+	m := ui.NewModel(state, ui.WithPatchLoader(patchSvc), ui.WithMetadataLoader(metaSvc))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

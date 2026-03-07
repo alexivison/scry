@@ -47,3 +47,13 @@ func MarkLoading(state *model.AppState, path string) {
 func IsStaleGeneration(msgGen, stateGen int) bool {
 	return msgGen != stateGen
 }
+
+// BumpGeneration increments the cache generation counter.
+func BumpGeneration(state *model.AppState) {
+	state.CacheGeneration++
+}
+
+// ClearPatches removes all entries from the patch cache.
+func ClearPatches(state *model.AppState) {
+	state.Patches = make(map[string]model.PatchLoadState)
+}
