@@ -3,12 +3,14 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/search"
@@ -33,6 +35,7 @@ type Model struct {
 	metadataLoader MetadataLoader
 	patchViewport  *panes.PatchViewport
 	patchErr       string
+	patchFallback  string // fallback message for binary/submodule/oversized files
 	showHelp       bool
 	width          int
 	height         int
@@ -195,6 +198,7 @@ func (m Model) selectFile() (tea.Model, tea.Cmd) {
 	review.MarkLoading(&m.State, path)
 	m.patchViewport = nil
 	m.patchErr = ""
+	m.patchFallback = ""
 
 	gen := m.State.CacheGeneration
 	cmp := m.State.Compare
@@ -313,11 +317,26 @@ func (m Model) loadSelectedPatch() (tea.Model, tea.Cmd) {
 // applyPatchResult sets the viewport or error from a PatchLoadState.
 func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	if ps.Err != nil {
-		m.patchErr = ps.Err.Error()
 		m.patchViewport = nil
+		m.searchIndex = nil
+
+		var summary model.FileSummary
+		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+			summary = m.State.Files[m.State.SelectedFile]
+		}
+
+		if fb := buildFallback(summary, ps.Err); fb != "" {
+			m.patchFallback = fb
+			m.patchErr = ""
+			return
+		}
+
+		m.patchErr = ps.Err.Error()
+		m.patchFallback = ""
 		return
 	}
 	m.patchErr = ""
+	m.patchFallback = ""
 	if ps.Patch == nil {
 		m.patchViewport = nil
 		return
@@ -330,12 +349,51 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	m.searchNotFound = ""
 }
 
+func isSentinelError(err error) bool {
+	return errors.Is(err, model.ErrBinaryFile) ||
+		errors.Is(err, model.ErrSubmodule) ||
+		errors.Is(err, model.ErrOversized)
+}
+
+// buildFallback returns a user-facing fallback message for sentinel errors,
+// or "" if the error is not a sentinel. Uses the FileSummary from the metadata
+// pipeline (not from PatchService) for full status/path info.
+func buildFallback(summary model.FileSummary, err error) string {
+	if err == nil {
+		return ""
+	}
+
+	path := summary.Path
+	pathLine := fmt.Sprintf("  Path:   %s", path)
+	if summary.OldPath != "" {
+		pathLine = fmt.Sprintf("  Path:   %s -> %s", summary.OldPath, summary.Path)
+	}
+	statusLine := fmt.Sprintf("  Status: %s", summary.Status)
+
+	switch {
+	case errors.Is(err, model.ErrBinaryFile):
+		return fmt.Sprintf("Binary file -- content not displayed\n\n%s\n%s", pathLine, statusLine)
+	case errors.Is(err, model.ErrSubmodule):
+		return fmt.Sprintf("Submodule change\n\n%s\n%s", pathLine, statusLine)
+	case errors.Is(err, model.ErrOversized):
+		var oe *diff.OversizedError
+		if errors.As(err, &oe) {
+			return fmt.Sprintf("Patch too large to display (%d lines, %d bytes).\nUse `git diff -- %s` to view.\n\n%s\n%s",
+				oe.Lines, oe.Bytes, path, pathLine, statusLine)
+		}
+		return fmt.Sprintf("Patch too large to display.\nUse `git diff -- %s` to view.\n\n%s\n%s", path, pathLine, statusLine)
+	default:
+		return ""
+	}
+}
+
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "h":
 		m.State.FocusPane = model.PaneFiles
 		m.patchViewport = nil
 		m.patchErr = ""
+		m.patchFallback = ""
 		m.searchIndex = nil
 		m.State.SearchQuery = ""
 		m.searchNotFound = ""
@@ -580,6 +638,9 @@ func (m Model) viewSearchInput() string {
 func (m Model) viewPatch() string {
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
+	}
+	if m.patchFallback != "" {
+		return m.patchFallback
 	}
 
 	// Show loading indicator when the selected file is still loading.

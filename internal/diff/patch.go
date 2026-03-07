@@ -16,6 +16,19 @@ const (
 	maxPatchLines = 50_000
 )
 
+// OversizedError wraps ErrOversized with the measured byte size and line count
+// so the UI can display them in the fallback message.
+type OversizedError struct {
+	Bytes int
+	Lines int
+}
+
+func (e *OversizedError) Error() string {
+	return fmt.Sprintf("patch exceeds size threshold (%d lines, %d bytes)", e.Lines, e.Bytes)
+}
+
+func (e *OversizedError) Unwrap() error { return model.ErrOversized }
+
 // PatchService loads and parses unified diffs for individual files.
 type PatchService struct {
 	Runner gitexec.GitRunner
@@ -42,7 +55,7 @@ func (s *PatchService) LoadPatch(ctx context.Context, cmp model.ResolvedCompare,
 
 	// Byte-size gate before parsing.
 	if len(raw) > maxPatchBytes {
-		return model.FilePatch{Summary: summary}, model.ErrOversized
+		return model.FilePatch{Summary: summary}, &OversizedError{Bytes: len(raw), Lines: strings.Count(raw, "\n")}
 	}
 
 	// Binary file detection: the marker "Binary files ... differ" always
@@ -71,7 +84,7 @@ func (s *PatchService) LoadPatch(ctx context.Context, cmp model.ResolvedCompare,
 	hunks, totalLines := mapHunks(fd.Hunks, rawBodies)
 
 	if totalLines > maxPatchLines {
-		return model.FilePatch{Summary: summary}, model.ErrOversized
+		return model.FilePatch{Summary: summary}, &OversizedError{Bytes: len(raw), Lines: totalLines}
 	}
 
 	return model.FilePatch{Summary: summary, Hunks: hunks}, nil

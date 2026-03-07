@@ -8,7 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/ui/panes"
 )
 
 func sampleFiles() []model.FileSummary {
@@ -54,9 +56,17 @@ func intP(n int) *int { return &n }
 type mockPatchLoader struct {
 	patches map[string]model.FilePatch
 	err     error
+	// perFile allows returning a specific (FilePatch, error) pair per path.
+	perFile map[string]struct {
+		patch model.FilePatch
+		err   error
+	}
 }
 
 func (m *mockPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, filePath string, _ bool) (model.FilePatch, error) {
+	if pf, ok := m.perFile[filePath]; ok {
+		return pf.patch, pf.err
+	}
 	if m.err != nil {
 		return model.FilePatch{}, m.err
 	}
@@ -813,6 +823,266 @@ func TestDirectionalSearchViewShowsInput(t *testing.T) {
 	view := um2.View()
 	if !strings.Contains(view, "/test") {
 		t.Errorf("search input should show '/test', got:\n%s", view)
+	}
+}
+
+// --- Edge-case hardening tests (T11) ---
+
+// edgeCaseLoader returns a mockPatchLoader that returns sentinel errors
+// for specific files, each with populated Summary metadata.
+func edgeCaseLoader() *mockPatchLoader {
+	return &mockPatchLoader{
+		perFile: map[string]struct {
+			patch model.FilePatch
+			err   error
+		}{
+			"binary.png": {
+				patch: model.FilePatch{
+					Summary: model.FileSummary{
+						Path:     "binary.png",
+						Status:   model.StatusAdded,
+						IsBinary: true,
+					},
+				},
+				err: model.ErrBinaryFile,
+			},
+			"libs/sub": {
+				patch: model.FilePatch{
+					Summary: model.FileSummary{
+						Path:        "libs/sub",
+						Status:      model.StatusModified,
+						IsSubmodule: true,
+					},
+				},
+				err: model.ErrSubmodule,
+			},
+			"huge.go": {
+				patch: model.FilePatch{
+					Summary: model.FileSummary{
+						Path:   "huge.go",
+						Status: model.StatusModified,
+					},
+				},
+				err: &diff.OversizedError{Lines: 60000, Bytes: 2_500_000},
+			},
+		},
+	}
+}
+
+func edgeCaseState(path string) model.AppState {
+	return model.AppState{
+		Compare: sampleCompare(),
+		Files: []model.FileSummary{
+			{Path: path, Status: model.StatusModified},
+		},
+		SelectedFile: 0,
+		FocusPane:    model.PaneFiles,
+		Patches:      make(map[string]model.PatchLoadState),
+	}
+}
+
+func TestEdgeCaseBinaryFile(t *testing.T) {
+	t.Parallel()
+
+	loader := edgeCaseLoader()
+	m := NewModel(edgeCaseState("binary.png"), WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	um := enterAndLoad(t, m)
+
+	if um.State.FocusPane != model.PanePatch {
+		t.Errorf("FocusPane = %q, want %q", um.State.FocusPane, model.PanePatch)
+	}
+	view := um.View()
+	if !strings.Contains(view, "Binary file") {
+		t.Errorf("binary file view should contain 'Binary file', got:\n%s", view)
+	}
+	if !strings.Contains(view, "content not displayed") {
+		t.Errorf("binary file view should contain 'content not displayed', got:\n%s", view)
+	}
+	// Should show file status metadata
+	if !strings.Contains(view, "binary.png") {
+		t.Errorf("binary file view should show path, got:\n%s", view)
+	}
+	// Must NOT show generic error prefix
+	if strings.Contains(view, "Error loading patch") {
+		t.Errorf("binary file should not show generic error, got:\n%s", view)
+	}
+}
+
+func TestEdgeCaseSubmodule(t *testing.T) {
+	t.Parallel()
+
+	loader := edgeCaseLoader()
+	m := NewModel(edgeCaseState("libs/sub"), WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	um := enterAndLoad(t, m)
+
+	view := um.View()
+	if !strings.Contains(view, "Submodule change") {
+		t.Errorf("submodule view should contain 'Submodule change', got:\n%s", view)
+	}
+	if !strings.Contains(view, "libs/sub") {
+		t.Errorf("submodule view should show path, got:\n%s", view)
+	}
+	if strings.Contains(view, "Error loading patch") {
+		t.Errorf("submodule should not show generic error, got:\n%s", view)
+	}
+}
+
+func TestEdgeCaseOversized(t *testing.T) {
+	t.Parallel()
+
+	loader := edgeCaseLoader()
+	m := NewModel(edgeCaseState("huge.go"), WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	um := enterAndLoad(t, m)
+
+	view := um.View()
+	if !strings.Contains(view, "Patch too large to display") {
+		t.Errorf("oversized view should contain 'Patch too large to display', got:\n%s", view)
+	}
+	if !strings.Contains(view, "60000 lines") {
+		t.Errorf("oversized view should show line count, got:\n%s", view)
+	}
+	if !strings.Contains(view, "2500000 bytes") {
+		t.Errorf("oversized view should show byte count, got:\n%s", view)
+	}
+	if !strings.Contains(view, "huge.go") {
+		t.Errorf("oversized view should show path, got:\n%s", view)
+	}
+	if !strings.Contains(view, "git diff -- huge.go") {
+		t.Errorf("oversized view should show git diff command hint, got:\n%s", view)
+	}
+	if strings.Contains(view, "Error loading patch") {
+		t.Errorf("oversized should not show generic error, got:\n%s", view)
+	}
+}
+
+func TestEdgeCaseEmptyDiff(t *testing.T) {
+	t.Parallel()
+
+	// File in metadata but patch has nil Hunks (empty diff)
+	loader := &mockPatchLoader{
+		patches: map[string]model.FilePatch{
+			"empty.go": {
+				Summary: model.FileSummary{Path: "empty.go", Status: model.StatusModified},
+				Hunks:   nil,
+			},
+		},
+	}
+	m := NewModel(edgeCaseState("empty.go"), WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	um := enterAndLoad(t, m)
+
+	// Should not panic, should show a graceful message
+	view := um.View()
+	if strings.Contains(view, "Error loading patch") {
+		t.Errorf("empty diff should not show error, got:\n%s", view)
+	}
+	// PatchViewport.Render returns "No changes." for empty hunks
+	if !strings.Contains(view, "No changes") {
+		t.Errorf("empty diff should show 'No changes', got:\n%s", view)
+	}
+}
+
+func TestEdgeCaseNilHunksNoPanic(t *testing.T) {
+	t.Parallel()
+
+	// Directly test PatchViewport with nil Hunks does not panic.
+	fp := model.FilePatch{
+		Summary: model.FileSummary{Path: "nil.go"},
+		Hunks:   nil,
+	}
+	vp := panes.NewPatchViewport(fp)
+	vp.Width = 80
+	vp.Height = 24
+
+	// These should all be safe no-ops, not panic.
+	vp.ScrollDown()
+	vp.ScrollUp()
+	vp.NextHunk()
+	vp.PrevHunk()
+
+	result := vp.Render()
+	if !strings.Contains(result, "No changes") {
+		t.Errorf("nil hunks render = %q, want 'No changes'", result)
+	}
+}
+
+func TestEdgeCaseBinaryRenamedShowsOldPath(t *testing.T) {
+	t.Parallel()
+
+	loader := &mockPatchLoader{
+		perFile: map[string]struct {
+			patch model.FilePatch
+			err   error
+		}{
+			"new.png": {
+				patch: model.FilePatch{
+					Summary: model.FileSummary{
+						Path:     "new.png",
+						OldPath:  "old.png",
+						Status:   model.StatusRenamed,
+						IsBinary: true,
+					},
+				},
+				err: model.ErrBinaryFile,
+			},
+		},
+	}
+	state := model.AppState{
+		Compare: sampleCompare(),
+		Files: []model.FileSummary{
+			{Path: "new.png", OldPath: "old.png", Status: model.StatusRenamed, IsBinary: true},
+		},
+		SelectedFile: 0,
+		FocusPane:    model.PaneFiles,
+		Patches:      make(map[string]model.PatchLoadState),
+	}
+	m := NewModel(state, WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	um := enterAndLoad(t, m)
+	view := um.View()
+	if !strings.Contains(view, "old.png") {
+		t.Errorf("renamed binary should show old path, got:\n%s", view)
+	}
+	if !strings.Contains(view, "new.png") {
+		t.Errorf("renamed binary should show new path, got:\n%s", view)
+	}
+}
+
+func TestEdgeCaseKeyNavigationOnFallback(t *testing.T) {
+	t.Parallel()
+
+	// When a fallback message is shown, j/k/n/p should not panic.
+	loader := edgeCaseLoader()
+	m := NewModel(edgeCaseState("binary.png"), WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	um := enterAndLoad(t, m)
+
+	// Patch pane keys should not panic when viewport is nil (fallback mode).
+	for _, key := range []rune{'j', 'k', 'n', 'p'} {
+		updated, _ := um.Update(keyMsg(key))
+		um = updated.(Model)
+	}
+
+	// Esc should return to files
+	updated, _ := um.Update(escMsg())
+	um = updated.(Model)
+	if um.State.FocusPane != model.PaneFiles {
+		t.Errorf("Esc from fallback: FocusPane = %q, want %q", um.State.FocusPane, model.PaneFiles)
 	}
 }
 
