@@ -699,10 +699,36 @@ Track review progress per file for a compare range.
 #### tmux session launcher
 - See [docs/integrations/tmux-session.md](docs/integrations/tmux-session.md).
 
+### Working Tree Diff Mode — v0.2
+
+#### Objective
+Include uncommitted (working tree and staged) changes in the diff by default, so scry is useful before committing — not only after.
+
+#### Problem
+v0.1 compares committed refs only (`@{upstream}...HEAD`). When the user has uncommitted local changes but no new commits, scry shows "No files changed." This is the most common review scenario: inspecting local changes before committing.
+
+#### CLI
+- `--head` omitted (default): diff against the **working tree** instead of `HEAD`. Equivalent to `git diff <base>` with no head ref.
+- `--head HEAD` (explicit): restore v0.1 behavior — compare committed refs only.
+- `--head <ref>`: compare base against a specific ref (committed only).
+
+#### Behavior
+- When `--head` is omitted, the compare pipeline uses `git diff <base>` (no right-hand ref), which includes both staged and unstaged changes relative to the base.
+- Metadata and patch commands omit the head ref from the diff range.
+- The status bar shows the base ref and "(working tree)" instead of a head SHA.
+- All existing features (search, hunk nav, whitespace toggle, refresh) work identically.
+
+#### Acceptance Criteria
+- Default `scry` (no flags) shows uncommitted changes when they exist.
+- `scry --head HEAD` preserves v0.1 committed-only behavior.
+- Refresh (`r`) re-reads the working tree for the latest changes.
+- No regression in three-dot/two-dot committed-ref comparisons.
+
 ### Roadmap Priority Order (v0.2)
-1. Watch mode (`--watch`) with polling fingerprint.
-2. Idle screen + auto-transition.
-3. AI commit message generator (`--commit`).
+1. **Working tree diff mode** (default head = working tree).
+2. Watch mode (`--watch`) with polling fingerprint.
+3. Idle screen + auto-transition.
+4. AI commit message generator (`--commit`).
 4. PR resolver (`--pr`).
 5. Review queue mode.
 6. Noise gate profiles.
