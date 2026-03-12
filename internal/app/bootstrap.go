@@ -9,8 +9,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/alexivison/scry/internal/commit"
 	"github.com/alexivison/scry/internal/config"
 	"github.com/alexivison/scry/internal/diff"
+	"github.com/alexivison/scry/internal/gitexec"
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/source"
 	"github.com/alexivison/scry/internal/terminal"
@@ -68,6 +70,8 @@ func Run(cfg config.Config) int {
 		Patches:          make(map[string]model.PatchLoadState),
 		WatchEnabled:     cfg.Watch,
 		WatchInterval:    cfg.WatchInterval,
+		CommitEnabled:    cfg.Commit,
+		CommitAuto:       cfg.CommitAuto,
 	}
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
@@ -83,6 +87,21 @@ func Run(cfg config.Config) int {
 		}
 		opts = append(opts, ui.WithWatch(&watch.Fingerprinter{Runner: boot.Runner}, baseRef))
 	}
+
+	if cfg.Commit {
+		provider, err := commit.NewClaudeProvider(
+			"", // reads ANTHROPIC_API_KEY from env
+			cfg.CommitModel,
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "scry: %v\n", err)
+			return 128
+		}
+
+		cp := &commitProviderAdapter{provider: provider, git: boot.Runner}
+		executor := &commit.Executor{Git: boot.Runner}
+		opts = append(opts, ui.WithCommitProvider(cp), ui.WithCommitExecutor(executor))
+	}
 	m := ui.NewModel(state, opts...)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
@@ -92,4 +111,22 @@ func Run(cfg config.Config) int {
 	}
 
 	return 0
+}
+
+// commitProviderAdapter bridges the domain CommitMessageProvider to the UI CommitProvider.
+// It collects staged data and delegates to the underlying provider.
+type commitProviderAdapter struct {
+	provider commit.CommitMessageProvider
+	git      gitexec.GitRunner
+}
+
+func (a *commitProviderAdapter) Generate(ctx context.Context) (string, error) {
+	if err := commit.CheckStagingGuard(ctx, a.git); err != nil {
+		return "", err
+	}
+	diff, files, err := commit.CollectStagedSnapshot(ctx, a.git)
+	if err != nil {
+		return "", err
+	}
+	return a.provider.Generate(ctx, diff, files)
 }

@@ -404,6 +404,269 @@ func TestCommitUI_StaleResultAfterEscIsDiscarded(t *testing.T) {
 	}
 }
 
+// --- Commit Execution tests (V2-T8) ---
+
+type mockCommitExecutor struct {
+	sha string
+	err error
+}
+
+func (m *mockCommitExecutor) Execute(_ context.Context, _ string) (string, error) {
+	return m.sha, m.err
+}
+
+func commitReadyState() model.AppState {
+	s := sampleState()
+	s.CommitEnabled = true
+	s.FocusPane = model.PaneCommit
+	s.CommitState = model.CommitState{
+		GeneratedMessage: "feat: add feature",
+		Generation:       1,
+	}
+	return s
+}
+
+func TestCommitExecution_enterExecutesCommit(t *testing.T) {
+	t.Parallel()
+
+	executor := &mockCommitExecutor{sha: "abc1234"}
+	m := NewModel(commitReadyState(), WithCommitExecutor(executor))
+	m.width = 100
+	m.height = 30
+
+	m, cmd := sendKey(m, "enter")
+
+	if !m.State.CommitState.Executing {
+		t.Error("Executing should be true after Enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to be returned for async commit execution")
+	}
+
+	// Execute the command and feed result back.
+	msg := cmd()
+	result, _ := m.Update(msg)
+	um := result.(Model)
+
+	if um.State.CommitState.Executing {
+		t.Error("Executing should be false after completion")
+	}
+	if um.State.CommitState.CommitSHA != "abc1234" {
+		t.Errorf("CommitSHA = %q, want %q", um.State.CommitState.CommitSHA, "abc1234")
+	}
+}
+
+func TestCommitExecution_errorShowsStderr(t *testing.T) {
+	t.Parallel()
+
+	executor := &mockCommitExecutor{err: fmt.Errorf("nothing to commit")}
+	m := NewModel(commitReadyState(), WithCommitExecutor(executor))
+	m.width = 100
+	m.height = 30
+
+	m, cmd := sendKey(m, "enter")
+	msg := cmd()
+	result, _ := m.Update(msg)
+	um := result.(Model)
+
+	if um.State.CommitState.CommitErr == nil {
+		t.Fatal("CommitErr should be set on failure")
+	}
+	view := um.View()
+	if !strings.Contains(view, "nothing to commit") {
+		t.Errorf("view should contain error message, got:\n%s", view)
+	}
+}
+
+func TestCommitExecution_enterRetryAfterError(t *testing.T) {
+	t.Parallel()
+
+	// First attempt fails, second succeeds.
+	executor := &mockCommitExecutor{err: fmt.Errorf("hook rejected")}
+	s := commitReadyState()
+	m := NewModel(s, WithCommitExecutor(executor))
+	m.width = 100
+	m.height = 30
+
+	// Execute → fail.
+	m, cmd := sendKey(m, "enter")
+	msg := cmd()
+	result, _ := m.Update(msg)
+	m = result.(Model)
+
+	if m.State.CommitState.CommitErr == nil {
+		t.Fatal("CommitErr should be set after first failure")
+	}
+
+	// Fix executor for retry.
+	executor.err = nil
+	executor.sha = "retry1"
+
+	// Press Enter again to retry.
+	m, cmd = sendKey(m, "enter")
+	if !m.State.CommitState.Executing {
+		t.Error("Executing should be true after retry Enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected command for retry execution")
+	}
+
+	msg = cmd()
+	result, _ = m.Update(msg)
+	m = result.(Model)
+
+	if m.State.CommitState.CommitSHA != "retry1" {
+		t.Errorf("CommitSHA = %q, want %q after retry", m.State.CommitState.CommitSHA, "retry1")
+	}
+}
+
+func TestCommitExecution_autoCommitSkipsConfirmation(t *testing.T) {
+	t.Parallel()
+
+	executor := &mockCommitExecutor{sha: "auto123"}
+	provider := &mockCommitProvider{message: "feat: auto commit"}
+
+	s := sampleState()
+	s.CommitEnabled = true
+	s.CommitAuto = true
+
+	m := NewModel(s, WithCommitProvider(provider), WithCommitExecutor(executor))
+	m.width = 100
+	m.height = 30
+
+	// Press "c" to start generation.
+	m, cmd := sendKey(m, "c")
+	if cmd == nil {
+		t.Fatal("expected generation command")
+	}
+
+	// Complete generation — with CommitAuto, should auto-fire execution.
+	genMsg := cmd()
+	result, execCmd := m.Update(genMsg)
+	um := result.(Model)
+
+	if !um.State.CommitState.Executing {
+		t.Error("CommitAuto: Executing should be true after generation completes")
+	}
+	if execCmd == nil {
+		t.Fatal("CommitAuto: expected execution command after generation")
+	}
+
+	// Complete execution.
+	execMsg := execCmd()
+	result2, _ := um.Update(execMsg)
+	um2 := result2.(Model)
+
+	if um2.State.CommitState.CommitSHA != "auto123" {
+		t.Errorf("CommitAuto: CommitSHA = %q, want %q", um2.State.CommitState.CommitSHA, "auto123")
+	}
+}
+
+func TestCommitExecution_postCommitRefresh(t *testing.T) {
+	t.Parallel()
+
+	executor := &mockCommitExecutor{sha: "ref1234"}
+	metaLoader := &mockMetadataLoader{files: sampleFiles()}
+
+	s := commitReadyState()
+	m := NewModel(s, WithCommitExecutor(executor), WithMetadataLoader(metaLoader))
+	m.width = 100
+	m.height = 30
+
+	genBefore := m.State.CacheGeneration
+
+	// Enter → execute → complete
+	m, cmd := sendKey(m, "enter")
+	msg := cmd()
+	result, refreshCmd := m.Update(msg)
+	um := result.(Model)
+
+	if um.State.CacheGeneration <= genBefore {
+		t.Error("CacheGeneration should bump after successful commit (refresh)")
+	}
+	if refreshCmd == nil {
+		t.Error("expected refresh command after successful commit")
+	}
+}
+
+func TestCommitExecution_editKeyOpensEditor(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	m, cmd := sendKey(m, "e")
+
+	// "e" in commit pane with a generated message should return a command.
+	if cmd == nil {
+		t.Error("expected a command for editor handoff on 'e' key")
+	}
+}
+
+func TestCommitExecution_editedMessageUpdatesState(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	editMsg := CommitEditedMsg{Message: "fix: edited message"}
+	result, _ := m.Update(editMsg)
+	um := result.(Model)
+
+	if um.State.CommitState.GeneratedMessage != "fix: edited message" {
+		t.Errorf("GeneratedMessage = %q, want %q", um.State.CommitState.GeneratedMessage, "fix: edited message")
+	}
+}
+
+func TestCommitExecution_viewShowsSuccessSHA(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	s.CommitState.CommitSHA = "abc1234"
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	if !strings.Contains(view, "abc1234") {
+		t.Errorf("view should show committed SHA, got:\n%s", view)
+	}
+}
+
+func TestCommitExecution_viewShowsCommitError(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	s.CommitState.CommitErr = fmt.Errorf("pre-commit hook failed")
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	if !strings.Contains(view, "pre-commit hook failed") {
+		t.Errorf("view should show commit error, got:\n%s", view)
+	}
+}
+
+func TestCommitExecution_executingShowsProgress(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	s.CommitState.Executing = true
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	if !strings.Contains(view, "ommit") {
+		t.Errorf("view should indicate commit in progress, got:\n%s", view)
+	}
+}
+
 func TestCommitUI_StaleResultAfterCancelAndRestart(t *testing.T) {
 	t.Parallel()
 
