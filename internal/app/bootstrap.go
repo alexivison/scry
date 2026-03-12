@@ -71,11 +71,16 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		return 128
 	}
 
+	focusPane := model.PaneFiles
+	if cfg.Watch && len(files) == 0 {
+		focusPane = model.PaneIdle
+	}
+
 	state := model.AppState{
 		Compare:          cmp,
 		Files:            files,
 		IgnoreWhitespace: cfg.IgnoreWhitespace,
-		FocusPane:        model.PaneFiles,
+		FocusPane:        focusPane,
 		Patches:          make(map[string]model.PatchLoadState),
 		WatchEnabled:     cfg.Watch,
 		WatchInterval:    cfg.WatchInterval,

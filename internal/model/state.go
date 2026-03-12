@@ -10,6 +10,7 @@ const (
 	PanePatch  Pane = "patch"
 	PaneSearch Pane = "search"
 	PaneCommit Pane = "commit"
+	PaneIdle   Pane = "idle"
 )
 
 // LayoutMode controls the overall pane arrangement.

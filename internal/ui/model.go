@@ -291,6 +291,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.State.FocusPane == model.PaneCommit {
 			return m.updateCommit(msg)
 		}
+		if m.State.FocusPane == model.PaneIdle {
+			return m.updateIdle(msg)
+		}
 		if m.State.FocusPane == model.PaneDashboard {
 			return m.updateDashboard(msg)
 		}
@@ -513,8 +516,14 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 	}
 
 	// First fingerprint: seed without refresh (bootstrap already loaded data).
+	// Exception: in idle mode, bootstrap had no files — refresh to catch any
+	// changes that occurred between bootstrap and this first fingerprint.
 	if m.State.LastFingerprint == "" {
 		m.State.LastFingerprint = msg.Fingerprint
+		if m.State.FocusPane == model.PaneIdle {
+			refreshed, refreshCmd := m.startRefresh()
+			return refreshed, tea.Batch(refreshCmd, watch.TickCmd(m.State.WatchInterval))
+		}
 		return m, watch.TickCmd(m.State.WatchInterval)
 	}
 
@@ -667,6 +676,11 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	m.State.Files = msg.Files
 	review.ReconcileSelection(&m.State, selectedPath)
 	review.CompleteRefresh(&m.State)
+
+	// Transition from idle to review when first files arrive.
+	if m.State.FocusPane == model.PaneIdle && len(m.State.Files) > 0 {
+		m.State.FocusPane = model.PaneFiles
+	}
 
 	if m.State.SelectedFile < 0 {
 		return m, nil
@@ -899,6 +913,8 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		b.WriteString(m.viewHelp())
+	} else if m.State.FocusPane == model.PaneIdle {
+		b.WriteString(m.viewIdle())
 	} else if m.State.FocusPane == model.PaneDashboard {
 		b.WriteString(m.viewDashboard())
 	} else if m.State.FocusPane == model.PaneCommit {
