@@ -8,11 +8,11 @@ V2-T1, V2-T6.
 - `internal/model/` — commit UI state threading.
 
 ## Deliverables
-- [ ] `c` triggers generation only when `--commit` is enabled.
-- [ ] UI shows in-flight status, generated message, retry/regenerate/cancel affordances, and actionable errors.
-- [ ] `Esc` cancels with no side effects.
-- [ ] `r` regenerates using a fresh provider call.
-- [ ] Help text and status bar expose commit mode appropriately.
+- [x] `c` triggers generation only when `--commit` is enabled.
+- [x] UI shows in-flight status, generated message, retry/regenerate/cancel affordances, and actionable errors.
+- [x] `Esc` cancels with no side effects.
+- [x] `r` regenerates using a fresh provider call.
+- [x] Help text and status bar expose commit mode appropriately.
 
 ## Test Strategy
 - Model tests for key handling, in-flight states, cancel/regenerate flows, and error rendering.
