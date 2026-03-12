@@ -104,3 +104,60 @@ func TestExitCode2BadFlags(t *testing.T) {
 		t.Errorf("exit code = %d, want 2", exitErr.ExitCode())
 	}
 }
+
+// --- v0.2 CLI tests ---
+
+func TestRunWatchIntervalTooLow(t *testing.T) {
+	t.Parallel()
+
+	code := runWith([]string{"--watch-interval", "100ms"})
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+}
+
+func TestRunCommitAutoWithoutCommit(t *testing.T) {
+	t.Parallel()
+
+	code := runWith([]string{"--commit-auto"})
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+}
+
+func TestRunInvalidCommitProvider(t *testing.T) {
+	t.Parallel()
+
+	code := runWith([]string{"--commit", "--commit-provider", "unsupported"})
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+}
+
+func TestHelpDocumentsV2Flags(t *testing.T) {
+	t.Parallel()
+
+	bin := buildBinary(t)
+
+	cmd := exec.Command(bin, "--help")
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	cmd.Run()
+
+	help := buf.String()
+
+	v2Flags := []string{
+		"--watch",
+		"--watch-interval",
+		"--commit",
+		"--commit-provider",
+		"--commit-model",
+		"--commit-auto",
+	}
+	for _, f := range v2Flags {
+		if !strings.Contains(help, f) {
+			t.Errorf("--help output missing v0.2 flag %q", f)
+		}
+	}
+}

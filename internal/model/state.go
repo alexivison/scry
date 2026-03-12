@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // Pane identifies a UI focus area.
 type Pane string
 
@@ -27,6 +29,14 @@ type PatchLoadState struct {
 	Generation int
 }
 
+// CommitState holds the state of AI commit message generation.
+type CommitState struct {
+	GeneratedMessage string
+	Provider         string
+	InFlight         bool
+	Err              error
+}
+
 // AppState is the top-level UI state threaded through the Bubble Tea model.
 type AppState struct {
 	Compare          ResolvedCompare
@@ -37,4 +47,14 @@ type AppState struct {
 	IgnoreWhitespace bool
 	SearchQuery      string
 	FocusPane        Pane
+
+	// Watch mode state (v0.2).
+	WatchEnabled    bool
+	WatchInterval   time.Duration
+	LastFingerprint string
+	RefreshInFlight bool
+	LastRefreshAt   time.Time
+
+	// Commit generation state (v0.2).
+	CommitState CommitState
 }
