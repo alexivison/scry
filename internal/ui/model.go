@@ -28,11 +28,18 @@ type MetadataLoader interface {
 	ListFiles(ctx context.Context, cmp model.ResolvedCompare) ([]model.FileSummary, error)
 }
 
+// CompareReResolver re-resolves the compare specification against current refs.
+type CompareReResolver interface {
+	Resolve(ctx context.Context, req model.CompareRequest) (model.ResolvedCompare, error)
+}
+
 // Model is the top-level Bubble Tea model for scry.
 type Model struct {
 	State          model.AppState
 	patchLoader    PatchLoader
 	metadataLoader MetadataLoader
+	compareResolver CompareReResolver
+	compareRequest  model.CompareRequest
 	patchViewport  *panes.PatchViewport
 	patchErr       string
 	patchFallback  string // fallback message for binary/submodule/oversized files
@@ -88,6 +95,14 @@ func WithMetadataLoader(ml MetadataLoader) ModelOption {
 	return func(m *Model) { m.metadataLoader = ml }
 }
 
+// WithCompareResolver sets the resolver used to re-resolve compare refs on refresh.
+func WithCompareResolver(cr CompareReResolver, req model.CompareRequest) ModelOption {
+	return func(m *Model) {
+		m.compareResolver = cr
+		m.compareRequest = req
+	}
+}
+
 // PatchLoadedMsg is sent when an async patch load completes.
 type PatchLoadedMsg struct {
 	Path  string
@@ -98,9 +113,10 @@ type PatchLoadedMsg struct {
 
 // MetadataLoadedMsg is sent when an async metadata reload completes.
 type MetadataLoadedMsg struct {
-	Files []model.FileSummary
-	Gen   int
-	Err   error
+	Compare *model.ResolvedCompare // non-nil when compare was re-resolved
+	Files   []model.FileSummary
+	Gen     int
+	Err     error
 }
 
 // Init implements tea.Model.
@@ -239,10 +255,10 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// startRefresh bumps the generation, clears the cache, and fires an async metadata reload.
+// startRefresh uses the shared refresh orchestrator to bump generation, clear cache,
+// optionally re-resolve the compare, and fire an async metadata reload.
 func (m Model) startRefresh() (tea.Model, tea.Cmd) {
-	review.BumpGeneration(&m.State)
-	review.ClearPatches(&m.State)
+	review.PrepareRefresh(&m.State)
 	m.patchViewport = nil
 	m.patchErr = ""
 	m.refreshErr = ""
@@ -250,16 +266,32 @@ func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 	m.searchNotFound = ""
 
 	if m.metadataLoader == nil {
+		m.State.RefreshInFlight = false
 		return m, nil
 	}
 
 	gen := m.State.CacheGeneration
 	cmp := m.State.Compare
 	loader := m.metadataLoader
+	resolver := m.compareResolver
+	req := m.compareRequest
 
 	cmd := func() tea.Msg {
-		files, err := loader.ListFiles(context.Background(), cmp)
-		return MetadataLoadedMsg{Files: files, Gen: gen, Err: err}
+		ctx := context.Background()
+
+		// Re-resolve compare if a resolver is configured.
+		var resolvedCmp *model.ResolvedCompare
+		if resolver != nil {
+			newCmp, err := resolver.Resolve(ctx, req)
+			if err != nil {
+				return MetadataLoadedMsg{Gen: gen, Err: err}
+			}
+			resolvedCmp = &newCmp
+			cmp = newCmp
+		}
+
+		files, err := loader.ListFiles(ctx, cmp)
+		return MetadataLoadedMsg{Compare: resolvedCmp, Files: files, Gen: gen, Err: err}
 	}
 	return m, cmd
 }
@@ -287,41 +319,27 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 	if msg.Err != nil {
+		m.State.RefreshInFlight = false
 		m.refreshErr = fmt.Sprintf("refresh failed: %v", msg.Err)
 		return m, nil
 	}
 	m.refreshErr = ""
 
-	// Remember selected path for reconciliation.
+	// Apply re-resolved compare if present.
+	if msg.Compare != nil {
+		m.State.Compare = *msg.Compare
+	}
+
 	var selectedPath string
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		selectedPath = m.State.Files[m.State.SelectedFile].Path
 	}
-
 	m.State.Files = msg.Files
+	review.ReconcileSelection(&m.State, selectedPath)
+	review.CompleteRefresh(&m.State)
 
-	// Reconcile selection.
-	if len(m.State.Files) == 0 {
-		m.State.SelectedFile = -1
-		return m, nil
-	}
-
-	// Try to preserve selection by path.
-	if selectedPath != "" {
-		for i, f := range m.State.Files {
-			if f.Path == selectedPath {
-				m.State.SelectedFile = i
-				return m.loadSelectedPatch()
-			}
-		}
-	}
-
-	// Path not found: clamp to nearest valid index.
-	if m.State.SelectedFile >= len(m.State.Files) {
-		m.State.SelectedFile = len(m.State.Files) - 1
-	}
 	if m.State.SelectedFile < 0 {
-		m.State.SelectedFile = 0
+		return m, nil
 	}
 
 	return m.loadSelectedPatch()

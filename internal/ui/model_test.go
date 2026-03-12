@@ -1746,3 +1746,194 @@ func TestWhitespaceToggleClearsRefreshErr(t *testing.T) {
 		t.Errorf("status bar should show [W] after toggle, got:\n%s", view)
 	}
 }
+
+// --- Shared refresh orchestrator tests (V2-T2) ---
+
+type mockCompareResolver struct {
+	cmp model.ResolvedCompare
+	err error
+}
+
+func (m *mockCompareResolver) Resolve(_ context.Context, _ model.CompareRequest) (model.ResolvedCompare, error) {
+	if m.err != nil {
+		return model.ResolvedCompare{}, m.err
+	}
+	return m.cmp, nil
+}
+
+func TestManualRefreshSetsRefreshInFlight(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+
+	if m.State.RefreshInFlight {
+		t.Fatal("RefreshInFlight should start false")
+	}
+
+	updated, _ := m.Update(keyMsg('r'))
+	um := updated.(Model)
+
+	if !um.State.RefreshInFlight {
+		t.Error("RefreshInFlight should be true after pressing r")
+	}
+}
+
+func TestMetadataLoadedClearsRefreshInFlight(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	um := refreshAndComplete(t, m)
+
+	if um.State.RefreshInFlight {
+		t.Error("RefreshInFlight should be false after metadata load completes")
+	}
+	if um.State.LastRefreshAt.IsZero() {
+		t.Error("LastRefreshAt should be set after refresh completes")
+	}
+}
+
+func TestRefreshWithCompareReResolution(t *testing.T) {
+	t.Parallel()
+
+	newCmp := model.ResolvedCompare{
+		BaseRef:   "new-base-sha",
+		HeadRef:   "new-head-sha",
+		DiffRange: "new-base-sha...new-head-sha",
+	}
+	resolver := &mockCompareResolver{cmp: newCmp}
+
+	req := model.CompareRequest{
+		BaseRef: "main",
+		HeadRef: "feature",
+		Mode:    model.CompareThreeDot,
+	}
+
+	m := NewModel(sampleState(),
+		WithPatchLoader(&mockPatchLoader{patches: map[string]model.FilePatch{"main.go": samplePatch()}}),
+		WithMetadataLoader(&mockMetadataLoader{files: sampleFiles()}),
+		WithCompareResolver(resolver, req),
+	)
+	m.width = 100
+	m.height = 30
+
+	um := refreshAndComplete(t, m)
+
+	if um.State.Compare.BaseRef != "new-base-sha" {
+		t.Errorf("Compare.BaseRef = %q, want %q", um.State.Compare.BaseRef, "new-base-sha")
+	}
+	if um.State.Compare.DiffRange != "new-base-sha...new-head-sha" {
+		t.Errorf("Compare.DiffRange = %q, want %q", um.State.Compare.DiffRange, "new-base-sha...new-head-sha")
+	}
+}
+
+func TestRefreshWithCompareReResolutionError(t *testing.T) {
+	t.Parallel()
+
+	resolver := &mockCompareResolver{err: fmt.Errorf("resolve failed")}
+	req := model.CompareRequest{BaseRef: "main", HeadRef: "feature", Mode: model.CompareThreeDot}
+
+	m := NewModel(sampleState(),
+		WithPatchLoader(&mockPatchLoader{patches: map[string]model.FilePatch{"main.go": samplePatch()}}),
+		WithMetadataLoader(&mockMetadataLoader{files: sampleFiles()}),
+		WithCompareResolver(resolver, req),
+	)
+	m.width = 100
+	m.height = 30
+
+	// Press r, execute the Cmd.
+	updated, cmd := m.Update(keyMsg('r'))
+	um := updated.(Model)
+	if cmd == nil {
+		t.Fatal("r should return a Cmd")
+	}
+	msg := cmd()
+	updated2, _ := um.Update(msg)
+	um2 := updated2.(Model)
+
+	// Compare should remain unchanged when resolver fails.
+	if um2.refreshErr == "" {
+		t.Error("refreshErr should be set when resolver fails")
+	}
+	if um2.State.RefreshInFlight {
+		t.Error("RefreshInFlight should be false after resolver error")
+	}
+}
+
+func TestRefreshInFlightClearedOnError(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	m.metadataLoader = &mockMetadataLoader{err: fmt.Errorf("git broke")}
+
+	updated, cmd := m.Update(keyMsg('r'))
+	um := updated.(Model)
+	if cmd == nil {
+		t.Fatal("r should return a Cmd")
+	}
+	msg := cmd()
+	updated2, _ := um.Update(msg)
+	um2 := updated2.(Model)
+
+	if um2.State.RefreshInFlight {
+		t.Error("RefreshInFlight should be false after error")
+	}
+}
+
+func TestDoubleRefreshInFlightClearedByNewerGeneration(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+
+	// First refresh: gen bumps to 1, cmd A fires.
+	updated, cmdA := m.Update(keyMsg('r'))
+	um := updated.(Model)
+	genA := um.State.CacheGeneration
+	if !um.State.RefreshInFlight {
+		t.Fatal("RefreshInFlight should be true after first r")
+	}
+
+	// Second refresh before cmd A returns: gen bumps to 2, cmd B fires.
+	updated2, cmdB := um.Update(keyMsg('r'))
+	um2 := updated2.(Model)
+	if um2.State.CacheGeneration != genA+1 {
+		t.Fatalf("CacheGeneration = %d, want %d", um2.State.CacheGeneration, genA+1)
+	}
+
+	// Cmd A returns (stale gen) — RefreshInFlight must stay true (cmd B pending).
+	if cmdA != nil {
+		msgA := cmdA()
+		updated3, _ := um2.Update(msgA)
+		um3 := updated3.(Model)
+		if !um3.State.RefreshInFlight {
+			t.Error("RefreshInFlight should remain true after stale response (cmd B still pending)")
+		}
+
+		// Cmd B returns (current gen) — RefreshInFlight must clear.
+		if cmdB != nil {
+			msgB := cmdB()
+			updated4, _ := um3.Update(msgB)
+			um4 := updated4.(Model)
+			if um4.State.RefreshInFlight {
+				t.Error("RefreshInFlight should be false after current-gen response completes")
+			}
+			if um4.State.LastRefreshAt.IsZero() {
+				t.Error("LastRefreshAt should be set after refresh completes")
+			}
+		}
+	}
+}
+
+func TestRefreshNoResolverStillWorks(t *testing.T) {
+	t.Parallel()
+
+	// Without a compare resolver, refresh should still work (no re-resolution).
+	m := modelWithRefresh(sampleFiles())
+	um := refreshAndComplete(t, m)
+
+	if um.State.CacheGeneration < 1 {
+		t.Error("generation should have bumped")
+	}
+	if um.State.RefreshInFlight {
+		t.Error("RefreshInFlight should be false after completion")
+	}
+}
