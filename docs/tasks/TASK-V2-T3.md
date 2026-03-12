@@ -8,12 +8,12 @@ V2-T1, V2-T2.
 - `internal/gitexec/` reuse only; no direct subprocess calls elsewhere.
 
 ## Deliverables
-- [ ] Fingerprint service that is **compare-mode aware**:
+- [x] Fingerprint service that is **compare-mode aware**:
   - Committed-ref mode: `git rev-parse HEAD <base-ref>` (fast, covers push/pull).
   - Working-tree mode: additionally incorporates `git diff --name-only` and/or index stat to detect staged/unstaged edits. Without this, the default `--head`-omitted mode would never trigger watch refreshes for the primary change class.
-- [ ] Watch tick command/message model suitable for Bubble Tea.
-- [ ] Debounce/in-flight rule: skip refresh while one is already in flight, reevaluate on next tick.
-- [ ] Linked-worktree documentation/tests covering shared remote refs and per-worktree `HEAD` behavior.
+- [x] Watch tick command/message model suitable for Bubble Tea.
+- [x] Debounce/in-flight rule: skip refresh while one is already in flight, reevaluate on next tick.
+- [x] Linked-worktree documentation/tests covering shared remote refs and per-worktree `HEAD` behavior.
 
 ## Test Strategy
 - Fake `GitRunner` tests for stable fingerprint, changed fingerprint, and in-flight skip behavior.
