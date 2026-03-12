@@ -207,3 +207,29 @@ func TestParseCommitProviderInvalidWithoutCommit(t *testing.T) {
 		t.Fatal("expected error for unsupported commit provider without --commit, got nil")
 	}
 }
+
+// --- worktree dashboard flag tests ---
+
+func TestParseWorktreesDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Worktrees {
+		t.Error("Worktrees = true, want false")
+	}
+}
+
+func TestParseWorktreesFlag(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{"--worktrees"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Worktrees {
+		t.Error("Worktrees = false, want true")
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -41,6 +42,14 @@ func Run(cfg config.Config) int {
 		return 128
 	}
 
+	if cfg.Worktrees {
+		return runDashboard(ctx, cfg, boot)
+	}
+	return runDiff(ctx, cfg, boot)
+}
+
+// runDiff is the normal diff-view pipeline.
+func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult) int {
 	resolver := &source.CompareResolver{Runner: boot.Runner}
 	req := model.CompareRequest{
 		Repo:             boot.Repo,
@@ -129,4 +138,114 @@ func (a *commitProviderAdapter) Generate(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return a.provider.Generate(ctx, diff, files)
+}
+
+// runDashboard is the worktree dashboard pipeline.
+func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapResult) int {
+	loader := &worktreeLoaderImpl{runner: boot.Runner}
+	worktrees, err := loader.LoadWorktrees(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
+		return 128
+	}
+
+	interval := cfg.WatchInterval
+	if interval == 0 {
+		interval = 2 * time.Second
+	}
+
+	state := model.AppState{
+		FocusPane:    model.PaneDashboard,
+		WorktreeMode: true,
+		WatchEnabled: true,
+		WatchInterval: interval,
+		DashboardState: model.DashboardState{
+			Worktrees: worktrees,
+		},
+		Patches: make(map[string]model.PatchLoadState),
+	}
+
+	drillDown := &drillDownProviderImpl{}
+	m := ui.NewModel(state, ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown))
+	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// worktreeLoaderImpl loads worktree info using gitexec commands.
+type worktreeLoaderImpl struct {
+	runner gitexec.GitRunner
+}
+
+func (w *worktreeLoaderImpl) LoadWorktrees(ctx context.Context) ([]model.WorktreeInfo, error) {
+	entries, err := gitexec.WorktreeList(ctx, w.runner)
+	if err != nil {
+		return nil, err
+	}
+
+	infos := make([]model.WorktreeInfo, 0, len(entries))
+	for _, e := range entries {
+		info := model.WorktreeInfo{
+			Path:   e.Path,
+			Branch: gitexec.ShortBranch(e.Branch),
+			Bare:   e.Bare,
+		}
+
+		if e.Bare {
+			infos = append(infos, info)
+			continue
+		}
+
+		// Get dirty state.
+		clean, err := gitexec.StatusClean(ctx, w.runner, e.Path)
+		if err == nil {
+			info.Dirty = !clean
+		}
+
+		// Get commit info.
+		hash, subject, err := gitexec.CommitSubject(ctx, w.runner, e.Path)
+		if err == nil {
+			info.CommitHash = hash
+			info.Subject = subject
+		}
+
+		infos = append(infos, info)
+	}
+
+	return infos, nil
+}
+
+// drillDownProviderImpl creates a diff context for a specific worktree.
+type drillDownProviderImpl struct{}
+
+func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath string) (ui.DrillDownResult, error) {
+	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
+
+	resolver := &source.CompareResolver{Runner: runner}
+	req := model.CompareRequest{
+		BaseRef: "", // resolves to @{upstream}
+		HeadRef: "", // working tree mode
+		Mode:    model.CompareThreeDot,
+	}
+	cmp, err := resolver.Resolve(ctx, req)
+	if err != nil {
+		return ui.DrillDownResult{}, fmt.Errorf("resolve compare for %s: %w", worktreePath, err)
+	}
+
+	metaSvc := &diff.MetadataService{Runner: runner}
+	files, err := metaSvc.ListFiles(ctx, cmp)
+	if err != nil {
+		return ui.DrillDownResult{}, fmt.Errorf("list files for %s: %w", worktreePath, err)
+	}
+
+	patchSvc := &diff.PatchService{Runner: runner}
+	return ui.DrillDownResult{
+		Compare:     cmp,
+		Files:       files,
+		PatchLoader: patchSvc,
+	}, nil
 }

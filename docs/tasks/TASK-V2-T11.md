@@ -14,14 +14,14 @@ Our party setup has a master session orchestrating worker sessions, each working
 - `cmd/scry/` — add `--worktrees` flag, help text.
 
 ## Deliverables
-- [ ] Parse `git worktree list --porcelain` to discover all worktrees (bare, linked, prunable).
-- [ ] `WorktreeInfo` type: path, branch name, commit hash, dirty/clean state.
-- [ ] Dirty state detection: run `git -C <worktree> status --porcelain` per worktree (empty = clean).
-- [ ] Dashboard pane displaying: worktree basename, branch name, dirty/clean indicator, last commit summary (short hash + subject).
-- [ ] Visual indicators: green = clean, yellow = dirty.
-- [ ] Auto-refresh via watch infra (V2-T3) — poll worktree list + per-worktree dirty state on each tick.
-- [ ] `--worktrees` CLI flag to enter dashboard mode.
-- [ ] Help text updated with dashboard keybindings.
+- [x] Parse `git worktree list --porcelain` to discover all worktrees (bare, linked, prunable).
+- [x] `WorktreeInfo` type: path, branch name, commit hash, dirty/clean state.
+- [x] Dirty state detection: run `git -C <worktree> status --porcelain` per worktree (empty = clean).
+- [x] Dashboard pane displaying: worktree basename, branch name, dirty/clean indicator, last commit summary (short hash + subject).
+- [x] Visual indicators: green = clean, yellow = dirty.
+- [x] Auto-refresh via watch infra (V2-T3) — poll worktree list + per-worktree dirty state on each tick.
+- [x] `--worktrees` CLI flag to enter dashboard mode.
+- [x] Help text updated with dashboard keybindings.
 
 ## Key Bindings
 
