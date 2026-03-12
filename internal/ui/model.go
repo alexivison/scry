@@ -33,6 +33,12 @@ type CompareReResolver interface {
 	Resolve(ctx context.Context, req model.CompareRequest) (model.ResolvedCompare, error)
 }
 
+// CommitProvider generates commit messages. The implementation is responsible
+// for collecting any diff/file data it needs (e.g. from the git index).
+type CommitProvider interface {
+	Generate(ctx context.Context) (string, error)
+}
+
 // Model is the top-level Bubble Tea model for scry.
 type Model struct {
 	State          model.AppState
@@ -55,6 +61,8 @@ type Model struct {
 	searchNotFound string        // "Pattern not found: <query>" message
 	refreshErr     string        // shown in status bar when metadata reload fails
 	fileListScroll int           // scroll offset for file list in split mode
+
+	commitProvider CommitProvider // optional provider for AI commit messages
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -104,6 +112,11 @@ func WithCompareResolver(cr CompareReResolver, req model.CompareRequest) ModelOp
 	}
 }
 
+// WithCommitProvider sets the CommitProvider used for AI commit message generation.
+func WithCommitProvider(cp CommitProvider) ModelOption {
+	return func(m *Model) { m.commitProvider = cp }
+}
+
 // PatchLoadedMsg is sent when an async patch load completes.
 type PatchLoadedMsg struct {
 	Path  string
@@ -118,6 +131,13 @@ type MetadataLoadedMsg struct {
 	Files   []model.FileSummary
 	Gen     int
 	Err     error
+}
+
+// CommitGeneratedMsg is sent when an async commit message generation completes.
+type CommitGeneratedMsg struct {
+	Message    string
+	Err        error
+	Generation int // matches CommitState.Generation to detect stale results
 }
 
 // Init implements tea.Model.
@@ -153,6 +173,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MetadataLoadedMsg:
 		return m.handleMetadataLoaded(msg)
 
+	case CommitGeneratedMsg:
+		return m.handleCommitGenerated(msg)
+
 	case tea.KeyMsg:
 		if m.tooSmall {
 			if msg.String() == "q" {
@@ -161,16 +184,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// r triggers refresh from any pane.
-		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch {
+		// r triggers refresh from any pane (except help/search/commit).
+		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.startRefresh()
 		}
-		// W toggles whitespace ignore from any pane (except help/search).
-		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch {
+		// W toggles whitespace ignore from any pane (except help/search/commit).
+		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleWhitespace()
 		}
-		// Tab toggles layout (except during help/search).
-		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch {
+		// Tab toggles layout (except during help/search/commit).
+		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleLayout()
 		}
 		if m.showHelp {
@@ -178,6 +201,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.State.FocusPane == model.PaneSearch {
 			return m.updateSearch(msg)
+		}
+		if m.State.FocusPane == model.PaneCommit {
+			return m.updateCommit(msg)
 		}
 		if m.State.FocusPane == model.PanePatch {
 			return m.updatePatch(msg)
@@ -210,6 +236,10 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.State.FocusPane = model.PanePatch
 			return m.selectFile()
 		}
+	case "c":
+		if m.State.CommitEnabled && m.commitProvider != nil {
+			return m.startCommitGeneration()
+		}
 	case "q":
 		m.quitting = true
 		return m, tea.Quit
@@ -217,6 +247,59 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = true
 	}
 	return m, nil
+}
+
+// startCommitGeneration transitions to the commit pane and fires an async generation.
+func (m Model) startCommitGeneration() (tea.Model, tea.Cmd) {
+	m.State.FocusPane = model.PaneCommit
+	gen := m.State.CommitState.Generation + 1
+	m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
+	return m, m.buildCommitCmd(gen)
+}
+
+// handleCommitGenerated processes the result of an async commit generation.
+func (m Model) handleCommitGenerated(msg CommitGeneratedMsg) (tea.Model, tea.Cmd) {
+	if msg.Generation != m.State.CommitState.Generation {
+		return m, nil // stale result from a cancelled/superseded generation
+	}
+	m.State.CommitState.InFlight = false
+	if msg.Err != nil {
+		m.State.CommitState.Err = msg.Err
+		m.State.CommitState.GeneratedMessage = ""
+	} else {
+		m.State.CommitState.GeneratedMessage = msg.Message
+		m.State.CommitState.Err = nil
+	}
+	return m, nil
+}
+
+// updateCommit handles key events in the commit pane.
+func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.State.FocusPane = model.PaneFiles
+		// Bump generation to invalidate any in-flight goroutine from the cancelled run.
+		m.State.CommitState = model.CommitState{Generation: m.State.CommitState.Generation + 1}
+	case "r":
+		if m.commitProvider != nil {
+			gen := m.State.CommitState.Generation + 1
+			m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
+			return m, m.buildCommitCmd(gen)
+		}
+	case "q":
+		m.quitting = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// buildCommitCmd creates an async Cmd that calls the commit provider.
+func (m Model) buildCommitCmd(gen int) tea.Cmd {
+	provider := m.commitProvider
+	return func() tea.Msg {
+		msg, err := provider.Generate(context.Background())
+		return CommitGeneratedMsg{Message: msg, Err: err, Generation: gen}
+	}
 }
 
 // selectFile checks the cache and either uses a cached result or fires an async load.
@@ -585,6 +668,8 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		b.WriteString(m.viewHelp())
+	} else if m.State.FocusPane == model.PaneCommit {
+		b.WriteString(m.viewCommit())
 	} else if m.State.Layout == model.LayoutSplit && m.width >= terminal.MinWidth {
 		b.WriteString(m.viewSplit())
 	} else if m.State.FocusPane == model.PaneSearch || m.State.FocusPane == model.PanePatch {
@@ -662,6 +747,9 @@ func (m Model) viewStatusBar() string {
 	if m.State.IgnoreWhitespace {
 		left += "[W] "
 	}
+	if m.State.CommitEnabled {
+		left += "[C] "
+	}
 	fileCount := fmt.Sprintf(" %d files ", len(m.State.Files))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(fileCount)
 	if gap < 0 {
@@ -708,6 +796,22 @@ func (m Model) renderPatch(width, height int) string {
 	return m.patchViewport.Render()
 }
 
+// viewCommit renders the commit generation pane.
+func (m Model) viewCommit() string {
+	cs := m.State.CommitState
+
+	if cs.InFlight {
+		return "Generating commit message..."
+	}
+	if cs.Err != nil {
+		return fmt.Sprintf("Error: %v\n\n  r  regenerate\n  Esc  cancel", cs.Err)
+	}
+	if cs.GeneratedMessage != "" {
+		return fmt.Sprintf("%s\n\n  r  regenerate\n  Esc  cancel", cs.GeneratedMessage)
+	}
+	return "No commit message."
+}
+
 func (m Model) viewHelp() string {
 	help := []string{
 		"Key Bindings",
@@ -722,6 +826,9 @@ func (m Model) viewHelp() string {
 		"  Tab     toggle split/modal layout",
 		"  q       quit",
 		"  ?       toggle help",
+	}
+	if m.State.CommitEnabled {
+		help = append(help, "  c       generate commit message")
 	}
 	return strings.Join(help, "\n")
 }

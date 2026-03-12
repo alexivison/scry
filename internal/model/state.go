@@ -9,6 +9,7 @@ const (
 	PaneFiles  Pane = "files"
 	PanePatch  Pane = "patch"
 	PaneSearch Pane = "search"
+	PaneCommit Pane = "commit"
 )
 
 // LayoutMode controls the overall pane arrangement.
@@ -43,6 +44,7 @@ type CommitState struct {
 	Provider         string
 	InFlight         bool
 	Err              error
+	Generation       int // monotonic counter to discard stale async results
 }
 
 // AppState is the top-level UI state threaded through the Bubble Tea model.
@@ -65,5 +67,6 @@ type AppState struct {
 	LastRefreshAt   time.Time
 
 	// Commit generation state (v0.2).
-	CommitState CommitState
+	CommitEnabled bool
+	CommitState   CommitState
 }
