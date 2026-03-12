@@ -12,14 +12,14 @@ None — this should be the first v0.2 task since it changes the default behavio
 - `cmd/scry/` — help text clarification.
 
 ## Deliverables
-- [ ] When `--head` is omitted, diff against working tree: `git diff <base>` (no head ref).
-- [ ] When `--head HEAD` is explicit, preserve v0.1 behavior (committed refs only).
-- [ ] `ResolvedCompare` gains a `WorkingTree bool` field (or `HeadRef` is empty to signal working tree mode).
-- [ ] Metadata commands: `git diff --name-status -z -M <base>` (no head ref).
-- [ ] Patch commands: `git diff --patch --no-color --no-ext-diff -M <base> -- <file>` (no head ref).
-- [ ] Status bar shows base ref + "(working tree)" instead of head SHA.
-- [ ] Refresh (`r`) re-reads working tree changes.
-- [ ] Help text updated.
+- [x] When `--head` is omitted, diff against working tree: `git diff <base>` (no head ref).
+- [x] When `--head HEAD` is explicit, preserve v0.1 behavior (committed refs only).
+- [x] `ResolvedCompare` gains a `WorkingTree bool` field (or `HeadRef` is empty to signal working tree mode).
+- [x] Metadata commands: `git diff --name-status -z -M <base>` (no head ref).
+- [x] Patch commands: `git diff --patch --no-color --no-ext-diff -M <base> -- <file>` (no head ref).
+- [x] Status bar shows base ref + "(working tree)" instead of head SHA.
+- [x] Refresh (`r`) re-reads working tree changes.
+- [x] Help text updated.
 
 ## Test Strategy
 - Compare resolver tests for omitted head vs explicit `HEAD`.

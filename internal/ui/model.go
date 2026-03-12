@@ -638,7 +638,12 @@ func (m Model) viewStatusBar() string {
 		}
 		return searchNotFoundStyle.Width(m.width).Render(bar)
 	}
-	left := fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+	var left string
+	if m.State.Compare.WorkingTree {
+		left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
+	} else {
+		left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+	}
 	if m.State.IgnoreWhitespace {
 		left += "[W] "
 	}

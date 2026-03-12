@@ -677,6 +677,43 @@ Track review progress per file for a compare range.
 - State survives app restart for same compare fingerprint.
 - State resets automatically when compare fingerprint changes.
 
+### Worktree Dashboard Mode (`--worktrees`) — v0.2
+
+#### Objective
+Provide a master-session view of all git worktrees in the repo. When launched with `--worktrees`, scry shows a dashboard listing every worktree with branch, dirty state, and last commit — instead of the normal file-list + diff view.
+
+#### CLI
+- `--worktrees` (bool): enter worktree dashboard mode.
+
+#### Discovery
+- `git worktree list --porcelain` to enumerate all worktrees.
+- Per-worktree dirty state: `git -C <path> status --porcelain` (empty = clean).
+
+#### Dashboard columns
+- Status indicator: green = clean, yellow = dirty.
+- Branch name.
+- Worktree path (basename).
+- Last commit: short hash + subject.
+
+#### Navigation
+- `j`/`k` to navigate worktrees.
+- `l`/`Enter` to drill into a worktree's working tree diff (reuses V2-T0).
+- `h`/`Esc` to return from drill-down.
+- `q` to quit.
+
+#### Auto-refresh
+- Uses V2-T3 watch fingerprint infra.
+- Polls worktree list + per-worktree dirty state on each tick.
+
+#### Dependencies
+V2-T0, V2-T1, V2-T2, V2-T3.
+
+#### Acceptance criteria
+- Dashboard lists all linked worktrees with correct branch and dirty state.
+- Drill-down shows the selected worktree's working tree diff.
+- Return from drill-down preserves dashboard selection.
+- Auto-refresh picks up new/removed worktrees and dirty state changes.
+
 ### Additional Future Features
 
 #### Noise gate profiles
@@ -729,10 +766,12 @@ v0.1 compares committed refs only (`@{upstream}...HEAD`). When the user has unco
 2. Watch mode (`--watch`) with polling fingerprint.
 3. Idle screen + auto-transition.
 4. AI commit message generator (`--commit`).
-4. PR resolver (`--pr`).
-5. Review queue mode.
-6. Noise gate profiles.
-7. Clipboard/export slice.
-8. Delta-since-last-review mode.
-9. Changed symbols jump list.
-10. Trust overlay.
+5. PR resolver (`--pr`).
+6. Review queue mode.
+7. Split-pane layout with vim navigation.
+8. **Worktree dashboard mode** (`--worktrees`).
+9. Noise gate profiles.
+10. Clipboard/export slice.
+11. Delta-since-last-review mode.
+12. Changed symbols jump list.
+13. Trust overlay.

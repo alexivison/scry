@@ -213,11 +213,36 @@ func TestCompareResolverResolve(t *testing.T) {
 				DiffRange: "aaa111..bbb222",
 			},
 		},
-		"default head resolves to HEAD": {
+		"working tree mode when head omitted": {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "origin/main",
-				HeadRef: "", // default → HEAD
+				HeadRef: "", // empty → working tree mode
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify origin/main":
+					return "base111\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: model.ResolvedCompare{
+				Repo:        stubRepo,
+				BaseRef:     "base111",
+				HeadRef:     "",
+				WorkingTree: true,
+				MergeBase:   "",
+				DiffRange:   "base111",
+			},
+		},
+		"explicit HEAD preserves committed mode": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "origin/main",
+				HeadRef: "HEAD", // explicit → committed ref, not working tree
 				Mode:    model.CompareThreeDot,
 			},
 			runner: func(_ context.Context, args ...string) (string, error) {

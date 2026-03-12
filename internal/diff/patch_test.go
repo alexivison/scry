@@ -179,6 +179,7 @@ func TestLoadPatch(t *testing.T) {
 
 	tests := map[string]struct {
 		runner     func(ctx context.Context, args ...string) (string, error)
+		compare    *model.ResolvedCompare // nil defaults to cmp()
 		filePath   string
 		ignoreWS   bool
 		wantErr    error // sentinel check via errors.Is
@@ -463,14 +464,31 @@ func TestLoadPatch(t *testing.T) {
 				}
 			},
 		},
+		"working tree mode uses base-only range": {
+			runner: routeGit(map[string]string{
+				"diff --patch --no-color --no-ext-diff -M aaa111 -- main.go": modifyPatch,
+			}),
+			compare:  &model.ResolvedCompare{DiffRange: "aaa111", WorkingTree: true},
+			filePath: "main.go",
+			check: func(t *testing.T, fp model.FilePatch) {
+				t.Helper()
+				if len(fp.Hunks) != 1 {
+					t.Fatalf("hunks = %d, want 1", len(fp.Hunks))
+				}
+			},
+		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
+			c := cmp()
+			if tc.compare != nil {
+				c = *tc.compare
+			}
 			svc := &PatchService{Runner: &mockRunner{fn: tc.runner}}
-			got, err := svc.LoadPatch(context.Background(), cmp(), tc.filePath, tc.ignoreWS)
+			got, err := svc.LoadPatch(context.Background(), c, tc.filePath, tc.ignoreWS)
 
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
