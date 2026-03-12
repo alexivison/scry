@@ -39,13 +39,14 @@ func Run(cfg config.Config) int {
 	}
 
 	resolver := &source.CompareResolver{Runner: boot.Runner}
-	cmp, err := resolver.Resolve(ctx, model.CompareRequest{
+	req := model.CompareRequest{
 		Repo:             boot.Repo,
 		BaseRef:          cfg.BaseRef,
 		HeadRef:          cfg.HeadRef,
 		Mode:             cfg.Mode,
 		IgnoreWhitespace: cfg.IgnoreWhitespace,
-	})
+	}
+	cmp, err := resolver.Resolve(ctx, req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
 		return 128
@@ -67,7 +68,7 @@ func Run(cfg config.Config) int {
 	}
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
-	m := ui.NewModel(state, ui.WithPatchLoader(patchSvc), ui.WithMetadataLoader(metaSvc))
+	m := ui.NewModel(state, ui.WithPatchLoader(patchSvc), ui.WithMetadataLoader(metaSvc), ui.WithCompareResolver(resolver, req))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
