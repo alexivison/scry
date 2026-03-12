@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,6 +17,7 @@ import (
 	"github.com/alexivison/scry/internal/search"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
+	"github.com/alexivison/scry/internal/watch"
 )
 
 // PatchLoader loads a file's unified diff.
@@ -31,6 +33,11 @@ type MetadataLoader interface {
 // CompareReResolver re-resolves the compare specification against current refs.
 type CompareReResolver interface {
 	Resolve(ctx context.Context, req model.CompareRequest) (model.ResolvedCompare, error)
+}
+
+// WatchFingerprinter computes a repo state fingerprint for watch mode.
+type WatchFingerprinter interface {
+	Fingerprint(ctx context.Context, baseRef string, workingTree bool) (string, error)
 }
 
 // CommitProvider generates commit messages. The implementation is responsible
@@ -63,6 +70,10 @@ type Model struct {
 	fileListScroll int           // scroll offset for file list in split mode
 
 	commitProvider CommitProvider // optional provider for AI commit messages
+
+	fingerprinter  WatchFingerprinter // optional watch mode fingerprinter
+	watchBaseRef   string             // symbolic base ref for fingerprint checks
+	lastCheckAt    time.Time          // when the last fingerprint check completed
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -117,6 +128,14 @@ func WithCommitProvider(cp CommitProvider) ModelOption {
 	return func(m *Model) { m.commitProvider = cp }
 }
 
+// WithWatch sets the WatchFingerprinter and symbolic base ref for watch mode.
+func WithWatch(fp WatchFingerprinter, baseRef string) ModelOption {
+	return func(m *Model) {
+		m.fingerprinter = fp
+		m.watchBaseRef = baseRef
+	}
+}
+
 // PatchLoadedMsg is sent when an async patch load completes.
 type PatchLoadedMsg struct {
 	Path  string
@@ -142,6 +161,9 @@ type CommitGeneratedMsg struct {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
+	if m.State.WatchEnabled && m.fingerprinter != nil {
+		return m.buildCheckCmd()
+	}
 	return nil
 }
 
@@ -175,6 +197,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case CommitGeneratedMsg:
 		return m.handleCommitGenerated(msg)
+
+	case watch.TickMsg:
+		return m.handleWatchTick(msg)
+
+	case watch.FingerprintMsg:
+		return m.handleWatchFingerprint(msg)
 
 	case tea.KeyMsg:
 		if m.tooSmall {
@@ -300,6 +328,55 @@ func (m Model) buildCommitCmd(gen int) tea.Cmd {
 		msg, err := provider.Generate(context.Background())
 		return CommitGeneratedMsg{Message: msg, Err: err, Generation: gen}
 	}
+}
+
+// --- Watch mode handlers ---
+
+// buildCheckCmd creates an async Cmd that computes the repo fingerprint.
+func (m Model) buildCheckCmd() tea.Cmd {
+	fp := m.fingerprinter
+	baseRef := m.watchBaseRef
+	wt := m.State.Compare.WorkingTree
+	return func() tea.Msg {
+		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
+		return watch.FingerprintMsg{Fingerprint: result, Err: err}
+	}
+}
+
+// handleWatchTick fires a fingerprint check on each watch interval tick.
+func (m Model) handleWatchTick(_ watch.TickMsg) (tea.Model, tea.Cmd) {
+	if !m.State.WatchEnabled || m.fingerprinter == nil {
+		return m, nil
+	}
+	return m, m.buildCheckCmd()
+}
+
+// handleWatchFingerprint processes a fingerprint check result.
+func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.Cmd) {
+	if !m.State.WatchEnabled {
+		return m, nil
+	}
+	m.lastCheckAt = time.Now()
+
+	if msg.Err != nil {
+		return m, watch.TickCmd(m.State.WatchInterval)
+	}
+
+	// First fingerprint: seed without refresh (bootstrap already loaded data).
+	if m.State.LastFingerprint == "" {
+		m.State.LastFingerprint = msg.Fingerprint
+		return m, watch.TickCmd(m.State.WatchInterval)
+	}
+
+	if watch.ShouldRefresh(&m.State, msg.Fingerprint) {
+		m.State.LastFingerprint = msg.Fingerprint
+		refreshed, refreshCmd := m.startRefresh()
+		return refreshed, tea.Batch(refreshCmd, watch.TickCmd(m.State.WatchInterval))
+	}
+
+	// When RefreshInFlight is true, LastFingerprint is intentionally NOT updated
+	// so the mismatch triggers a refresh once the in-flight one completes.
+	return m, watch.TickCmd(m.State.WatchInterval)
 }
 
 // selectFile checks the cache and either uses a cached result or fires an async load.
@@ -747,6 +824,13 @@ func (m Model) viewStatusBar() string {
 	if m.State.IgnoreWhitespace {
 		left += "[W] "
 	}
+	if m.State.WatchEnabled {
+		watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
+		if !m.lastCheckAt.IsZero() {
+			watchTag += " " + m.lastCheckAt.Format("15:04:05")
+		}
+		left += watchTag + "] "
+	}
 	if m.State.CommitEnabled {
 		left += "[C] "
 	}
@@ -826,6 +910,13 @@ func (m Model) viewHelp() string {
 		"  Tab     toggle split/modal layout",
 		"  q       quit",
 		"  ?       toggle help",
+	}
+	if m.State.WatchEnabled {
+		watchLine := fmt.Sprintf("  [watch]  auto-refresh every %s", m.State.WatchInterval)
+		if !m.State.LastRefreshAt.IsZero() {
+			watchLine += fmt.Sprintf(", last refresh %s", m.State.LastRefreshAt.Format("15:04:05"))
+		}
+		help = append(help, watchLine)
 	}
 	if m.State.CommitEnabled {
 		help = append(help, "  c       generate commit message")

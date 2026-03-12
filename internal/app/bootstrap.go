@@ -15,6 +15,7 @@ import (
 	"github.com/alexivison/scry/internal/source"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui"
+	"github.com/alexivison/scry/internal/watch"
 )
 
 // Run executes the full scry pipeline and returns an exit code.
@@ -65,10 +66,24 @@ func Run(cfg config.Config) int {
 		IgnoreWhitespace: cfg.IgnoreWhitespace,
 		FocusPane:        model.PaneFiles,
 		Patches:          make(map[string]model.PatchLoadState),
+		WatchEnabled:     cfg.Watch,
+		WatchInterval:    cfg.WatchInterval,
 	}
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
-	m := ui.NewModel(state, ui.WithPatchLoader(patchSvc), ui.WithMetadataLoader(metaSvc), ui.WithCompareResolver(resolver, req))
+	opts := []ui.ModelOption{
+		ui.WithPatchLoader(patchSvc),
+		ui.WithMetadataLoader(metaSvc),
+		ui.WithCompareResolver(resolver, req),
+	}
+	if cfg.Watch {
+		baseRef := cfg.BaseRef
+		if baseRef == "" {
+			baseRef = "@{upstream}"
+		}
+		opts = append(opts, ui.WithWatch(&watch.Fingerprinter{Runner: boot.Runner}, baseRef))
+	}
+	m := ui.NewModel(state, opts...)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
