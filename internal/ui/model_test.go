@@ -390,6 +390,29 @@ func TestViewStatusBar(t *testing.T) {
 	}
 }
 
+func TestViewStatusBarWorkingTree(t *testing.T) {
+	t.Parallel()
+
+	state := sampleState()
+	state.Compare = model.ResolvedCompare{
+		BaseRef:     "abc123",
+		WorkingTree: true,
+		DiffRange:   "abc123",
+	}
+	m := NewModel(state)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	if !strings.Contains(view, "(working tree)") {
+		t.Errorf("status bar should show (working tree) in working tree mode, got:\n%s", view)
+	}
+	if !strings.Contains(view, "abc123") {
+		t.Errorf("status bar should show base ref in working tree mode, got:\n%s", view)
+	}
+}
+
 func TestViewHelpOverlay(t *testing.T) {
 	t.Parallel()
 

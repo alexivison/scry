@@ -53,6 +53,7 @@ func TestListFiles(t *testing.T) {
 
 	tests := map[string]struct {
 		runner  func(ctx context.Context, args ...string) (string, error)
+		compare *model.ResolvedCompare // nil defaults to cmp()
 		want    []model.FileSummary
 		wantErr bool
 	}{
@@ -159,6 +160,16 @@ func TestListFiles(t *testing.T) {
 				{Path: "gone.txt", Status: model.StatusDeleted, Additions: 0, Deletions: 15},
 			},
 		},
+		"working tree mode uses base-only range": {
+			runner: routeGit(map[string]string{
+				"diff --name-status -z -M aaa111": "M\x00main.go\x00",
+				"diff --numstat -z -M aaa111":     "10\t5\tmain.go\x00",
+			}),
+			compare: &model.ResolvedCompare{DiffRange: "aaa111", WorkingTree: true},
+			want: []model.FileSummary{
+				{Path: "main.go", Status: model.StatusModified, Additions: 10, Deletions: 5},
+			},
+		},
 		"name-status git error": {
 			runner: func(_ context.Context, args ...string) (string, error) {
 				if args[1] == "--name-status" {
@@ -184,8 +195,12 @@ func TestListFiles(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
+			c := cmp()
+			if tc.compare != nil {
+				c = *tc.compare
+			}
 			svc := &MetadataService{Runner: &mockRunner{fn: tc.runner}}
-			got, err := svc.ListFiles(context.Background(), cmp())
+			got, err := svc.ListFiles(context.Background(), c)
 
 			if tc.wantErr {
 				if err == nil {

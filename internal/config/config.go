@@ -11,7 +11,7 @@ import (
 // Config is parsed from CLI flags and threaded into app bootstrap.
 type Config struct {
 	BaseRef          string           // --base; default: "" (resolved to @{upstream})
-	HeadRef          string           // --head; default: "" (resolved to HEAD)
+	HeadRef          string           // --head; default: "" (working tree mode; set to "HEAD" for committed-only)
 	Mode             model.CompareMode // --mode; default: CompareThreeDot
 	IgnoreWhitespace bool             // --ignore-whitespace; default: false
 }
@@ -29,7 +29,7 @@ func Parse(args []string) (Config, error) {
 	)
 
 	fs.StringVar(&base, "base", "", "base ref for comparison (default: @{upstream})")
-	fs.StringVar(&head, "head", "", "head ref for comparison (default: HEAD)")
+	fs.StringVar(&head, "head", "", "head ref for comparison (default: working tree; use --head HEAD for committed only)")
 	fs.StringVar(&mode, "mode", "three-dot", "compare mode: three-dot (default) or two-dot")
 	fs.BoolVar(&ignoreWS, "ignore-whitespace", false, "ignore whitespace changes in diffs")
 

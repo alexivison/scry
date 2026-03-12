@@ -58,19 +58,24 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 		return model.ResolvedCompare{}, err
 	}
 
-	headRef := req.HeadRef
-	if headRef == "" {
-		headRef = "HEAD"
-	}
-
-	headSHA, err := cr.resolveRef(ctx, headRef)
-	if err != nil {
-		return model.ResolvedCompare{}, fmt.Errorf("failed to resolve head ref %q: %w", headRef, err)
-	}
-
 	baseSHA, err := cr.resolveRef(ctx, baseRef)
 	if err != nil {
 		return model.ResolvedCompare{}, fmt.Errorf("failed to resolve base ref %q: %w", baseRef, err)
+	}
+
+	// Working tree mode: when head is omitted, diff base against working tree.
+	if req.HeadRef == "" {
+		return model.ResolvedCompare{
+			Repo:        req.Repo,
+			BaseRef:     baseSHA,
+			WorkingTree: true,
+			DiffRange:   baseSHA,
+		}, nil
+	}
+
+	headSHA, err := cr.resolveRef(ctx, req.HeadRef)
+	if err != nil {
+		return model.ResolvedCompare{}, fmt.Errorf("failed to resolve head ref %q: %w", req.HeadRef, err)
 	}
 
 	res := model.ResolvedCompare{

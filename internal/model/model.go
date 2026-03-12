@@ -29,11 +29,12 @@ type CompareRequest struct {
 }
 
 type ResolvedCompare struct {
-	Repo      RepoContext
-	BaseRef   string
-	HeadRef   string
-	MergeBase string // SHA of merge-base in three-dot mode; empty string in two-dot mode.
-	DiffRange string // Range string passed to git diff: "base...head" or "base..head".
+	Repo        RepoContext
+	BaseRef     string
+	HeadRef     string
+	WorkingTree bool   // true when diffing against the working tree (no head ref).
+	MergeBase   string // SHA of merge-base in three-dot mode; empty string in two-dot mode.
+	DiffRange   string // Range string passed to git diff: "base...head", "base..head", or just "base" in working tree mode.
 }
 
 type FileStatus string
