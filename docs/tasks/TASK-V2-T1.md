@@ -9,13 +9,13 @@ None.
 - `cmd/scry/` — help output and parse-path tests.
 
 ## Deliverables
-- [ ] `--watch` and `--watch-interval` flags with default `2s` and minimum `500ms`.
-- [ ] `--commit`, `--commit-provider`, `--commit-model`, and `--commit-auto` flags.
-- [ ] Validation: `--watch-interval < 500ms` returns exit code 2.
-- [ ] Validation: `--commit-auto` requires `--commit`.
-- [ ] Validation: unsupported provider values fail fast.
-- [ ] `model.AppState` additions for watch/idle/commit state (no runtime behavior yet).
-- [ ] Help text documents all new flags.
+- [x] `--watch` and `--watch-interval` flags with default `2s` and minimum `500ms`.
+- [x] `--commit`, `--commit-provider`, `--commit-model`, and `--commit-auto` flags.
+- [x] Validation: `--watch-interval < 500ms` returns exit code 2.
+- [x] Validation: `--commit-auto` requires `--commit`.
+- [x] Validation: unsupported provider values fail fast.
+- [x] `model.AppState` additions for watch/idle/commit state (no runtime behavior yet).
+- [x] Help text documents all new flags.
 
 ## Test Strategy
 - Table-driven config-parse tests for valid/default/invalid flag combinations.
