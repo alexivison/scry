@@ -38,13 +38,18 @@ type PatchLoadState struct {
 	Generation int
 }
 
-// CommitState holds the state of AI commit message generation.
+// CommitState holds the state of AI commit message generation and execution.
 type CommitState struct {
 	GeneratedMessage string
 	Provider         string
 	InFlight         bool
 	Err              error
 	Generation       int // monotonic counter to discard stale async results
+
+	// Execution state (V2-T8).
+	Executing bool
+	CommitSHA string
+	CommitErr error
 }
 
 // AppState is the top-level UI state threaded through the Bubble Tea model.
@@ -68,5 +73,6 @@ type AppState struct {
 
 	// Commit generation state (v0.2).
 	CommitEnabled bool
+	CommitAuto    bool
 	CommitState   CommitState
 }

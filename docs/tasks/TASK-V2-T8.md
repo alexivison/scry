@@ -9,11 +9,11 @@ V2-T2, V2-T7.
 - `internal/app/` wiring for commit execution service.
 
 ## Deliverables
-- [ ] `Enter` executes `git commit` with the generated or user-edited message.
-- [ ] `e` opens `$EDITOR`, persists edits, and resumes commit flow.
-- [ ] `--commit-auto` skips confirmation and commits immediately after generation.
-- [ ] Commit result surfaces SHA on success and git stderr on failure.
-- [ ] Successful commit reuses the shared refresh orchestrator and clears stale diff state.
+- [x] `Enter` executes `git commit` with the generated or user-edited message.
+- [x] `e` opens `$EDITOR`, persists edits, and resumes commit flow.
+- [x] `--commit-auto` skips confirmation and commits immediately after generation.
+- [x] Commit result surfaces SHA on success and git stderr on failure.
+- [x] Successful commit reuses the shared refresh orchestrator and clears stale diff state.
 
 ## Test Strategy
 - Executor tests with fake `GitRunner` covering success, nothing-to-commit, and hook rejection.

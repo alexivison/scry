@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/alexivison/scry/internal/commit"
 	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
@@ -46,22 +48,27 @@ type CommitProvider interface {
 	Generate(ctx context.Context) (string, error)
 }
 
+// CommitExecutor runs git commit with a message and returns the short SHA.
+type CommitExecutor interface {
+	Execute(ctx context.Context, message string) (string, error)
+}
+
 // Model is the top-level Bubble Tea model for scry.
 type Model struct {
-	State          model.AppState
-	patchLoader    PatchLoader
-	metadataLoader MetadataLoader
+	State           model.AppState
+	patchLoader     PatchLoader
+	metadataLoader  MetadataLoader
 	compareResolver CompareReResolver
 	compareRequest  model.CompareRequest
-	patchViewport  *panes.PatchViewport
-	patchErr       string
-	patchFallback  string // fallback message for binary/submodule/oversized files
-	showHelp       bool
-	width          int
-	height         int
-	quitting       bool
-	tooSmall       bool // terminal below minimum dimensions
-	sizeErr        string
+	patchViewport   *panes.PatchViewport
+	patchErr        string
+	patchFallback   string // fallback message for binary/submodule/oversized files
+	showHelp        bool
+	width           int
+	height          int
+	quitting        bool
+	tooSmall        bool // terminal below minimum dimensions
+	sizeErr         string
 
 	searchInput    string        // text being typed in search mode
 	searchIndex    *search.Index // built when patch is loaded
@@ -70,10 +77,11 @@ type Model struct {
 	fileListScroll int           // scroll offset for file list in split mode
 
 	commitProvider CommitProvider // optional provider for AI commit messages
+	commitExecutor CommitExecutor // optional executor for git commit
 
-	fingerprinter  WatchFingerprinter // optional watch mode fingerprinter
-	watchBaseRef   string             // symbolic base ref for fingerprint checks
-	lastCheckAt    time.Time          // when the last fingerprint check completed
+	fingerprinter WatchFingerprinter // optional watch mode fingerprinter
+	watchBaseRef  string             // symbolic base ref for fingerprint checks
+	lastCheckAt   time.Time          // when the last fingerprint check completed
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -128,6 +136,11 @@ func WithCommitProvider(cp CommitProvider) ModelOption {
 	return func(m *Model) { m.commitProvider = cp }
 }
 
+// WithCommitExecutor sets the CommitExecutor used to run git commit.
+func WithCommitExecutor(ce CommitExecutor) ModelOption {
+	return func(m *Model) { m.commitExecutor = ce }
+}
+
 // WithWatch sets the WatchFingerprinter and symbolic base ref for watch mode.
 func WithWatch(fp WatchFingerprinter, baseRef string) ModelOption {
 	return func(m *Model) {
@@ -157,6 +170,19 @@ type CommitGeneratedMsg struct {
 	Message    string
 	Err        error
 	Generation int // matches CommitState.Generation to detect stale results
+}
+
+// CommitExecutedMsg is sent when an async git commit completes.
+type CommitExecutedMsg struct {
+	SHA        string
+	Err        error
+	Generation int
+}
+
+// CommitEditedMsg is sent when the user finishes editing a commit message in $EDITOR.
+type CommitEditedMsg struct {
+	Message string
+	Err     error
 }
 
 // Init implements tea.Model.
@@ -197,6 +223,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case CommitGeneratedMsg:
 		return m.handleCommitGenerated(msg)
+
+	case CommitExecutedMsg:
+		return m.handleCommitExecuted(msg)
+
+	case CommitEditedMsg:
+		return m.handleCommitEdited(msg)
 
 	case watch.TickMsg:
 		return m.handleWatchTick(msg)
@@ -294,22 +326,70 @@ func (m Model) handleCommitGenerated(msg CommitGeneratedMsg) (tea.Model, tea.Cmd
 	if msg.Err != nil {
 		m.State.CommitState.Err = msg.Err
 		m.State.CommitState.GeneratedMessage = ""
-	} else {
-		m.State.CommitState.GeneratedMessage = msg.Message
-		m.State.CommitState.Err = nil
+		return m, nil
 	}
+	m.State.CommitState.GeneratedMessage = msg.Message
+	m.State.CommitState.Err = nil
+
+	// Auto-commit: skip confirmation and execute immediately.
+	if m.State.CommitAuto && m.commitExecutor != nil {
+		return m.startCommitExecution()
+	}
+	return m, nil
+}
+
+// handleCommitExecuted processes the result of an async git commit.
+func (m Model) handleCommitExecuted(msg CommitExecutedMsg) (tea.Model, tea.Cmd) {
+	if msg.Generation != m.State.CommitState.Generation {
+		return m, nil
+	}
+	m.State.CommitState.Executing = false
+	if msg.Err != nil {
+		m.State.CommitState.CommitErr = msg.Err
+		return m, nil
+	}
+	m.State.CommitState.CommitSHA = msg.SHA
+
+	// Reuse the shared refresh orchestrator to clear stale diff state.
+	return m.startRefresh()
+}
+
+// handleCommitEdited processes the result of an editor session.
+func (m Model) handleCommitEdited(msg CommitEditedMsg) (tea.Model, tea.Cmd) {
+	if msg.Err != nil {
+		m.State.CommitState.Err = msg.Err
+		return m, nil
+	}
+	m.State.CommitState.GeneratedMessage = msg.Message
 	return m, nil
 }
 
 // updateCommit handles key events in the commit pane.
 func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Block most actions while commit is executing (irreversible side effect).
+	if m.State.CommitState.Executing {
+		if msg.String() == "q" {
+			m.quitting = true
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
+	case "enter":
+		if m.State.CommitState.GeneratedMessage != "" && m.State.CommitState.CommitSHA == "" && m.commitExecutor != nil {
+			return m.startCommitExecution()
+		}
+	case "e":
+		if m.State.CommitState.GeneratedMessage != "" && m.State.CommitState.CommitSHA == "" {
+			return m.startEditor()
+		}
 	case "esc":
 		m.State.FocusPane = model.PaneFiles
 		// Bump generation to invalidate any in-flight goroutine from the cancelled run.
 		m.State.CommitState = model.CommitState{Generation: m.State.CommitState.Generation + 1}
 	case "r":
-		if m.commitProvider != nil {
+		if m.commitProvider != nil && m.State.CommitState.CommitSHA == "" {
 			gen := m.State.CommitState.Generation + 1
 			m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
 			return m, m.buildCommitCmd(gen)
@@ -319,6 +399,43 @@ func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// startCommitExecution begins async commit execution.
+func (m Model) startCommitExecution() (tea.Model, tea.Cmd) {
+	gen := m.State.CommitState.Generation
+	m.State.CommitState.Executing = true
+	m.State.CommitState.CommitErr = nil
+	m.State.CommitState.CommitSHA = ""
+
+	executor := m.commitExecutor
+	message := m.State.CommitState.GeneratedMessage
+
+	cmd := func() tea.Msg {
+		sha, err := executor.Execute(context.Background(), message)
+		return CommitExecutedMsg{SHA: sha, Err: err, Generation: gen}
+	}
+	return m, cmd
+}
+
+// startEditor opens $EDITOR with the commit message for user editing.
+func (m Model) startEditor() (tea.Model, tea.Cmd) {
+	message := m.State.CommitState.GeneratedMessage
+	cmd, tmpPath, err := commit.PrepareEditorCmd(message)
+	if err != nil {
+		m.State.CommitState.Err = err
+		return m, nil
+	}
+
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			os.Remove(tmpPath)
+			return CommitEditedMsg{Err: err}
+		}
+		edited, readErr := commit.ReadEditedMessage(tmpPath)
+		os.Remove(tmpPath)
+		return CommitEditedMsg{Message: edited, Err: readErr}
+	})
 }
 
 // buildCommitCmd creates an async Cmd that calls the commit provider.
@@ -887,11 +1004,20 @@ func (m Model) viewCommit() string {
 	if cs.InFlight {
 		return "Generating commit message..."
 	}
+	if cs.Executing {
+		return "Committing..."
+	}
+	if cs.CommitSHA != "" {
+		return fmt.Sprintf("Committed: %s\n\n  Esc  back to files", cs.CommitSHA)
+	}
+	if cs.CommitErr != nil {
+		return fmt.Sprintf("Commit failed: %v\n\n  Enter  retry\n  r  regenerate\n  Esc  cancel", cs.CommitErr)
+	}
 	if cs.Err != nil {
 		return fmt.Sprintf("Error: %v\n\n  r  regenerate\n  Esc  cancel", cs.Err)
 	}
 	if cs.GeneratedMessage != "" {
-		return fmt.Sprintf("%s\n\n  r  regenerate\n  Esc  cancel", cs.GeneratedMessage)
+		return fmt.Sprintf("%s\n\n  Enter  commit\n  e  edit in $EDITOR\n  r  regenerate\n  Esc  cancel", cs.GeneratedMessage)
 	}
 	return "No commit message."
 }
@@ -1027,7 +1153,7 @@ const (
 
 // Styles — kept minimal; will degrade gracefully when color is unavailable.
 var (
-	selectedStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
+	selectedStyle  = lipgloss.NewStyle().Bold(true).Reverse(true)
 	statusBarStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("235")).
 			Foreground(lipgloss.Color("252"))
