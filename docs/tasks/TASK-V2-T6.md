@@ -8,11 +8,11 @@ V2-T1.
 - `go.mod` — add Anthropic SDK.
 
 ## Deliverables
-- [ ] `CommitMessageProvider` interface per spec.
-- [ ] Deterministic prompt builder combining **staged-only diff** (`git diff --cached`), file summaries, and commit-style instructions. Must not include unstaged changes — the generated message must match what `git commit` will actually record.
-- [ ] Guard: block commit generation (return typed error) when unstaged changes are present alongside staged changes, until explicit staging semantics are designed.
-- [ ] `ClaudeProvider` reading `ANTHROPIC_API_KEY` and optional model override.
-- [ ] Clear typed errors for missing API key, provider request failure, and malformed responses.
+- [x] `CommitMessageProvider` interface per spec.
+- [x] Deterministic prompt builder combining **staged-only diff** (`git diff --cached`), file summaries, and commit-style instructions. Must not include unstaged changes — the generated message must match what `git commit` will actually record.
+- [x] Guard: block commit generation (return typed error) when unstaged changes are present alongside staged changes, until explicit staging semantics are designed.
+- [x] `ClaudeProvider` reading `ANTHROPIC_API_KEY` and optional model override.
+- [x] Clear typed errors for missing API key, provider request failure, and malformed responses.
 
 ## Test Strategy
 - Prompt-builder tests using fixture diffs and file summaries.
