@@ -82,6 +82,9 @@ type Model struct {
 	fingerprinter WatchFingerprinter // optional watch mode fingerprinter
 	watchBaseRef  string             // symbolic base ref for fingerprint checks
 	lastCheckAt   time.Time          // when the last fingerprint check completed
+
+	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
+	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -187,6 +190,9 @@ type CommitEditedMsg struct {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
+	if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
+		return watch.TickCmd(m.State.WatchInterval)
+	}
 	if m.State.WatchEnabled && m.fingerprinter != nil {
 		return m.buildCheckCmd()
 	}
@@ -231,10 +237,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCommitEdited(msg)
 
 	case watch.TickMsg:
+		if m.State.WorktreeMode {
+			return m.handleDashboardTick()
+		}
 		return m.handleWatchTick(msg)
 
 	case watch.FingerprintMsg:
 		return m.handleWatchFingerprint(msg)
+
+	case WorktreeRefreshedMsg:
+		return m.handleWorktreeRefreshed(msg)
+
+	case DrillDownLoadedMsg:
+		return m.handleDrillDownLoaded(msg)
 
 	case tea.KeyMsg:
 		if m.tooSmall {
@@ -246,6 +261,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// r triggers refresh from any pane (except help/search/commit).
 		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
+			if m.State.WorktreeMode {
+				if m.State.DashboardState.DrillDown {
+					// In drill-down, re-load the current worktree's diff.
+					ds := m.State.DashboardState
+					if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
+						return m.startDrillDown(ds.Worktrees[ds.SelectedIdx])
+					}
+				}
+				// Top-level dashboard: no-op (auto-refresh handles updates).
+				return m, nil
+			}
 			return m.startRefresh()
 		}
 		// W toggles whitespace ignore from any pane (except help/search/commit).
@@ -265,8 +291,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.State.FocusPane == model.PaneCommit {
 			return m.updateCommit(msg)
 		}
+		if m.State.FocusPane == model.PaneDashboard {
+			return m.updateDashboard(msg)
+		}
 		if m.State.FocusPane == model.PanePatch {
 			return m.updatePatch(msg)
+		}
+		// In worktree drill-down, h/Esc returns to dashboard.
+		if m.State.WorktreeMode && m.State.DashboardState.DrillDown {
+			return m.updateDrillDown(msg)
 		}
 		return m.updateFiles(msg)
 	}
@@ -728,6 +761,10 @@ func buildFallback(summary model.FileSummary, err error) string {
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "h":
+		if m.State.WorktreeMode && m.State.DashboardState.DrillDown {
+			m.returnToDashboard()
+			return m, nil
+		}
 		m.State.FocusPane = model.PaneFiles
 		if m.State.Layout != model.LayoutSplit {
 			m.patchViewport = nil
@@ -862,6 +899,8 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		b.WriteString(m.viewHelp())
+	} else if m.State.FocusPane == model.PaneDashboard {
+		b.WriteString(m.viewDashboard())
 	} else if m.State.FocusPane == model.PaneCommit {
 		b.WriteString(m.viewCommit())
 	} else if m.State.Layout == model.LayoutSplit && m.width >= terminal.MinWidth {
@@ -932,31 +971,36 @@ func (m Model) viewStatusBar() string {
 		}
 		return searchNotFoundStyle.Width(m.width).Render(bar)
 	}
-	var left string
-	if m.State.Compare.WorkingTree {
-		left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
+	var left, right string
+	if m.State.FocusPane == model.PaneDashboard {
+		left = " Worktree Dashboard "
+		right = fmt.Sprintf(" %d worktrees ", len(m.State.DashboardState.Worktrees))
 	} else {
-		left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+		if m.State.Compare.WorkingTree {
+			left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
+		} else {
+			left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+		}
+		if m.State.IgnoreWhitespace {
+			left += "[W] "
+		}
+		if m.State.CommitEnabled {
+			left += "[C] "
+		}
+		right = fmt.Sprintf(" %d files ", len(m.State.Files))
 	}
-	if m.State.IgnoreWhitespace {
-		left += "[W] "
-	}
-	if m.State.WatchEnabled {
+	if m.State.WatchEnabled && m.State.FocusPane != model.PaneDashboard {
 		watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
 		if !m.lastCheckAt.IsZero() {
 			watchTag += " " + m.lastCheckAt.Format("15:04:05")
 		}
 		left += watchTag + "] "
 	}
-	if m.State.CommitEnabled {
-		left += "[C] "
-	}
-	fileCount := fmt.Sprintf(" %d files ", len(m.State.Files))
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(fileCount)
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
 	}
-	bar := left + strings.Repeat(" ", gap) + fileCount
+	bar := left + strings.Repeat(" ", gap) + right
 	return statusBarStyle.Width(m.width).Render(bar)
 }
 
@@ -1023,12 +1067,30 @@ func (m Model) viewCommit() string {
 }
 
 func (m Model) viewHelp() string {
+	if m.State.WorktreeMode && !m.State.DashboardState.DrillDown {
+		help := []string{
+			"Dashboard Key Bindings",
+			"",
+			"  j/k     navigate worktree list",
+			"  l/Enter drill into worktree diff",
+			"  q       quit",
+			"  ?       toggle help",
+		}
+		return strings.Join(help, "\n")
+	}
+
 	help := []string{
 		"Key Bindings",
 		"",
 		"  j/k     navigate file list / scroll diff",
 		"  l/Enter select file / focus patch pane",
-		"  h/Esc   back to file list",
+	}
+	if m.State.WorktreeMode {
+		help = append(help, "  h/Esc   back to dashboard")
+	} else {
+		help = append(help, "  h/Esc   back to file list")
+	}
+	help = append(help,
 		"  n/p     next/previous hunk",
 		"  /       search in patch",
 		"  r       refresh",
@@ -1036,7 +1098,7 @@ func (m Model) viewHelp() string {
 		"  Tab     toggle split/modal layout",
 		"  q       quit",
 		"  ?       toggle help",
-	}
+	)
 	if m.State.WatchEnabled {
 		watchLine := fmt.Sprintf("  [watch]  auto-refresh every %s", m.State.WatchInterval)
 		if !m.State.LastRefreshAt.IsZero() {

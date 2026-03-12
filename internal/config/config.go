@@ -25,6 +25,9 @@ type Config struct {
 	CommitProvider string // --commit-provider; default: "claude"
 	CommitModel    string // --commit-model; default: ""
 	CommitAuto     bool   // --commit-auto; default: false (requires --commit)
+
+	// Worktree dashboard (v0.2).
+	Worktrees bool // --worktrees; default: false
 }
 
 // supportedProviders is the set of valid --commit-provider values.
@@ -48,6 +51,7 @@ func Parse(args []string) (Config, error) {
 		commitProvider string
 		commitModel    string
 		commitAuto     bool
+		worktrees      bool
 	)
 
 	fs.StringVar(&base, "base", "", "base ref for comparison (default: @{upstream})")
@@ -60,6 +64,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&commitProvider, "commit-provider", "claude", "LLM provider for commit messages (claude)")
 	fs.StringVar(&commitModel, "commit-model", "", "override default model for the commit provider")
 	fs.BoolVar(&commitAuto, "commit-auto", false, "skip confirmation and commit immediately (requires --commit)")
+	fs.BoolVar(&worktrees, "worktrees", false, "show worktree dashboard instead of diff view")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -97,6 +102,7 @@ func Parse(args []string) (Config, error) {
 		CommitProvider:   commitProvider,
 		CommitModel:      commitModel,
 		CommitAuto:       commitAuto,
+		Worktrees:        worktrees,
 	}, nil
 }
 

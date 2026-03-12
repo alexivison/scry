@@ -75,4 +75,8 @@ type AppState struct {
 	CommitEnabled bool
 	CommitAuto    bool
 	CommitState   CommitState
+
+	// Worktree dashboard mode (v0.2).
+	WorktreeMode   bool
+	DashboardState DashboardState
 }
