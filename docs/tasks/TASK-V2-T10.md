@@ -17,16 +17,16 @@ Currently scry uses a modal, full-screen navigation where only one pane is visib
 - `cmd/scry/` — help text updated with new keybindings.
 
 ## Deliverables
-- [ ] Split-pane view: file list on left (fixed width, ~30% of terminal or min 25 cols), diff on right (remaining width).
-- [ ] Active pane indicated visually (e.g. highlighted border or dimmed inactive pane).
-- [ ] `l` from file list → focus patch pane (same as `Enter` but without toggling layout).
-- [ ] `h` from patch pane → focus file list (already works in modal mode, must also work in split mode).
-- [ ] `Enter` from file list in split mode → load patch for selected file, focus patch pane.
-- [ ] `j`/`k` in file list scrolls through files; in split mode, patch auto-updates to show selected file's diff.
-- [ ] `Tab` toggles between split layout and full-screen modal layout (persists for session).
-- [ ] File list in split mode supports scrolling when files exceed viewport height.
-- [ ] Graceful degradation: if terminal width < 80 cols, fall back to modal layout with a status message.
-- [ ] Help overlay (`?`) updated with new keybindings.
+- [x] Split-pane view: file list on left (fixed width, ~30% of terminal or min 25 cols), diff on right (remaining width).
+- [x] Active pane indicated visually (e.g. highlighted border or dimmed inactive pane).
+- [x] `l` from file list → focus patch pane (same as `Enter` but without toggling layout).
+- [x] `h` from patch pane → focus file list (already works in modal mode, must also work in split mode).
+- [x] `Enter` from file list in split mode → load patch for selected file, focus patch pane.
+- [x] `j`/`k` in file list scrolls through files; in split mode, patch auto-updates to show selected file's diff.
+- [x] `Tab` toggles between split layout and full-screen modal layout (persists for session).
+- [x] File list in split mode supports scrolling when files exceed viewport height.
+- [x] Graceful degradation: if terminal width < 80 cols, fall back to modal layout with a status message.
+- [x] Help overlay (`?`) updated with new keybindings.
 
 ## Key Bindings Summary
 

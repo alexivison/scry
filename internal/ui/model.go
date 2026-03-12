@@ -47,6 +47,7 @@ type Model struct {
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
 	refreshErr     string        // shown in status bar when metadata reload fails
+	fileListScroll int           // scroll offset for file list in split mode
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -115,8 +116,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		if err := terminal.CheckDimensions(msg.Width, msg.Height); err != nil {
-			m.tooSmall = true
-			m.sizeErr = err.Error()
+			// In split mode, degrade to modal for terminals that are usable
+			// but too narrow for split (40-79 cols). Only block on truly tiny terminals.
+			if m.State.Layout == model.LayoutSplit && msg.Width >= splitFallbackMinWidth && msg.Height >= splitFallbackMinHeight {
+				m.tooSmall = false
+				m.sizeErr = ""
+			} else {
+				m.tooSmall = true
+				m.sizeErr = err.Error()
+			}
 		} else {
 			m.tooSmall = false
 			m.sizeErr = ""
@@ -145,6 +153,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch {
 			return m.toggleWhitespace()
 		}
+		// Tab toggles layout (except during help/search).
+		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch {
+			return m.toggleLayout()
+		}
 		if m.showHelp {
 			return m.updateHelp(msg)
 		}
@@ -164,12 +176,20 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		if m.State.SelectedFile < len(m.State.Files)-1 {
 			m.State.SelectedFile++
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
 		}
 	case "k", "up":
 		if m.State.SelectedFile > 0 {
 			m.State.SelectedFile--
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
 		}
-	case "enter":
+	case "l", "enter":
 		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 			m.State.FocusPane = model.PanePatch
 			return m.selectFile()
@@ -328,9 +348,10 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 }
 
 // loadSelectedPatch fires an async patch load for the currently selected file
-// if in the patch pane.
+// if in the patch pane or in split layout.
 func (m Model) loadSelectedPatch() (tea.Model, tea.Cmd) {
-	if m.State.FocusPane == model.PanePatch && m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+	needsPatch := m.State.FocusPane == model.PanePatch || m.State.Layout == model.LayoutSplit
+	if needsPatch && m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		return m.selectFile()
 	}
 	return m, nil
@@ -413,12 +434,14 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "h":
 		m.State.FocusPane = model.PaneFiles
-		m.patchViewport = nil
-		m.patchErr = ""
-		m.patchFallback = ""
-		m.searchIndex = nil
-		m.State.SearchQuery = ""
-		m.searchNotFound = ""
+		if m.State.Layout != model.LayoutSplit {
+			m.patchViewport = nil
+			m.patchErr = ""
+			m.patchFallback = ""
+			m.searchIndex = nil
+			m.State.SearchQuery = ""
+			m.searchNotFound = ""
+		}
 	case "j", "down":
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollDown()
@@ -544,6 +567,8 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		b.WriteString(m.viewHelp())
+	} else if m.State.Layout == model.LayoutSplit && m.width >= terminal.MinWidth {
+		b.WriteString(m.viewSplit())
 	} else if m.State.FocusPane == model.PaneSearch || m.State.FocusPane == model.PanePatch {
 		b.WriteString(m.viewPatch())
 	} else {
@@ -574,13 +599,13 @@ func (m Model) viewFileList() string {
 }
 
 func (m Model) renderFileLine(idx int, f model.FileSummary) string {
-	status := statusIcon(f.Status)
+	status := panes.StatusIcon(f.Status)
 	path := f.Path
 	if f.OldPath != "" {
 		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
 	}
 
-	counts := formatCounts(f)
+	counts := panes.FormatCounts(f)
 	prefix := "  "
 	if idx == m.State.SelectedFile {
 		prefix = "> "
@@ -591,34 +616,6 @@ func (m Model) renderFileLine(idx int, f model.FileSummary) string {
 		return selectedStyle.Render(line)
 	}
 	return line
-}
-
-func statusIcon(s model.FileStatus) string {
-	switch s {
-	case model.StatusAdded:
-		return "A"
-	case model.StatusModified:
-		return "M"
-	case model.StatusDeleted:
-		return "D"
-	case model.StatusRenamed:
-		return "R"
-	case model.StatusCopied:
-		return "C"
-	case model.StatusTypeChg:
-		return "T"
-	case model.StatusUnmerged:
-		return "U"
-	default:
-		return "?"
-	}
-}
-
-func formatCounts(f model.FileSummary) string {
-	if f.IsBinary {
-		return "binary"
-	}
-	return fmt.Sprintf("+%d -%d", f.Additions, f.Deletions)
 }
 
 func (m Model) viewStatusBar() string {
@@ -666,6 +663,11 @@ func (m Model) viewSearchInput() string {
 }
 
 func (m Model) viewPatch() string {
+	return m.renderPatch(m.width, m.height-1)
+}
+
+// renderPatch renders the patch pane content at the given dimensions.
+func (m Model) renderPatch(width, height int) string {
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
 	}
@@ -673,7 +675,6 @@ func (m Model) viewPatch() string {
 		return m.patchFallback
 	}
 
-	// Show loading indicator when the selected file is still loading.
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		path := m.State.Files[m.State.SelectedFile].Path
 		if ps, ok := m.State.Patches[path]; ok && ps.Status == model.LoadLoading {
@@ -684,8 +685,8 @@ func (m Model) viewPatch() string {
 	if m.patchViewport == nil {
 		return "No patch loaded."
 	}
-	m.patchViewport.Width = m.width
-	m.patchViewport.Height = m.height - 1 // reserve status bar
+	m.patchViewport.Width = width
+	m.patchViewport.Height = height
 	return m.patchViewport.Render()
 }
 
@@ -693,17 +694,120 @@ func (m Model) viewHelp() string {
 	help := []string{
 		"Key Bindings",
 		"",
-		"  j/k     navigate file list",
-		"  Enter   select file",
+		"  j/k     navigate file list / scroll diff",
+		"  l/Enter select file / focus patch pane",
+		"  h/Esc   back to file list",
 		"  n/p     next/previous hunk",
+		"  /       search in patch",
 		"  r       refresh",
 		"  W       toggle whitespace ignore",
-		"  h/Esc   back to file list",
+		"  Tab     toggle split/modal layout",
 		"  q       quit",
 		"  ?       toggle help",
 	}
 	return strings.Join(help, "\n")
 }
+
+// syncFileListScroll adjusts fileListScroll so the selected file stays visible
+// in split mode. Must be called from Update paths (not View) to persist state.
+func (m *Model) syncFileListScroll() {
+	if m.State.Layout != model.LayoutSplit || m.height == 0 {
+		return
+	}
+	contentHeight := m.height - 1 // reserve status bar
+	m.fileListScroll = panes.EnsureVisible(
+		m.State.SelectedFile, m.fileListScroll, contentHeight, len(m.State.Files),
+	)
+}
+
+// toggleLayout switches between split and modal layout modes.
+func (m Model) toggleLayout() (tea.Model, tea.Cmd) {
+	if m.State.Layout == model.LayoutSplit {
+		m.State.Layout = model.LayoutModal
+		return m, nil
+	}
+	m.State.Layout = model.LayoutSplit
+	m.syncFileListScroll()
+	// Auto-load selected file's patch so the right pane isn't empty.
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// fileListWidth computes the file list pane width: max(25, min(termWidth*0.3, 50)).
+func fileListWidth(termWidth int) int {
+	w := termWidth * 3 / 10
+	if w < 25 {
+		w = 25
+	}
+	if w > 50 {
+		w = 50
+	}
+	return w
+}
+
+// viewSplit renders the split-pane layout with file list on left, divider, and patch on right.
+func (m Model) viewSplit() string {
+	contentHeight := m.height - 1 // reserve status bar
+	if contentHeight <= 0 {
+		return ""
+	}
+
+	flWidth := fileListWidth(m.width)
+	patchWidth := m.width - flWidth - 1 // -1 for divider column
+
+	// Render left pane (file list). Scroll offset is pre-adjusted in Update().
+	filesActive := m.State.FocusPane == model.PaneFiles
+	leftContent, _ := panes.RenderFileList(
+		m.State.Files, m.State.SelectedFile, m.fileListScroll,
+		flWidth, contentHeight, filesActive,
+	)
+
+	// Render right pane (patch).
+	rightContent := m.renderPatch(patchWidth, contentHeight)
+
+	// Split into lines and compose with divider.
+	leftLines := splitIntoLines(leftContent, contentHeight)
+	rightLines := splitIntoLines(rightContent, contentHeight)
+
+	divider := dividerStyle.Render("│")
+
+	rows := make([]string, contentHeight)
+	for i := 0; i < contentHeight; i++ {
+		left := padToWidth(leftLines[i], flWidth)
+		right := rightLines[i]
+		rows[i] = left + divider + right
+	}
+	return strings.Join(rows, "\n")
+}
+
+// splitIntoLines splits content into exactly n lines, padding or truncating as needed.
+func splitIntoLines(content string, n int) []string {
+	raw := strings.Split(content, "\n")
+	lines := make([]string, n)
+	for i := 0; i < n; i++ {
+		if i < len(raw) {
+			lines[i] = raw[i]
+		}
+	}
+	return lines
+}
+
+// padToWidth pads a string with spaces to reach the target visual width.
+func padToWidth(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
+}
+
+// Minimum dimensions for modal fallback when split mode degrades on narrow terminals.
+const (
+	splitFallbackMinWidth  = 40
+	splitFallbackMinHeight = 10
+)
 
 // Styles — kept minimal; will degrade gracefully when color is unavailable.
 var (
@@ -714,4 +818,6 @@ var (
 	searchNotFoundStyle = lipgloss.NewStyle().
 				Background(lipgloss.Color("1")).
 				Foreground(lipgloss.Color("15"))
+	dividerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240"))
 )

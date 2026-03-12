@@ -11,6 +11,14 @@ const (
 	PaneSearch Pane = "search"
 )
 
+// LayoutMode controls the overall pane arrangement.
+type LayoutMode string
+
+const (
+	LayoutModal LayoutMode = "modal"
+	LayoutSplit LayoutMode = "split"
+)
+
 // LoadStatus tracks the lifecycle of an async patch load.
 type LoadStatus string
 
@@ -47,6 +55,7 @@ type AppState struct {
 	IgnoreWhitespace bool
 	SearchQuery      string
 	FocusPane        Pane
+	Layout           LayoutMode
 
 	// Watch mode state (v0.2).
 	WatchEnabled    bool
