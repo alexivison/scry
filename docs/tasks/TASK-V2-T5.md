@@ -8,10 +8,10 @@ V2-T4.
 - `internal/model/` — explicit idle/view-mode state if needed.
 
 ## Deliverables
-- [ ] Startup idle screen when `--watch` is enabled and the initial compare has no divergence.
-- [ ] Idle view includes compare summary, watch interval, last check time, and key hints.
-- [ ] Idle mode does not trigger patch loads.
-- [ ] First detected divergence transitions automatically into the normal review view without restarting the program.
+- [x] Startup idle screen when `--watch` is enabled and the initial compare has no divergence.
+- [x] Idle view includes compare summary, watch interval, last check time, and key hints.
+- [x] Idle mode does not trigger patch loads.
+- [x] First detected divergence transitions automatically into the normal review view without restarting the program.
 
 ## Test Strategy
 - Model tests for idle-at-launch, no-patch-load in idle mode, and one-way transition on divergence.
