@@ -57,6 +57,16 @@ func (m Model) handleDashboardTick() (tea.Model, tea.Cmd) {
 	if !m.State.WorktreeMode || m.worktreeLoader == nil {
 		return m, nil
 	}
+	// Skip refresh during drill-down — the worktree list isn't visible, and
+	// firing LoadWorktrees would set the shared RefreshInFlight flag, which
+	// can conflict with drill-down operations. Keep scheduling ticks so
+	// refresh resumes automatically when the user returns to the dashboard.
+	if m.State.DashboardState.DrillDown {
+		if m.State.WatchEnabled {
+			return m, watch.TickCmd(m.State.WatchInterval)
+		}
+		return m, nil
+	}
 	if m.State.RefreshInFlight {
 		// Skip this tick; schedule next one only if watch is still enabled.
 		if m.State.WatchEnabled {

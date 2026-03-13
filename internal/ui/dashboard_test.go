@@ -591,3 +591,29 @@ func TestDashboardTickSkipsWhenRefreshInFlight(t *testing.T) {
 		t.Error("expected next tick command even when skipping, got nil")
 	}
 }
+
+func TestDashboardTickSkipsDuringDrillDown(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	state.WatchEnabled = true
+	state.WatchInterval = 2 * time.Second
+	state.DashboardState.DrillDown = true
+	state.FocusPane = model.PaneFiles
+	loader := &mockWorktreeLoader{worktrees: dashboardWorktrees()}
+	m := NewModel(state, WithWorktreeLoader(loader))
+	m.width = 80
+	m.height = 24
+
+	result, cmd := m.Update(watch.TickMsg{At: time.Now()})
+	um := result.(Model)
+
+	// Should NOT set RefreshInFlight during drill-down.
+	if um.State.RefreshInFlight {
+		t.Error("RefreshInFlight = true during drill-down, want false (tick should be skipped)")
+	}
+	// Should still schedule next tick so refresh resumes when returning to dashboard.
+	if cmd == nil {
+		t.Error("expected next tick command during drill-down, got nil")
+	}
+}
