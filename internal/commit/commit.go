@@ -85,8 +85,8 @@ func CollectStagedSnapshot(ctx context.Context, git gitexec.GitRunner) (string, 
 	return diff, files, nil
 }
 
-// CheckStagingGuard returns ErrUnstagedChanges when unstaged changes are present
-// alongside staged changes.
+// CheckStagingGuard returns ErrUnstagedChanges when unstaged or untracked
+// changes are present alongside staged changes.
 func CheckStagingGuard(ctx context.Context, git gitexec.GitRunner) error {
 	hasStaged, err := hasChanges(ctx, git, true)
 	if err != nil {
@@ -101,6 +101,14 @@ func CheckStagingGuard(ctx context.Context, git gitexec.GitRunner) error {
 		return fmt.Errorf("check unstaged: %w", err)
 	}
 	if hasUnstaged {
+		return ErrUnstagedChanges
+	}
+
+	untracked, err := hasUntrackedFiles(ctx, git)
+	if err != nil {
+		return fmt.Errorf("check untracked: %w", err)
+	}
+	if untracked {
 		return ErrUnstagedChanges
 	}
 
@@ -125,6 +133,15 @@ func hasChanges(ctx context.Context, git gitexec.GitRunner, cached bool) (bool, 
 		return true, nil
 	}
 	return false, err
+}
+
+// hasUntrackedFiles returns true when untracked files exist in the working tree.
+func hasUntrackedFiles(ctx context.Context, git gitexec.GitRunner) (bool, error) {
+	out, err := git.RunGit(ctx, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
 }
 
 // --- staged diff parsing ---

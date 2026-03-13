@@ -5,6 +5,8 @@ package watch
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -18,8 +20,8 @@ import (
 // Fingerprinter computes a change fingerprint for the current repo state.
 // The fingerprint is compare-mode aware:
 //   - Committed-ref mode: concatenates rev-parse of HEAD and base ref.
-//   - Working-tree mode: additionally incorporates git diff --name-only HEAD
-//     to detect staged/unstaged edits.
+//   - Working-tree mode: additionally hashes the full patch output to detect
+//     any content change, including edits to already-dirty files.
 type Fingerprinter struct {
 	Runner gitexec.GitRunner
 }
@@ -46,14 +48,15 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, baseRef string, working
 		return refSHAs, nil
 	}
 
-	// Working-tree mode: diff against HEAD to capture both staged
-	// and unstaged edits.
-	diffOut, err := f.Runner.RunGit(ctx, "diff", "--name-only", "HEAD")
+	// Working-tree mode: hash the full patch so any content change
+	// (including edits to already-dirty files) changes the fingerprint.
+	diffOut, err := f.Runner.RunGit(ctx, "diff", "--no-ext-diff", "--no-color", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("fingerprint diff: %w", err)
 	}
+	h := sha256.Sum256([]byte(diffOut))
 
-	return refSHAs + ":" + strings.TrimRight(diffOut, "\n"), nil
+	return refSHAs + ":" + hex.EncodeToString(h[:]), nil
 }
 
 // ShouldRefresh returns true when the fingerprint has changed and no

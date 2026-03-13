@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/alexivison/scry/internal/model"
 )
 
@@ -272,6 +274,35 @@ func TestRenderLines(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderHunkHeaderTruncation(t *testing.T) {
+	t.Parallel()
+
+	patch := model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{
+			{
+				Header:   "func veryLongFunctionNameThatExceedsNarrowWidth(ctx context.Context, arg1, arg2 string)",
+				OldStart: 1, OldLen: 3, NewStart: 1, NewLen: 4,
+				Lines: []model.DiffLine{
+					{Kind: model.LineContext, OldNo: intP(1), NewNo: intP(1), Text: "x"},
+				},
+			},
+		},
+	}
+
+	vp := NewPatchViewport(patch)
+	vp.Width = 40 // narrow split pane
+	vp.Height = 5
+	output := vp.Render()
+
+	for _, line := range strings.Split(output, "\n") {
+		w := lipgloss.Width(line)
+		if w > 40 {
+			t.Errorf("line exceeds width 40 (got %d): %q", w, line)
+		}
 	}
 }
 

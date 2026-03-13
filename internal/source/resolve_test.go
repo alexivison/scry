@@ -296,7 +296,7 @@ func TestCompareResolverResolve(t *testing.T) {
 				DiffRange: "up111...feat111",
 			},
 		},
-		"missing upstream falls back to merge-base with origin/main": {
+		"missing upstream falls back to merge-base with origin/main using explicit head": {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "",
@@ -308,9 +308,9 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "", gitErr(128, "fatal: no upstream configured for branch 'feature'")
-				case "merge-base HEAD origin/HEAD":
+				case "merge-base feature origin/HEAD":
 					return "", gitErr(1, "not a valid ref")
-				case "merge-base HEAD origin/main":
+				case "merge-base feature origin/main":
 					return "mb333\n", nil
 				case "rev-parse --verify mb333":
 					return "mb333\n", nil
@@ -323,11 +323,12 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:      stubRepo,
-				BaseRef:   "mb333",
-				HeadRef:   "feat111",
-				MergeBase: "mb555",
-				DiffRange: "mb333...feat111",
+				Repo:         stubRepo,
+				BaseRef:      "mb333",
+				HeadRef:      "feat111",
+				MergeBase:    "mb555",
+				DiffRange:    "mb333...feat111",
+				WatchBaseRef: "origin/main",
 			},
 		},
 		"missing upstream falls back to merge-base with origin/HEAD": {
@@ -342,7 +343,7 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "", gitErr(128, "fatal: no upstream configured for branch 'feature'")
-				case "merge-base HEAD origin/HEAD":
+				case "merge-base feature origin/HEAD":
 					return "mb444\n", nil
 				case "rev-parse --verify mb444":
 					return "mb444\n", nil
@@ -355,11 +356,42 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:      stubRepo,
-				BaseRef:   "mb444",
-				HeadRef:   "feat111",
-				MergeBase: "mb666",
-				DiffRange: "mb444...feat111",
+				Repo:         stubRepo,
+				BaseRef:      "mb444",
+				HeadRef:      "feat111",
+				MergeBase:    "mb666",
+				DiffRange:    "mb444...feat111",
+				WatchBaseRef: "origin/HEAD",
+			},
+		},
+		"missing upstream working tree uses HEAD for merge-base": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "",
+				HeadRef: "", // working tree — no explicit head
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --symbolic-full-name --verify @{upstream}":
+					return "", gitErr(128, "fatal: no upstream configured")
+				case "merge-base HEAD origin/HEAD":
+					return "", gitErr(1, "not a valid ref")
+				case "merge-base HEAD origin/main":
+					return "mb777\n", nil
+				case "rev-parse --verify mb777":
+					return "mb777\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: model.ResolvedCompare{
+				Repo:         stubRepo,
+				BaseRef:      "mb777",
+				WorkingTree:  true,
+				DiffRange:    "mb777",
+				WatchBaseRef: "origin/main",
 			},
 		},
 		"all fallbacks exhausted": {
@@ -374,11 +406,11 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "", gitErr(128, "fatal: no upstream configured")
-				case "merge-base HEAD origin/HEAD":
+				case "merge-base feature origin/HEAD":
 					return "", gitErr(1, "not a valid ref")
-				case "merge-base HEAD origin/main":
+				case "merge-base feature origin/main":
 					return "", gitErr(1, "not a valid ref")
-				case "merge-base HEAD origin/master":
+				case "merge-base feature origin/master":
 					return "", gitErr(1, "not a valid ref")
 				default:
 					return "", gitErr(1, "unexpected: "+key)

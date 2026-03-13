@@ -53,23 +53,24 @@ type CompareResolver struct {
 
 // Resolve turns a CompareRequest into a fully-resolved ResolvedCompare.
 func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest) (model.ResolvedCompare, error) {
-	baseRef, err := cr.resolveBase(ctx, req.BaseRef)
+	br, err := cr.resolveBase(ctx, req.BaseRef, req.HeadRef)
 	if err != nil {
 		return model.ResolvedCompare{}, err
 	}
 
-	baseSHA, err := cr.resolveRef(ctx, baseRef)
+	baseSHA, err := cr.resolveRef(ctx, br.ref)
 	if err != nil {
-		return model.ResolvedCompare{}, fmt.Errorf("failed to resolve base ref %q: %w", baseRef, err)
+		return model.ResolvedCompare{}, fmt.Errorf("failed to resolve base ref %q: %w", br.ref, err)
 	}
 
 	// Working tree mode: when head is omitted, diff base against working tree.
 	if req.HeadRef == "" {
 		return model.ResolvedCompare{
-			Repo:        req.Repo,
-			BaseRef:     baseSHA,
-			WorkingTree: true,
-			DiffRange:   baseSHA,
+			Repo:         req.Repo,
+			BaseRef:      baseSHA,
+			WorkingTree:  true,
+			DiffRange:    baseSHA,
+			WatchBaseRef: br.watchRef,
 		}, nil
 	}
 
@@ -79,9 +80,10 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 	}
 
 	res := model.ResolvedCompare{
-		Repo:    req.Repo,
-		BaseRef: baseSHA,
-		HeadRef: headSHA,
+		Repo:         req.Repo,
+		BaseRef:      baseSHA,
+		HeadRef:      headSHA,
+		WatchBaseRef: br.watchRef,
 	}
 
 	switch req.Mode {
@@ -101,28 +103,41 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 	return res, nil
 }
 
+// baseResult holds the resolved base ref and an optional symbolic ref for
+// watch-mode fingerprinting. watchRef is non-empty only when a fallback was
+// used (upstream returns a symbolic ref that git can re-resolve each tick).
+type baseResult struct {
+	ref      string // resolved ref or SHA to use as base
+	watchRef string // symbolic fallback name for watch fingerprinting (e.g. "origin/main")
+}
+
 // resolveBase resolves the base ref. If empty, it tries @{upstream} first,
-// then falls back to origin/HEAD, origin/main, and origin/master.
-func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef string) (string, error) {
+// then falls back to merge-base of the effective head and the default branch.
+// headRef is the explicit --head value; when empty, HEAD is used for merge-base.
+func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef, headRef string) (baseResult, error) {
 	if baseRef != "" {
-		return baseRef, nil
+		return baseResult{ref: baseRef}, nil
 	}
 
 	out, err := cr.Runner.RunGit(ctx, "rev-parse", "--symbolic-full-name", "--verify", "@{upstream}")
 	if err == nil {
-		return strings.TrimSpace(out), nil
+		return baseResult{ref: strings.TrimSpace(out)}, nil
 	}
 
-	// No upstream configured — fall back to merge-base of HEAD and the
-	// default branch so the diff shows only the branch's own changes.
+	// No upstream — compute merge-base against the effective head.
+	mbHead := "HEAD"
+	if headRef != "" {
+		mbHead = headRef
+	}
+
 	for _, fallback := range []string{"origin/HEAD", "origin/main", "origin/master"} {
-		mb, err := cr.Runner.RunGit(ctx, "merge-base", "HEAD", fallback)
+		mb, err := cr.Runner.RunGit(ctx, "merge-base", mbHead, fallback)
 		if err == nil {
-			return strings.TrimSpace(mb), nil
+			return baseResult{ref: strings.TrimSpace(mb), watchRef: fallback}, nil
 		}
 	}
 
-	return "", fmt.Errorf("no upstream configured and no fallback found; use --base to specify a base ref")
+	return baseResult{}, fmt.Errorf("no upstream configured and no fallback found; use --base to specify a base ref")
 }
 
 // resolveRef resolves a ref to its SHA via rev-parse --verify.
