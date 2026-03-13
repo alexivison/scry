@@ -131,11 +131,58 @@ setup_linked_worktree() {
   $GIT worktree add "$wt" -b wt-branch HEAD~1
 }
 
+# ---------- no-divergence ----------
+setup_no_divergence() {
+  local d="$DEST/no-divergence"
+  mkdir -p "$d" && cd "$d"
+  $GIT init -q -b main
+  echo "same on both sides" > readme.txt
+  $GIT add .
+  $GIT commit -q -m "initial"
+
+  # Create a branch at the same commit — HEAD == base, empty diff.
+  $GIT checkout -q -b feature
+}
+
+# ---------- staged-simple ----------
+setup_staged_simple() {
+  local d="$DEST/staged-simple"
+  mkdir -p "$d" && cd "$d"
+  $GIT init -q
+  echo "package main" > main.go
+  echo "old content" > readme.txt
+  $GIT add .
+  $GIT commit -q -m "initial"
+
+  # Stage some changes but do not commit.
+  echo -e "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }" > main.go
+  echo "new file" > added.txt
+  $GIT add main.go added.txt
+}
+
+# ---------- watch-divergence ----------
+setup_watch_divergence() {
+  local d="$DEST/watch-divergence"
+  mkdir -p "$d" && cd "$d"
+  $GIT init -q
+  echo "line 1" > tracked.txt
+  $GIT add .
+  $GIT commit -q -m "initial"
+  $GIT checkout -q -b feature
+
+  echo "line 2" >> tracked.txt
+  $GIT add .
+  $GIT commit -q -m "feature work"
+}
+
 setup_simple
 setup_rename
 setup_binary
 setup_submodule
 setup_large
 setup_linked_worktree
+setup_no_divergence
+setup_staged_simple
+setup_watch_divergence
 
 echo "Fixtures created in $DEST"

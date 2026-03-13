@@ -25,9 +25,17 @@ Scry does one thing well: show you what changed between two refs, with the same 
 - Lazy patch loading for responsive large diffs
 - Graceful handling of binary files, submodules, and oversized patches
 
+## Features (v0.2)
+
+- **Watch mode** (`--watch`): auto-refresh when the repo state changes, with configurable polling interval (`--watch-interval`)
+- **Idle screen**: shown when watch mode is active but no files have diverged yet; auto-transitions to file list on change
+- **AI commit messages** (`--commit`): generate conventional commit messages via Claude; confirm, edit, or regenerate before committing
+- **Auto-commit** (`--commit-auto`): skip confirmation and commit immediately after message generation (requires `--commit`)
+- **Worktree dashboard** (`--worktrees`): list all git worktrees with dirty state, branch, and latest commit; drill down into any worktree's diff
+
 ## Install
 
-### From source (requires Go 1.24+)
+### From source (requires Go 1.24.2+)
 
 ```bash
 go install github.com/alexivison/scry/cmd/scry@latest
@@ -48,33 +56,54 @@ scry --base v1.0.0 --head feature-branch
 
 # Use two-dot comparison instead of three-dot
 scry --base main --head HEAD --mode two-dot
+
+# Watch mode: auto-refresh on repo changes
+scry --base origin/main --watch
+
+# Watch with custom polling interval
+scry --base origin/main --watch --watch-interval 5s
+
+# AI commit message generation (requires ANTHROPIC_API_KEY)
+scry --base origin/main --commit
+
+# Auto-commit without confirmation prompt
+scry --base origin/main --commit --commit-auto
+
+# Worktree dashboard
+scry --worktrees
 ```
 
 ## Keymap
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Navigate file list |
-| `Enter` | Select file / toggle |
+| `j` / `k` | Navigate file list / worktree list |
+| `l` / `Enter` | Select file / drill into worktree |
+| `h` / `Esc` | Back to file list / dashboard |
 | `n` / `p` | Next / previous hunk |
 | `/` | Search in current patch |
 | `Enter` | Next search match |
 | `N` | Previous search match |
 | `W` | Toggle whitespace-ignore mode |
-| `r` | Refresh (reload from git) |
+| `Tab` | Toggle split/modal layout |
+| `c` | Generate commit message (when `--commit`) |
+| `e` | Edit generated commit message |
+| `r` | Refresh / regenerate commit message |
 | `?` | Show help |
 | `q` | Quit |
 
 ## Requirements
 
+- Go 1.24.2+ (build from source)
 - Git (any reasonably modern version)
 - A terminal with color support
+- `ANTHROPIC_API_KEY` environment variable (only when using `--commit`)
 
-## Non-goals (v0.1)
+## Non-goals
 
 These are intentional omissions, not missing features:
 
-- No staging, committing, rebasing, or conflict resolution
+- No staging or rebasing — commit is opt-in via `--commit`
 - No inline PR comments or review thread management
 - No plugin system
 - No syntax-aware / AST diff mode
