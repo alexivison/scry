@@ -352,17 +352,27 @@ func TestDashboardReturnFromPatchView(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	// Esc from patch view should return to dashboard (not file list).
+	// First Esc from patch view should return to file list (still in drill-down).
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEscape})
 	um := updated.(Model)
-	if um.State.DashboardState.DrillDown {
-		t.Error("DrillDown = true, want false after Esc from patch")
+	if !um.State.DashboardState.DrillDown {
+		t.Error("DrillDown = false, want true after first Esc (back to file list)")
 	}
-	if um.State.FocusPane != model.PaneDashboard {
-		t.Errorf("FocusPane = %q, want %q", um.State.FocusPane, model.PaneDashboard)
+	if um.State.FocusPane != model.PaneFiles {
+		t.Errorf("FocusPane = %q, want %q after first Esc", um.State.FocusPane, model.PaneFiles)
 	}
-	if um.State.DashboardState.SelectedIdx != 1 {
-		t.Errorf("SelectedIdx = %d, want 1 (preserved)", um.State.DashboardState.SelectedIdx)
+
+	// Second Esc from file list should return to dashboard.
+	updated2, _ := um.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	um2 := updated2.(Model)
+	if um2.State.DashboardState.DrillDown {
+		t.Error("DrillDown = true, want false after second Esc")
+	}
+	if um2.State.FocusPane != model.PaneDashboard {
+		t.Errorf("FocusPane = %q, want %q after second Esc", um2.State.FocusPane, model.PaneDashboard)
+	}
+	if um2.State.DashboardState.SelectedIdx != 1 {
+		t.Errorf("SelectedIdx = %d, want 1 (preserved)", um2.State.DashboardState.SelectedIdx)
 	}
 }
 

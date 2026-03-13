@@ -796,10 +796,6 @@ func buildFallback(summary model.FileSummary, err error) string {
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "h":
-		if m.State.WorktreeMode && m.State.DashboardState.DrillDown {
-			m.returnToDashboard()
-			return m, nil
-		}
 		m.State.FocusPane = model.PaneFiles
 		if m.State.Layout != model.LayoutSplit {
 			m.patchViewport = nil
