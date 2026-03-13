@@ -155,13 +155,20 @@ func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // startDrillDown begins loading the diff context for a worktree.
-// When called as a fresh drill-down (from dashboard), it resets focus to PaneFiles.
+// When called as a fresh drill-down (from dashboard), it resets focus to PaneFiles
+// and clears stale data so the previous worktree's files don't flash briefly.
 // When called as a refresh (already in drill-down), it preserves the current focus pane.
 func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 	isRefresh := m.State.DashboardState.DrillDown
 	m.State.DashboardState.DrillDown = true
 	if !isRefresh {
 		m.State.FocusPane = model.PaneFiles
+		m.State.Files = nil
+		m.State.SelectedFile = -1
+		m.State.Patches = make(map[string]model.PatchLoadState)
+		m.patchViewport = nil
+		m.patchErr = ""
+		m.patchFallback = ""
 	}
 
 	if m.drillDownProvider == nil {
