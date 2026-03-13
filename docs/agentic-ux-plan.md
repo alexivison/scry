@@ -63,6 +63,43 @@ This reduces unnecessary git diff calls from N (total files) to M (actually chan
 
 **Files to modify**: `internal/review/cache.go`, `internal/review/refresh.go`, `internal/ui/model.go` (refresh handler)
 
+### 2c. Event-driven refresh via fsnotify (with polling fallback)
+
+**Problem**: The current 2s polling interval means up to 2 seconds of latency before the UI reflects an agent's write. For a "live" viewer, that's noticeable.
+
+**Approach**: Use [fsnotify](https://github.com/fsnotify/fsnotify) to get OS-level file change notifications (inotify on Linux, kqueue on macOS). When a write event fires in the worktree, trigger a refresh immediately instead of waiting for the next poll tick.
+
+**Why fsnotify (not alternatives)**:
+- [rfsnotify](https://github.com/farmergreg/rfsnotify) and [gorph](https://github.com/sean9999/go-fsnotify-recursively) add recursive watching, but we don't need deep recursion — we watch worktree roots and let git figure out what changed
+- [go-fswatch](https://github.com/andreaskoch/go-fswatch) is just polling with a wrapper, no benefit over what we have
+- fsnotify is the standard (13k+ importers), well-maintained, cross-platform
+
+**Design**:
+- Watch the worktree root directory (and `.git` for committed changes)
+- On any write/create/rename event, debounce for 100-200ms (agents often write multiple files in rapid succession), then trigger a refresh
+- Polling remains as automatic fallback for environments where fsnotify doesn't work (NFS mounts, /proc, WSL edge cases, or when the inotify watch limit is hit)
+- Detection: attempt `watcher.Add()` at startup — if it returns an error, log a warning and fall back to polling silently
+- The `watch.interval` config still applies to the polling fallback
+
+**Debounce strategy**: Collect events into a sliding window. Reset the timer on each new event. Only fire the refresh when the window closes (no new events for 150ms). This collapses an agent writing 10 files in 500ms into a single refresh.
+
+```go
+// Simplified event loop
+for {
+    select {
+    case event := <-watcher.Events:
+        debounceTimer.Reset(150 * time.Millisecond)
+    case <-debounceTimer.C:
+        triggerRefresh()
+    case err := <-watcher.Errors:
+        log.Warn("fsnotify error, falling back to polling", err)
+        fallbackToPolling()
+    }
+}
+```
+
+**Files to modify**: `internal/review/refresh.go` (new watcher setup + debounce loop), `internal/app/bootstrap.go` (initialize watcher or polling), `go.mod` (add `github.com/fsnotify/fsnotify`)
+
 ---
 
 ## 3. Worktree Dashboard Enhancements
@@ -230,8 +267,9 @@ Flags removed entirely:
 6. **Config file** (5d) — move power-user knobs out of flags
 7. **Delete worktree** (3d) — natural cleanup action for finished agent worktrees
 8. **Diff-aware cache** (2b) — performance optimization for large diffs
-9. **Dashboard preview** (3c) — nice to have
-10. **Export flagged** (4c) — the bridge to external tools
+9. **Event-driven refresh** (2c) — near-instant UI updates via fsnotify, polling fallback
+10. **Dashboard preview** (3c) — nice to have
+11. **Export flagged** (4c) — the bridge to external tools
 
 ## What This Doesn't Do (Intentionally)
 
