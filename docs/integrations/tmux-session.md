@@ -27,7 +27,18 @@ tmux split-window -h "cd /path/to/repo && scry --base origin/main --head HEAD --
 +-------------------+------------------+
 ```
 
+## Commit integration
+
+With `--commit`, you can generate and execute commits without leaving the tmux pane:
+
+```bash
+tmux split-window -h "cd /path/to/repo && scry --base origin/main --head HEAD --watch --watch-interval 2s --commit"
+```
+
+Press `c` in the file list to generate a commit message, `e` to edit, `Enter` to confirm, or `Esc` to cancel.
+
 ## Notes
 
-- The `--watch` flag and idle screen are planned for v0.2.
-- In v0.1, you can launch Scry manually and press `r` to refresh after making changes.
+- The `--watch` flag and idle screen are fully supported. When no files have diverged, Scry shows an idle screen that auto-transitions to the file list on first detected change.
+- The `--commit` flag requires an `ANTHROPIC_API_KEY` environment variable.
+- Scry recovers cleanly from terminal resize events within the tmux pane.

@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Scry.
 
 ### Prerequisites
 
-- Go 1.24 or later
+- Go 1.24.2 or later
 - Git
 
 ### Build and test
@@ -37,17 +37,25 @@ go test -race ./...
 Scry has strict module boundaries. Please respect them:
 
 - **`model`**, **`source`**, **`diff`**, **`search`**, **`review`** — UI-agnostic core logic. No imports from `ui`.
+- **`watch`** — Fingerprint-based change detection for watch mode. UI-agnostic.
+- **`commit`** — AI commit message generation and git commit execution. UI-agnostic.
 - **`ui`** — Rendering and key handling only. No direct git command execution.
 - **`gitexec`** — The only package that runs subprocess commands.
 - **`app`** — Wiring only. No business logic.
 
 See [SPEC.md](docs/SPEC.md) for the full architecture reference.
 
+### API keys
+
+The `--commit` feature requires an `ANTHROPIC_API_KEY` environment variable. Tests for the Claude provider use `httptest` stubs and do not require a real key.
+
 ### Testing
 
 - Every feature needs tests. See the task breakdown in [docs/SPEC.md](docs/SPEC.md) for expected test patterns.
-- Use `testdata/repos/` fixture repositories for integration tests.
+- Use `testdata/repos/` fixture repositories for integration tests. Run `testdata/repos/setup.sh <dir>` to create fixtures.
 - Golden tests go in `testdata/golden/`.
+- Smoke tests in `internal/smoke/` exercise cross-package flows against real fixture repos.
+- Run `go test -race ./...` to verify concurrency safety.
 
 ### Scope discipline
 

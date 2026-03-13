@@ -9,10 +9,10 @@ V2-T5, V2-T8.
 - End-to-end smoke coverage for watch mode, idle transition, and commit flow.
 
 ## Deliverables
-- [ ] Fixture coverage: no-divergence watch startup, divergence after fingerprint change, commit-generation prompt fixtures, commit execution success/failure, linked-worktree watch behavior.
-- [ ] README/CONTRIBUTING updated for new flags, API-key requirements, and minimum Go version.
-- [ ] tmux integration doc updated from planned to supported.
-- [ ] End-to-end verification checklist.
+- [x] Fixture coverage: no-divergence watch startup, divergence after fingerprint change, commit-generation prompt fixtures, commit execution success/failure, linked-worktree watch behavior.
+- [x] README/CONTRIBUTING updated for new flags, API-key requirements, and minimum Go version.
+- [x] tmux integration doc updated from planned to supported.
+- [x] End-to-end verification checklist.
 
 ## Test Strategy
 - Full-package tests across watch, ui, commit, and app.
