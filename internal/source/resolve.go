@@ -113,11 +113,12 @@ func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef string) (str
 		return strings.TrimSpace(out), nil
 	}
 
-	// No upstream configured — try common default branch refs.
+	// No upstream configured — fall back to merge-base of HEAD and the
+	// default branch so the diff shows only the branch's own changes.
 	for _, fallback := range []string{"origin/HEAD", "origin/main", "origin/master"} {
-		_, err := cr.Runner.RunGit(ctx, "rev-parse", "--verify", fallback)
+		mb, err := cr.Runner.RunGit(ctx, "merge-base", "HEAD", fallback)
 		if err == nil {
-			return fallback, nil
+			return strings.TrimSpace(mb), nil
 		}
 	}
 

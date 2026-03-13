@@ -296,7 +296,7 @@ func TestCompareResolverResolve(t *testing.T) {
 				DiffRange: "up111...feat111",
 			},
 		},
-		"missing upstream falls back to origin/main": {
+		"missing upstream falls back to merge-base with origin/main": {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "",
@@ -308,27 +308,29 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "", gitErr(128, "fatal: no upstream configured for branch 'feature'")
-				case "rev-parse --verify origin/HEAD":
-					return "", gitErr(128, "fatal: Needed a single revision")
-				case "rev-parse --verify origin/main":
-					return "fallback111\n", nil
+				case "merge-base HEAD origin/HEAD":
+					return "", gitErr(1, "not a valid ref")
+				case "merge-base HEAD origin/main":
+					return "mb333\n", nil
+				case "rev-parse --verify mb333":
+					return "mb333\n", nil
 				case "rev-parse --verify feature":
 					return "feat111\n", nil
-				case "merge-base fallback111 feat111":
-					return "mb333\n", nil
+				case "merge-base mb333 feat111":
+					return "mb555\n", nil
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
 			},
 			want: model.ResolvedCompare{
 				Repo:      stubRepo,
-				BaseRef:   "fallback111",
+				BaseRef:   "mb333",
 				HeadRef:   "feat111",
-				MergeBase: "mb333",
-				DiffRange: "fallback111...feat111",
+				MergeBase: "mb555",
+				DiffRange: "mb333...feat111",
 			},
 		},
-		"missing upstream falls back to origin/HEAD": {
+		"missing upstream falls back to merge-base with origin/HEAD": {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "",
@@ -340,22 +342,24 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "", gitErr(128, "fatal: no upstream configured for branch 'feature'")
-				case "rev-parse --verify origin/HEAD":
-					return "originhead111\n", nil
+				case "merge-base HEAD origin/HEAD":
+					return "mb444\n", nil
+				case "rev-parse --verify mb444":
+					return "mb444\n", nil
 				case "rev-parse --verify feature":
 					return "feat111\n", nil
-				case "merge-base originhead111 feat111":
-					return "mb444\n", nil
+				case "merge-base mb444 feat111":
+					return "mb666\n", nil
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
 			},
 			want: model.ResolvedCompare{
 				Repo:      stubRepo,
-				BaseRef:   "originhead111",
+				BaseRef:   "mb444",
 				HeadRef:   "feat111",
-				MergeBase: "mb444",
-				DiffRange: "originhead111...feat111",
+				MergeBase: "mb666",
+				DiffRange: "mb444...feat111",
 			},
 		},
 		"all fallbacks exhausted": {
@@ -370,12 +374,12 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "", gitErr(128, "fatal: no upstream configured")
-				case "rev-parse --verify origin/HEAD":
-					return "", gitErr(128, "fatal: Needed a single revision")
-				case "rev-parse --verify origin/main":
-					return "", gitErr(128, "fatal: Needed a single revision")
-				case "rev-parse --verify origin/master":
-					return "", gitErr(128, "fatal: Needed a single revision")
+				case "merge-base HEAD origin/HEAD":
+					return "", gitErr(1, "not a valid ref")
+				case "merge-base HEAD origin/main":
+					return "", gitErr(1, "not a valid ref")
+				case "merge-base HEAD origin/master":
+					return "", gitErr(1, "not a valid ref")
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
