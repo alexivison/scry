@@ -305,59 +305,55 @@ Grouped into phases. Each phase is independently shippable.
 - **Information density over decoration**: Every pixel of chrome should communicate something
 - **Responsive to the bone**: No hardcoded widths, every pane adapts to terminal size, graceful degradation at every breakpoint
 
-### 6a. Cohesive color palette & theme system
+### 6a. Terminal-native color palette
 
-**Current state**: Scattered `lipgloss.Color("2")`, `Color("8")`, etc. across 4 files. No central palette. Colors are raw ANSI numbers.
+**Current state**: Scattered `lipgloss.Color("2")`, `Color("8")`, etc. across 4 files. No central palette. Colors are raw ANSI numbers, which is actually *almost* right — the issue is they're duplicated and inconsistent, not that they're wrong.
 
-**Change**: Define a central `Theme` struct in a new `internal/ui/theme/theme.go`:
+**Philosophy**: Scry should inherit the terminal's colors, not fight them. The user already picked a color scheme they like (Catppuccin, Dracula, Solarized, whatever). We use the standard 16 ANSI colors semantically and let the terminal theme do the rest. No `AdaptiveColor`, no hardcoded hex values, no light/dark detection.
+
+**Change**: Consolidate all color references into a central `internal/ui/theme/theme.go` that maps **semantic roles** to **ANSI color names**:
 
 ```go
-type Theme struct {
-    // Chrome
-    StatusBarBg     lipgloss.AdaptiveColor
-    StatusBarFg     lipgloss.AdaptiveColor
-    DividerFg       lipgloss.AdaptiveColor
-    BorderFg        lipgloss.AdaptiveColor
+// theme.go — semantic color mapping using standard ANSI 16-color palette.
+// Colors inherit from the user's terminal theme. We never hardcode hex/256 values.
+package theme
 
-    // Diff
-    AddedFg         lipgloss.AdaptiveColor
-    AddedBg         lipgloss.AdaptiveColor  // subtle background tint
-    DeletedFg       lipgloss.AdaptiveColor
-    DeletedBg       lipgloss.AdaptiveColor  // subtle background tint
-    HunkHeaderFg    lipgloss.AdaptiveColor
-    HunkHeaderBg    lipgloss.AdaptiveColor
-    GutterFg        lipgloss.AdaptiveColor
-    ContextFg       lipgloss.AdaptiveColor
+import "github.com/charmbracelet/lipgloss"
 
-    // File list
-    SelectedBg      lipgloss.AdaptiveColor
-    SelectedFg      lipgloss.AdaptiveColor
-    StatusAddedFg   lipgloss.AdaptiveColor  // green for "A"
-    StatusDeletedFg lipgloss.AdaptiveColor  // red for "D"
-    StatusModifiedFg lipgloss.AdaptiveColor // yellow for "M"
-    CountAddFg      lipgloss.AdaptiveColor  // green for +N
-    CountDelFg      lipgloss.AdaptiveColor  // red for -N
+// Standard ANSI colors — the terminal decides what these actually look like.
+const (
+    Red     = lipgloss.Color("1")
+    Green   = lipgloss.Color("2")
+    Yellow  = lipgloss.Color("3")
+    Blue    = lipgloss.Color("4")
+    Magenta = lipgloss.Color("5")
+    Cyan    = lipgloss.Color("6")
+    White   = lipgloss.Color("7")
+    BrightBlack = lipgloss.Color("8")  // dim/muted text
+)
 
-    // Freshness (from section 1)
-    FreshHotFg      lipgloss.AdaptiveColor
-    FreshWarmFg     lipgloss.AdaptiveColor
-
-    // Dashboard
-    CleanFg         lipgloss.AdaptiveColor
-    DirtyFg         lipgloss.AdaptiveColor
-    HashFg          lipgloss.AdaptiveColor
-
-    // Search
-    MatchBg         lipgloss.AdaptiveColor
-    MatchFg         lipgloss.AdaptiveColor
-    NotFoundBg      lipgloss.AdaptiveColor
-    NotFoundFg      lipgloss.AdaptiveColor
-}
+// Semantic roles — these map intent to ANSI color.
+var (
+    Added       = Green
+    Deleted     = Red
+    Modified    = Yellow
+    HunkHeader  = Cyan
+    Muted       = BrightBlack  // gutters, hashes, inactive elements
+    Accent      = Blue         // active borders, focused elements
+    Warning     = Yellow
+    Error       = Red
+)
 ```
 
-Use `lipgloss.AdaptiveColor{Light: "...", Dark: "..."}` so the palette works on both light and dark terminal backgrounds. The default theme targets dark backgrounds (the 90% case for developer terminals), with a light theme as a config option.
+All existing style definitions in `panes/*.go` and `model.go` update to reference `theme.Added`, `theme.Muted`, etc. instead of `lipgloss.Color("2")`. This is a refactor, not a behavior change — but it gives us one place to understand the color story.
 
-**Files**: new `internal/ui/theme/theme.go`, update all style vars in `panes/*.go` and `model.go`
+**What we don't do**:
+- No `AdaptiveColor{Light: ..., Dark: ...}` — the terminal theme handles this
+- No 256-color or truecolor palette — ANSI 16 is universally supported and inherits the user's theme
+- No custom theme config — if you want different colors, change your terminal theme
+- Exception: the status bar background (`Color("235")`) is the one place we use a 256-color value. We keep this as a fallback but make it `BrightBlack` background for basic terminals.
+
+**Files**: new `internal/ui/theme/theme.go`, update style vars in `panes/*.go` and `model.go` to use semantic names
 
 ### 6b. Structured pane layout with borders
 
@@ -385,7 +381,7 @@ Key details:
 - **Pane titles**: File list shows "Files", patch pane shows the current filename — you always know what you're looking at
 - **Pane footers**: File list shows file count + freshness summary; patch shows hunk position + scroll percentage
 - **Border style**: `lipgloss.RoundedBorder()` for modern terminals, `lipgloss.NormalBorder()` as fallback
-- **Active pane highlight**: The focused pane's border uses the accent color; inactive pane borders are dimmed
+- **Active pane highlight**: The focused pane's border uses `theme.Accent` (ANSI blue — inherits from terminal); inactive pane borders use `theme.Muted` (ANSI bright black)
 - The single `│` divider between panes is absorbed into the border — no separate divider column needed
 
 **Files**: `internal/ui/model.go` (viewSplit, viewPatch, viewFileList), `internal/ui/panes/*.go`
@@ -396,11 +392,9 @@ Key details:
 
 **Changes**:
 
-1. **Background tinting for added/deleted lines**: Subtle green background for `+` lines, subtle red for `-` lines (like GitHub's diff view). This is the single biggest visual improvement — it makes diffs scannable at a glance. Use `lipgloss.AdaptiveColor` to pick appropriate tint levels for the terminal's color depth.
+1. **Styled gutter**: Dim the line numbers using `theme.Muted` (ANSI bright black), add a thin `│` separator between gutter and content. The gutter should feel like a margin, not data.
 
-2. **Styled gutter**: Dim the line numbers (gray foreground), add a thin separator between gutter and content. The gutter should feel like a margin, not data.
-
-3. **Hunk separators**: Between hunks, render a horizontal rule (`───`) with the hunk header text. This visually breaks the diff into scannable sections instead of a continuous stream.
+2. **Hunk separators**: Between hunks, render a horizontal rule (`───`) with the hunk header text. This visually breaks the diff into scannable sections instead of a continuous stream.
 
 ```
  ─── @@ -42,8 +42,12 @@ func HandleLogin() ───────────────
@@ -415,9 +409,9 @@ Key details:
  ─── @@ -67,3 +71,5 @@ func HandleLogout() ──────────────
 ```
 
-4. **Scroll position indicator**: A thin scroll indicator on the right edge of the patch pane, like a scrollbar. Show it as a highlighted segment of the border — position maps to `scrollOffset / totalLines`.
+3. **Scroll position indicator**: A thin scroll indicator on the right edge of the patch pane, like a scrollbar. Show it as a highlighted segment of the border — position maps to `scrollOffset / totalLines`.
 
-**Files**: `internal/ui/panes/patch.go` (all rendering), `internal/ui/theme/theme.go` (diff colors)
+**Files**: `internal/ui/panes/patch.go` (all rendering), `internal/ui/theme/theme.go` (semantic color refs)
 
 ### 6d. File list visual upgrade
 
@@ -429,7 +423,7 @@ Key details:
 
 2. **Colored counts**: `+N` in green, `-N` in red (like git diff --stat). Currently both are the same default color.
 
-3. **Selection highlight**: Replace bold+reverse with a subtle background highlight (the accent color at ~20% intensity). This is less harsh than reverse video and looks more modern.
+3. **Selection highlight**: Keep reverse video (it inherits from the terminal theme and works universally) but drop the bold — `Reverse(true)` alone is cleaner and less harsh.
 
 4. **Directory grouping** (optional, configurable): Group files by directory with a dim header:
 ```
