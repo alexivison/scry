@@ -99,7 +99,19 @@ type WorktreeInfo struct {
 
 When a worktree is selected (highlighted but not drilled into), show a preview in a side panel: top 5 changed files with their +/- counts. This gives you a quick peek without committing to a full drill-down.
 
-**Files to modify**: `internal/model/worktree.go`, `internal/gitexec/worktree.go`, `internal/ui/panes/dashboard.go`, `internal/ui/dashboard.go`
+### 3d. Delete worktree from dashboard
+
+When an agent finishes work in a worktree, clean it up without leaving Scry.
+
+- `d` on a selected worktree opens a confirmation prompt ("Delete worktree <branch>? y/n")
+- If the worktree is dirty, show a stronger warning ("Worktree has uncommitted changes. Force delete? y/n") — maps to `git worktree remove --force`
+- Cannot delete the main worktree (the non-linked one) — `d` is a no-op with a status bar message
+- After deletion, refresh the worktree list and reconcile selection (move to nearest neighbor)
+- Uses `git worktree remove <path>` under the hood
+
+**Implementation**: Add `WorktreeRemove(ctx, runner, path, force)` to `internal/gitexec/worktree.go`. Add `ConfirmDelete` state + selected worktree path to `DashboardState`. Wire `d` → confirm → execute → refresh in `internal/ui/dashboard.go`.
+
+**Files to modify**: `internal/gitexec/worktree.go`, `internal/model/worktree.go`, `internal/ui/dashboard.go`, `internal/ui/panes/dashboard.go`
 
 ---
 
@@ -138,9 +150,10 @@ internal/db/migrate.go
 2. **Scroll preservation** (2a) — quality of life, prevents jarring viewport jumps
 3. **File flags** (4a, 4b) — lightweight interaction model
 4. **Dashboard enhancements** (3a, 3b) — improves multi-agent visibility
-5. **Diff-aware cache** (2b) — performance optimization for large diffs
-6. **Dashboard preview** (3c) — nice to have
-7. **Export flagged** (4c) — the bridge to external tools
+5. **Delete worktree** (3d) — natural cleanup action for finished agent worktrees
+6. **Diff-aware cache** (2b) — performance optimization for large diffs
+7. **Dashboard preview** (3c) — nice to have
+8. **Export flagged** (4c) — the bridge to external tools
 
 ## What This Doesn't Do (Intentionally)
 
