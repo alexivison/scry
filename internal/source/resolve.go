@@ -101,17 +101,27 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 	return res, nil
 }
 
-// resolveBase resolves the base ref. If empty, it resolves @{upstream}.
+// resolveBase resolves the base ref. If empty, it tries @{upstream} first,
+// then falls back to origin/HEAD, origin/main, and origin/master.
 func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef string) (string, error) {
 	if baseRef != "" {
 		return baseRef, nil
 	}
 
 	out, err := cr.Runner.RunGit(ctx, "rev-parse", "--symbolic-full-name", "--verify", "@{upstream}")
-	if err != nil {
-		return "", fmt.Errorf("no upstream configured; use --base to specify a base ref: %w", err)
+	if err == nil {
+		return strings.TrimSpace(out), nil
 	}
-	return strings.TrimSpace(out), nil
+
+	// No upstream configured — try common default branch refs.
+	for _, fallback := range []string{"origin/HEAD", "origin/main", "origin/master"} {
+		_, err := cr.Runner.RunGit(ctx, "rev-parse", "--verify", fallback)
+		if err == nil {
+			return fallback, nil
+		}
+	}
+
+	return "", fmt.Errorf("no upstream configured and no fallback found; use --base to specify a base ref")
 }
 
 // resolveRef resolves a ref to its SHA via rev-parse --verify.

@@ -296,7 +296,7 @@ func TestCompareResolverResolve(t *testing.T) {
 				DiffRange: "up111...feat111",
 			},
 		},
-		"missing upstream with empty base": {
+		"missing upstream falls back to origin/main": {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "",
@@ -308,6 +308,74 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "", gitErr(128, "fatal: no upstream configured for branch 'feature'")
+				case "rev-parse --verify origin/HEAD":
+					return "", gitErr(128, "fatal: Needed a single revision")
+				case "rev-parse --verify origin/main":
+					return "fallback111\n", nil
+				case "rev-parse --verify feature":
+					return "feat111\n", nil
+				case "merge-base fallback111 feat111":
+					return "mb333\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: model.ResolvedCompare{
+				Repo:      stubRepo,
+				BaseRef:   "fallback111",
+				HeadRef:   "feat111",
+				MergeBase: "mb333",
+				DiffRange: "fallback111...feat111",
+			},
+		},
+		"missing upstream falls back to origin/HEAD": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "",
+				HeadRef: "feature",
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --symbolic-full-name --verify @{upstream}":
+					return "", gitErr(128, "fatal: no upstream configured for branch 'feature'")
+				case "rev-parse --verify origin/HEAD":
+					return "originhead111\n", nil
+				case "rev-parse --verify feature":
+					return "feat111\n", nil
+				case "merge-base originhead111 feat111":
+					return "mb444\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: model.ResolvedCompare{
+				Repo:      stubRepo,
+				BaseRef:   "originhead111",
+				HeadRef:   "feat111",
+				MergeBase: "mb444",
+				DiffRange: "originhead111...feat111",
+			},
+		},
+		"all fallbacks exhausted": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "",
+				HeadRef: "feature",
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --symbolic-full-name --verify @{upstream}":
+					return "", gitErr(128, "fatal: no upstream configured")
+				case "rev-parse --verify origin/HEAD":
+					return "", gitErr(128, "fatal: Needed a single revision")
+				case "rev-parse --verify origin/main":
+					return "", gitErr(128, "fatal: Needed a single revision")
+				case "rev-parse --verify origin/master":
+					return "", gitErr(128, "fatal: Needed a single revision")
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
@@ -315,11 +383,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			wantErr: true,
 			errCheck: func(t *testing.T, err error) {
 				t.Helper()
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				// Should mention upstream in the error message
-				if !strings.Contains(err.Error(), "upstream") {
+				if !strings.Contains(err.Error(), "no upstream configured") {
 					t.Errorf("error = %q, want mention of upstream", err.Error())
 				}
 			},
