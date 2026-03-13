@@ -266,10 +266,10 @@ func TestCompareResolverResolve(t *testing.T) {
 				DiffRange: "base111...head111",
 			},
 		},
-		"default base resolves to upstream": {
+		"default base resolves to merge-base with upstream": {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
-				BaseRef: "", // default → @{upstream}
+				BaseRef: "", // default → merge-base(head, @{upstream})
 				HeadRef: "feature",
 				Mode:    model.CompareThreeDot,
 			},
@@ -278,22 +278,25 @@ func TestCompareResolverResolve(t *testing.T) {
 				switch key {
 				case "rev-parse --symbolic-full-name --verify @{upstream}":
 					return "refs/remotes/origin/main\n", nil
-				case "rev-parse --verify refs/remotes/origin/main":
-					return "up111\n", nil
+				case "merge-base feature refs/remotes/origin/main":
+					return "mbup111\n", nil
+				case "rev-parse --verify mbup111":
+					return "mbup111\n", nil
 				case "rev-parse --verify feature":
 					return "feat111\n", nil
-				case "merge-base up111 feat111":
+				case "merge-base mbup111 feat111":
 					return "mb222\n", nil
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:      stubRepo,
-				BaseRef:   "up111",
-				HeadRef:   "feat111",
-				MergeBase: "mb222",
-				DiffRange: "up111...feat111",
+				Repo:         stubRepo,
+				BaseRef:      "mbup111",
+				HeadRef:      "feat111",
+				MergeBase:    "mb222",
+				DiffRange:    "mbup111...feat111",
+				WatchBaseRef: "refs/remotes/origin/main",
 			},
 		},
 		"missing upstream falls back to merge-base with origin/main using explicit head": {

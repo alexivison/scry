@@ -121,7 +121,18 @@ func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef, headRef str
 
 	out, err := cr.Runner.RunGit(ctx, "rev-parse", "--symbolic-full-name", "--verify", "@{upstream}")
 	if err == nil {
-		return baseResult{ref: strings.TrimSpace(out)}, nil
+		upstream := strings.TrimSpace(out)
+		// Use merge-base so the diff shows only the branch's own changes,
+		// not the full 2-way divergence with upstream.
+		mbHead := "HEAD"
+		if headRef != "" {
+			mbHead = headRef
+		}
+		mb, mbErr := cr.Runner.RunGit(ctx, "merge-base", mbHead, upstream)
+		if mbErr == nil {
+			return baseResult{ref: strings.TrimSpace(mb), watchRef: upstream}, nil
+		}
+		return baseResult{ref: upstream, watchRef: upstream}, nil
 	}
 
 	// No upstream — compute merge-base against the effective head.
