@@ -97,6 +97,9 @@ func TestCheckStagingGuard_onlyStaged(t *testing.T) {
 		if strings.Contains(key, "--cached") {
 			return "", &gitexec.GitError{ExitCode: 1, Stderr: ""} // staged changes
 		}
+		if strings.Contains(key, "ls-files") {
+			return "", nil // no untracked files
+		}
 		return "", nil // no unstaged changes
 	}}
 
@@ -126,6 +129,26 @@ func TestCheckStagingGuard_bothStagedAndUnstaged(t *testing.T) {
 
 	git := &mockGitRunner{fn: func(_ context.Context, args ...string) (string, error) {
 		return "", &gitexec.GitError{ExitCode: 1, Stderr: ""} // both have changes
+	}}
+
+	err := CheckStagingGuard(context.Background(), git)
+	if !errors.Is(err, ErrUnstagedChanges) {
+		t.Fatalf("error = %v, want ErrUnstagedChanges", err)
+	}
+}
+
+func TestCheckStagingGuard_stagedPlusUntracked(t *testing.T) {
+	t.Parallel()
+
+	git := &mockGitRunner{fn: func(_ context.Context, args ...string) (string, error) {
+		key := strings.Join(args, " ")
+		if strings.Contains(key, "--cached") {
+			return "", &gitexec.GitError{ExitCode: 1, Stderr: ""} // staged changes
+		}
+		if strings.Contains(key, "ls-files") {
+			return "untracked.txt\n", nil // untracked files present
+		}
+		return "", nil // no unstaged tracked changes
 	}}
 
 	err := CheckStagingGuard(context.Background(), git)

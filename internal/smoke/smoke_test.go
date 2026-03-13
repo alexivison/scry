@@ -246,6 +246,10 @@ func TestSmoke_CommitExecutionSuccess(t *testing.T) {
 	runner := copyFixture(t, "staged-simple")
 	ctx := context.Background()
 
+	// Ensure git identity is configured (CI runners may lack a global config).
+	runner.RunGit(ctx, "config", "user.email", "test@test.com")
+	runner.RunGit(ctx, "config", "user.name", "Test")
+
 	executor := &commit.Executor{Git: runner}
 	sha, err := executor.Execute(ctx, "feat: smoke test commit")
 	if err != nil {

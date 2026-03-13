@@ -76,8 +76,9 @@ type Model struct {
 	refreshErr     string        // shown in status bar when metadata reload fails
 	fileListScroll int           // scroll offset for file list in split mode
 
-	commitProvider CommitProvider // optional provider for AI commit messages
-	commitExecutor CommitExecutor // optional executor for git commit
+	commitProvider CommitProvider      // optional provider for AI commit messages
+	commitExecutor CommitExecutor      // optional executor for git commit
+	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
 	fingerprinter WatchFingerprinter // optional watch mode fingerprinter
 	watchBaseRef  string             // symbolic base ref for fingerprint checks
@@ -345,12 +346,23 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// cancelCommit cancels any in-flight commit generation request.
+func (m *Model) cancelCommit() {
+	if m.commitCancel != nil {
+		m.commitCancel()
+		m.commitCancel = nil
+	}
+}
+
 // startCommitGeneration transitions to the commit pane and fires an async generation.
 func (m Model) startCommitGeneration() (tea.Model, tea.Cmd) {
+	m.cancelCommit()
 	m.State.FocusPane = model.PaneCommit
 	gen := m.State.CommitState.Generation + 1
 	m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
-	return m, m.buildCommitCmd(gen)
+	cmd, cancel := m.buildCommitCmd(gen)
+	m.commitCancel = cancel
+	return m, cmd
 }
 
 // handleCommitGenerated processes the result of an async commit generation.
@@ -394,6 +406,7 @@ func (m Model) handleCommitExecuted(msg CommitExecutedMsg) (tea.Model, tea.Cmd) 
 func (m Model) handleCommitEdited(msg CommitEditedMsg) (tea.Model, tea.Cmd) {
 	if msg.Err != nil {
 		m.State.CommitState.Err = msg.Err
+		m.State.CommitState.GeneratedMessage = "" // prevent committing stale pre-edit text
 		return m, nil
 	}
 	m.State.CommitState.GeneratedMessage = msg.Message
@@ -421,16 +434,21 @@ func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.startEditor()
 		}
 	case "esc":
+		m.cancelCommit()
 		m.State.FocusPane = model.PaneFiles
 		// Bump generation to invalidate any in-flight goroutine from the cancelled run.
 		m.State.CommitState = model.CommitState{Generation: m.State.CommitState.Generation + 1}
 	case "r":
 		if m.commitProvider != nil && m.State.CommitState.CommitSHA == "" {
+			m.cancelCommit()
 			gen := m.State.CommitState.Generation + 1
 			m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
-			return m, m.buildCommitCmd(gen)
+			cmd, cancel := m.buildCommitCmd(gen)
+			m.commitCancel = cancel
+			return m, cmd
 		}
 	case "q":
+		m.cancelCommit()
 		m.quitting = true
 		return m, tea.Quit
 	}
@@ -474,13 +492,16 @@ func (m Model) startEditor() (tea.Model, tea.Cmd) {
 	})
 }
 
-// buildCommitCmd creates an async Cmd that calls the commit provider.
-func (m Model) buildCommitCmd(gen int) tea.Cmd {
+// buildCommitCmd creates an async Cmd with a cancellable context and returns
+// both the command and the cancel func for the caller to store on the model.
+func (m Model) buildCommitCmd(gen int) (tea.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
 	provider := m.commitProvider
-	return func() tea.Msg {
-		msg, err := provider.Generate(context.Background())
+	cmd := func() tea.Msg {
+		msg, err := provider.Generate(ctx)
 		return CommitGeneratedMsg{Message: msg, Err: err, Generation: gen}
 	}
+	return cmd, cancel
 }
 
 // --- Watch mode handlers ---

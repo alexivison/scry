@@ -12,13 +12,17 @@ import (
 // --- mock commit provider ---
 
 type mockCommitProvider struct {
-	message string
-	err     error
-	calls   int
+	message    string
+	err        error
+	calls      int
+	generateFn func(ctx context.Context) (string, error) // optional override
 }
 
-func (m *mockCommitProvider) Generate(_ context.Context) (string, error) {
+func (m *mockCommitProvider) Generate(ctx context.Context) (string, error) {
 	m.calls++
+	if m.generateFn != nil {
+		return m.generateFn(ctx)
+	}
 	return m.message, m.err
 }
 
@@ -619,6 +623,65 @@ func TestCommitExecution_editedMessageUpdatesState(t *testing.T) {
 
 	if um.State.CommitState.GeneratedMessage != "fix: edited message" {
 		t.Errorf("GeneratedMessage = %q, want %q", um.State.CommitState.GeneratedMessage, "fix: edited message")
+	}
+}
+
+func TestCommitExecution_editorErrorClearsMessage(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	if m.State.CommitState.GeneratedMessage == "" {
+		t.Fatal("precondition: GeneratedMessage should be non-empty")
+	}
+
+	editMsg := CommitEditedMsg{Err: fmt.Errorf("editor crashed")}
+	result, _ := m.Update(editMsg)
+	um := result.(Model)
+
+	if um.State.CommitState.GeneratedMessage != "" {
+		t.Errorf("GeneratedMessage = %q, want empty after editor error", um.State.CommitState.GeneratedMessage)
+	}
+	if um.State.CommitState.Err == nil {
+		t.Error("Err should be set after editor error")
+	}
+}
+
+func TestCommitUI_EscCancelsContext(t *testing.T) {
+	t.Parallel()
+
+	var generateCtx context.Context
+	provider := &mockCommitProvider{
+		generateFn: func(ctx context.Context) (string, error) {
+			generateCtx = ctx
+			return "msg", nil
+		},
+	}
+	s := commitState()
+	m := NewModel(s, WithCommitProvider(provider))
+	m.width = 100
+	m.height = 30
+
+	// Start generation — this stores a cancel func.
+	m, cmd := sendKey(m, "c")
+	if cmd == nil {
+		t.Fatal("expected a command from commit generation")
+	}
+
+	// Execute the command to capture the context.
+	cmd()
+
+	if generateCtx == nil {
+		t.Fatal("generateCtx should have been set by the provider")
+	}
+
+	// Esc should cancel the context.
+	m, _ = sendKey(m, "esc")
+	if generateCtx.Err() == nil {
+		t.Error("context should be cancelled after Esc")
 	}
 }
 

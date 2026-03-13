@@ -95,9 +95,13 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		ui.WithCompareResolver(resolver, req),
 	}
 	if cfg.Watch {
-		baseRef := cfg.BaseRef
+		baseRef := cmp.WatchBaseRef // symbolic fallback from resolver (e.g. "origin/main")
 		if baseRef == "" {
-			baseRef = "@{upstream}"
+			// No fallback was needed — use explicit base or @{upstream}.
+			baseRef = cfg.BaseRef
+			if baseRef == "" {
+				baseRef = "@{upstream}"
+			}
 		}
 		opts = append(opts, ui.WithWatch(&watch.Fingerprinter{Runner: boot.Runner}, baseRef))
 	}

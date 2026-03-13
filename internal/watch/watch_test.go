@@ -138,13 +138,13 @@ func TestFingerprint_WorkingTree(t *testing.T) {
 				switch key {
 				case "rev-parse HEAD base111":
 					return "deadbeef\nfeedface\n", nil
-				case "diff --name-only HEAD":
+				case "diff --no-ext-diff --no-color HEAD":
 					return "file1.go\nfile2.go\n", nil
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
 			},
-			want: "deadbeef:feedface:file1.go\nfile2.go",
+			want: "deadbeef:feedface:f3abf00c7c0e0e8408e23d4334f6f96c3d9566dbf87fd99f97520b038b8c9548",
 		},
 		"empty diff output still produces fingerprint": {
 			baseRef: "base111",
@@ -153,13 +153,13 @@ func TestFingerprint_WorkingTree(t *testing.T) {
 				switch key {
 				case "rev-parse HEAD base111":
 					return "deadbeef\nfeedface\n", nil
-				case "diff --name-only HEAD":
+				case "diff --no-ext-diff --no-color HEAD":
 					return "", nil
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
 			},
-			want: "deadbeef:feedface:",
+			want: "deadbeef:feedface:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		},
 		"unstaged changes included in fingerprint": {
 			baseRef: "base111",
@@ -168,13 +168,13 @@ func TestFingerprint_WorkingTree(t *testing.T) {
 				switch key {
 				case "rev-parse HEAD base111":
 					return "deadbeef\nfeedface\n", nil
-				case "diff --name-only HEAD":
+				case "diff --no-ext-diff --no-color HEAD":
 					return "unstaged.go\n", nil
 				default:
 					return "", gitErr(1, "unexpected: "+key)
 				}
 			},
-			want: "deadbeef:feedface:unstaged.go",
+			want: "deadbeef:feedface:07ac47441aff4ef7fd5345a5a1575f8658bbb58b625ae7324d3863ad8299380d",
 		},
 		"diff failure returns error": {
 			baseRef: "base111",
@@ -183,7 +183,7 @@ func TestFingerprint_WorkingTree(t *testing.T) {
 				switch key {
 				case "rev-parse HEAD base111":
 					return "deadbeef\nfeedface\n", nil
-				case "diff --name-only HEAD":
+				case "diff --no-ext-diff --no-color HEAD":
 					return "", gitErr(128, "fatal: bad object HEAD")
 				default:
 					return "", gitErr(1, "unexpected: "+key)

@@ -147,7 +147,11 @@ func (vp *PatchViewport) Render() string {
 		absLine := start + i
 		switch pl.typ {
 		case lineTypeHunkHeader:
-			rendered = append(rendered, hunkHeaderStyle.Render(pl.header))
+			header := pl.header
+			if vp.Width > 0 && lipgloss.Width(header) > vp.Width {
+				header = truncateToWidth(header, vp.Width)
+			}
+			rendered = append(rendered, hunkHeaderStyle.Render(header))
 		case lineTypeDiff:
 			isMatch := vp.SearchQuery != "" && absLine == vp.MatchLine
 			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch))
