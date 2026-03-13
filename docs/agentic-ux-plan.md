@@ -144,16 +144,94 @@ internal/db/migrate.go
 
 ---
 
+## 5. CLI Simplification — Zero-Config Default
+
+**Problem**: Scry currently requires up to 11 flags to configure. For the primary use case — watching an agent work across worktrees — you shouldn't need *any* flags. The tool should detect context and do the right thing.
+
+**Goal**: `scry` with zero arguments does the right thing 90% of the time. Power-user knobs move to a config file rather than flags.
+
+**Changes**:
+
+### 5a. Auto-detect worktree dashboard
+
+If the repo has linked worktrees (`git worktree list` returns >1 entry), launch the dashboard automatically. No `--worktrees` flag needed. The single-branch diff view becomes the fallback when there's only one worktree.
+
+To force single-branch mode from a multi-worktree repo: `scry --no-dashboard` (or just drill into a worktree from the dashboard).
+
+### 5b. Auto-enable watch mode
+
+Watch mode becomes the default — it's the whole point when an agent is running. Add `--no-watch` as the escape hatch for one-shot usage (e.g., reviewing a finished branch).
+
+### 5c. Auto-resolve base ref
+
+When `--base` is not specified, resolve it per-worktree from the upstream tracking branch (`@{upstream}`). This already works today as the default, but make it more explicit: if a branch tracks `origin/main`, that's the base. No flag needed.
+
+### 5d. Config file for persistent preferences
+
+Introduce `~/.config/scry/config.toml` (and `.scry.toml` per-repo) for settings that are currently flags but rarely change between invocations:
+
+```toml
+# ~/.config/scry/config.toml
+
+[watch]
+interval = "2s"         # --watch-interval default
+enabled = true          # --watch default (can be overridden with --no-watch)
+
+[diff]
+ignore_whitespace = false   # --ignore-whitespace default
+mode = "three-dot"          # --mode default
+
+[commit]
+provider = "claude"         # --commit-provider
+model = ""                  # --commit-model (empty = provider default)
+auto = false                # --commit-auto
+```
+
+Precedence: **CLI flag > repo `.scry.toml` > user `~/.config/scry/config.toml` > built-in defaults**
+
+### 5e. Resulting CLI surface
+
+After simplification, the common invocations become:
+
+```sh
+scry                        # dashboard + watch (auto-detected)
+scry --base main            # single-branch diff, explicit base, watch on
+scry --commit               # enable AI commit message generation
+scry --no-watch             # one-shot mode for finished branches
+scry --no-dashboard         # force single-branch view in multi-worktree repo
+```
+
+Flags that remain as CLI-only (not config):
+- `--base`, `--head` — per-invocation overrides
+- `--commit`, `--commit-auto` — intentional write actions, should be explicit
+- `--no-watch`, `--no-dashboard` — per-invocation opt-outs
+
+Flags that move to config-only (removed from CLI):
+- `--mode` → `diff.mode` in config (rarely changed per-invocation)
+- `--commit-provider`, `--commit-model` → `commit.provider`, `commit.model` in config
+- `--watch-interval` → `watch.interval` in config
+
+Flags removed entirely:
+- `--worktrees` → replaced by auto-detection + `--no-dashboard`
+- `--watch` → on by default, replaced by `--no-watch`
+- `--ignore-whitespace` → `diff.ignore_whitespace` in config
+
+**Files to modify**: `internal/config/config.go` (config file loading, flag pruning), `cmd/scry/main.go` (simplified flag set), new `internal/config/file.go` (TOML parsing + precedence)
+
+---
+
 ## Implementation Priority
 
-1. **Freshness indicators** (1a, 1b, 1c) — highest impact, directly addresses "what did the agent just change"
-2. **Scroll preservation** (2a) — quality of life, prevents jarring viewport jumps
-3. **File flags** (4a, 4b) — lightweight interaction model
-4. **Dashboard enhancements** (3a, 3b) — improves multi-agent visibility
-5. **Delete worktree** (3d) — natural cleanup action for finished agent worktrees
-6. **Diff-aware cache** (2b) — performance optimization for large diffs
-7. **Dashboard preview** (3c) — nice to have
-8. **Export flagged** (4c) — the bridge to external tools
+1. **CLI simplification** (5a, 5b, 5c) — zero-config defaults make the tool approachable, should ship before adding more features
+2. **Freshness indicators** (1a, 1b, 1c) — highest impact, directly addresses "what did the agent just change"
+3. **Scroll preservation** (2a) — quality of life, prevents jarring viewport jumps
+4. **File flags** (4a, 4b) — lightweight interaction model
+5. **Dashboard enhancements** (3a, 3b) — improves multi-agent visibility
+6. **Config file** (5d) — move power-user knobs out of flags
+7. **Delete worktree** (3d) — natural cleanup action for finished agent worktrees
+8. **Diff-aware cache** (2b) — performance optimization for large diffs
+9. **Dashboard preview** (3c) — nice to have
+10. **Export flagged** (4c) — the bridge to external tools
 
 ## What This Doesn't Do (Intentionally)
 
