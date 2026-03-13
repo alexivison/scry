@@ -161,14 +161,15 @@ func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 	isRefresh := m.State.DashboardState.DrillDown
 	m.State.DashboardState.DrillDown = true
+	// Always clear patch state so stale content doesn't linger.
+	m.State.Patches = make(map[string]model.PatchLoadState)
+	m.patchViewport = nil
+	m.patchErr = ""
+	m.patchFallback = ""
 	if !isRefresh {
 		m.State.FocusPane = model.PaneFiles
 		m.State.Files = nil
 		m.State.SelectedFile = -1
-		m.State.Patches = make(map[string]model.PatchLoadState)
-		m.patchViewport = nil
-		m.patchErr = ""
-		m.patchFallback = ""
 	}
 
 	if m.drillDownProvider == nil {
