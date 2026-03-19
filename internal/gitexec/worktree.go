@@ -61,6 +61,21 @@ func WorktreeList(ctx context.Context, r GitRunner) ([]WorktreeEntry, error) {
 	return entries, nil
 }
 
+// WorktreeRemove removes a worktree using `git worktree remove`.
+// When force is true, uses --force to remove dirty worktrees.
+func WorktreeRemove(ctx context.Context, r GitRunner, path string, force bool) error {
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, path)
+	_, err := r.RunGit(ctx, args...)
+	if err != nil {
+		return fmt.Errorf("worktree remove: %w", err)
+	}
+	return nil
+}
+
 // CommitSubject returns the short hash and subject of a commit.
 func CommitSubject(ctx context.Context, r GitRunner, worktreePath string) (hash, subject string, err error) {
 	out, err := r.RunGit(ctx, "-C", worktreePath, "log", "-1", "--format=%h %s")

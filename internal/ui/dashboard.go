@@ -30,6 +30,22 @@ type DrillDownProvider interface {
 	LoadDrillDown(ctx context.Context, worktreePath string) (DrillDownResult, error)
 }
 
+// WorktreeRemover removes a worktree.
+type WorktreeRemover interface {
+	Remove(ctx context.Context, path string, force bool) error
+}
+
+// WithWorktreeRemover sets the WorktreeRemover for dashboard deletion.
+func WithWorktreeRemover(wr WorktreeRemover) ModelOption {
+	return func(m *Model) { m.worktreeRemover = wr }
+}
+
+// WorktreeRemovedMsg is sent when an async worktree removal completes.
+type WorktreeRemovedMsg struct {
+	Path string
+	Err  error
+}
+
 // WithWorktreeLoader sets the WorktreeLoader used for dashboard auto-refresh.
 func WithWorktreeLoader(wl WorktreeLoader) ModelOption {
 	return func(m *Model) { m.worktreeLoader = wl }
@@ -134,6 +150,16 @@ func (m Model) handleWorktreeRefreshed(msg WorktreeRefreshedMsg) (tea.Model, tea
 
 func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	ds := &m.State.DashboardState
+
+	// Handle deletion confirmation prompts.
+	if ds.ConfirmDelete {
+		return m.updateDeleteConfirm(msg)
+	}
+
+	// Clear transient status messages on any key.
+	ds.DeleteErr = ""
+	ds.DeleteIsMain = false
+
 	switch msg.String() {
 	case "j", "down":
 		if ds.SelectedIdx < len(ds.Worktrees)-1 {
@@ -149,6 +175,8 @@ func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
 			return m.startDrillDown(ds.Worktrees[ds.SelectedIdx])
 		}
+	case "d":
+		return m.startDeleteConfirm()
 	case "q":
 		m.quitting = true
 		return m, tea.Quit
@@ -156,6 +184,71 @@ func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = true
 	}
 	return m, nil
+}
+
+// startDeleteConfirm initiates the worktree deletion confirmation flow.
+func (m Model) startDeleteConfirm() (tea.Model, tea.Cmd) {
+	ds := &m.State.DashboardState
+	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) {
+		return m, nil
+	}
+	wt := ds.Worktrees[ds.SelectedIdx]
+
+	// Bare worktrees and the main worktree (index 0) cannot be deleted.
+	if wt.Bare || ds.SelectedIdx == 0 {
+		ds.DeleteIsMain = true
+		return m, nil
+	}
+
+	ds.ConfirmDelete = true
+	ds.DeletePath = wt.Path
+	ds.DeleteDirty = wt.Dirty
+	ds.DeleteErr = ""
+	return m, nil
+}
+
+// updateDeleteConfirm handles key events during the deletion confirmation prompt.
+func (m Model) updateDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	ds := &m.State.DashboardState
+	switch msg.String() {
+	case "y", "Y":
+		// Confirm deletion.
+		ds.ConfirmDelete = false
+		return m.executeWorktreeRemove(ds.DeletePath, ds.DeleteDirty)
+	case "n", "N", "esc":
+		// Cancel deletion.
+		ds.ConfirmDelete = false
+		ds.DeletePath = ""
+		ds.DeleteDirty = false
+	}
+	return m, nil
+}
+
+// executeWorktreeRemove fires an async worktree removal command.
+func (m Model) executeWorktreeRemove(path string, force bool) (tea.Model, tea.Cmd) {
+	if m.worktreeRemover == nil {
+		return m, nil
+	}
+	remover := m.worktreeRemover
+	return m, func() tea.Msg {
+		err := remover.Remove(context.Background(), path, force)
+		return WorktreeRemovedMsg{Path: path, Err: err}
+	}
+}
+
+// handleWorktreeRemoved processes the result of a worktree removal.
+func (m Model) handleWorktreeRemoved(msg WorktreeRemovedMsg) (tea.Model, tea.Cmd) {
+	ds := &m.State.DashboardState
+	ds.DeletePath = ""
+	ds.DeleteDirty = false
+
+	if msg.Err != nil {
+		ds.DeleteErr = fmt.Sprintf("delete failed: %v", msg.Err)
+		return m, nil
+	}
+
+	// Refresh dashboard to reflect the removal.
+	return m.handleDashboardTick()
 }
 
 // startDrillDown begins loading the diff context for a worktree.
@@ -290,5 +383,15 @@ func reconcileActivity(old, new []model.WorktreeInfo) {
 func (m Model) viewDashboard() string {
 	contentHeight := m.height - 1 // reserve status bar
 	ds := m.State.DashboardState
+
+	if ds.ConfirmDelete {
+		prompt := fmt.Sprintf("Delete worktree %s?", ds.DeletePath)
+		if ds.DeleteDirty {
+			prompt += " (DIRTY — uncommitted changes will be lost!)"
+		}
+		prompt += "\n\n  y  confirm    n/Esc  cancel"
+		return prompt
+	}
+
 	return panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, m.width, contentHeight)
 }

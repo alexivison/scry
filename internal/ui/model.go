@@ -94,6 +94,7 @@ type Model struct {
 
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
+	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -263,6 +264,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DrillDownLoadedMsg:
 		return m.handleDrillDownLoaded(msg)
+
+	case WorktreeRemovedMsg:
+		return m.handleWorktreeRemoved(msg)
 
 	case tea.KeyMsg:
 		if m.tooSmall {
@@ -1049,22 +1053,31 @@ func (m Model) viewFileList() string {
 	return content
 }
 
+func (m Model) renderErrorBar(msg string) string {
+	bar := " " + msg
+	gap := m.width - lipgloss.Width(bar)
+	if gap > 0 {
+		bar += strings.Repeat(" ", gap)
+	}
+	return searchNotFoundStyle.Width(m.width).Render(bar)
+}
+
 func (m Model) viewStatusBar() string {
-	if m.refreshErr != "" {
-		bar := " " + m.refreshErr
-		gap := m.width - lipgloss.Width(bar)
-		if gap > 0 {
-			bar += strings.Repeat(" ", gap)
+	// Dashboard delete messages.
+	if m.State.FocusPane == model.PaneDashboard {
+		ds := m.State.DashboardState
+		if ds.DeleteIsMain {
+			return m.renderErrorBar("Cannot delete main worktree")
 		}
-		return searchNotFoundStyle.Width(m.width).Render(bar)
+		if ds.DeleteErr != "" {
+			return m.renderErrorBar(ds.DeleteErr)
+		}
+	}
+	if m.refreshErr != "" {
+		return m.renderErrorBar(m.refreshErr)
 	}
 	if m.searchNotFound != "" {
-		bar := " " + m.searchNotFound
-		gap := m.width - lipgloss.Width(bar)
-		if gap > 0 {
-			bar += strings.Repeat(" ", gap)
-		}
-		return searchNotFoundStyle.Width(m.width).Render(bar)
+		return m.renderErrorBar(m.searchNotFound)
 	}
 	var left, right string
 	minimal := m.widthTierNow() <= terminal.WidthMinimal

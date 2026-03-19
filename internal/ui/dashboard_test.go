@@ -715,3 +715,179 @@ func TestReconcileActivityNewWorktree(t *testing.T) {
 		t.Error("new worktree should get current time as LastActivityAt")
 	}
 }
+
+// --- V3-T18: Worktree Deletion Tests ---
+
+type mockRemover struct {
+	removedPath string
+	removedForce bool
+	err         error
+}
+
+func (r *mockRemover) Remove(_ context.Context, path string, force bool) error {
+	r.removedPath = path
+	r.removedForce = force
+	return r.err
+}
+
+func TestDashboardDeleteMainWorktreeBlocked(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(dashboardState())
+	m.width = 80
+	m.height = 30
+	// Selected index 0 = main worktree.
+	m.State.DashboardState.SelectedIdx = 0
+
+	updated, _ := m.Update(keyMsg('d'))
+	um := updated.(Model)
+
+	if um.State.DashboardState.ConfirmDelete {
+		t.Error("main worktree should not enter confirm state")
+	}
+	if !um.State.DashboardState.DeleteIsMain {
+		t.Error("DeleteIsMain should be true")
+	}
+	// View should show the protection message.
+	view := um.View()
+	if !strings.Contains(view, "Cannot delete main worktree") {
+		t.Errorf("expected main worktree protection message, got:\n%s", view)
+	}
+}
+
+func TestDashboardDeleteBareWorktreeBlocked(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	state.DashboardState.Worktrees = append(state.DashboardState.Worktrees,
+		model.WorktreeInfo{Path: "/bare", Branch: "", Bare: true})
+	state.DashboardState.SelectedIdx = 3 // bare worktree
+
+	m := NewModel(state)
+	m.width = 80
+	m.height = 30
+
+	updated, _ := m.Update(keyMsg('d'))
+	um := updated.(Model)
+
+	if um.State.DashboardState.ConfirmDelete {
+		t.Error("bare worktree should not enter confirm state")
+	}
+	if !um.State.DashboardState.DeleteIsMain {
+		t.Error("DeleteIsMain should be true for bare worktree (not deletable)")
+	}
+}
+
+func TestDashboardDeleteConfirmFlow(t *testing.T) {
+	t.Parallel()
+
+	remover := &mockRemover{}
+	loader := &mockWorktreeLoader{worktrees: dashboardWorktrees()}
+	m := NewModel(dashboardState(), WithWorktreeRemover(remover), WithWorktreeLoader(loader))
+	m.width = 80
+	m.height = 30
+	// Select linked worktree (index 1 = feature branch).
+	m.State.DashboardState.SelectedIdx = 1
+
+	// Press d — should enter confirm state.
+	updated, _ := m.Update(keyMsg('d'))
+	um := updated.(Model)
+
+	if !um.State.DashboardState.ConfirmDelete {
+		t.Fatal("should enter confirm state")
+	}
+	if um.State.DashboardState.DeletePath != "/home/user/project-feat" {
+		t.Errorf("DeletePath = %q, want %q", um.State.DashboardState.DeletePath, "/home/user/project-feat")
+	}
+	if !um.State.DashboardState.DeleteDirty {
+		t.Error("DeleteDirty should be true (feature worktree is dirty)")
+	}
+	// View should show confirmation prompt.
+	view := um.View()
+	if !strings.Contains(view, "Delete worktree") {
+		t.Errorf("expected delete confirmation prompt, got:\n%s", view)
+	}
+	if !strings.Contains(view, "DIRTY") {
+		t.Errorf("dirty worktree prompt should warn about uncommitted changes, got:\n%s", view)
+	}
+
+	// Press y to confirm.
+	updated2, cmd := um.Update(keyMsg('y'))
+	um2 := updated2.(Model)
+
+	if um2.State.DashboardState.ConfirmDelete {
+		t.Error("confirm state should be cleared after y")
+	}
+	if cmd == nil {
+		t.Fatal("expected async remove command, got nil")
+	}
+
+	// Execute the command.
+	msg := cmd()
+	removedMsg, ok := msg.(WorktreeRemovedMsg)
+	if !ok {
+		t.Fatalf("expected WorktreeRemovedMsg, got %T", msg)
+	}
+	if removedMsg.Err != nil {
+		t.Fatalf("unexpected error: %v", removedMsg.Err)
+	}
+	if remover.removedPath != "/home/user/project-feat" {
+		t.Errorf("removed path = %q, want %q", remover.removedPath, "/home/user/project-feat")
+	}
+	if !remover.removedForce {
+		t.Error("dirty worktree should use force=true")
+	}
+}
+
+func TestDashboardDeleteCancelWithEsc(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(dashboardState(), WithWorktreeRemover(&mockRemover{}))
+	m.width = 80
+	m.height = 30
+	m.State.DashboardState.SelectedIdx = 1
+
+	// Enter confirm, then cancel with Esc.
+	updated, _ := m.Update(keyMsg('d'))
+	um := updated.(Model)
+	if !um.State.DashboardState.ConfirmDelete {
+		t.Fatal("should be in confirm state")
+	}
+
+	updated2, _ := um.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	um2 := updated2.(Model)
+	if um2.State.DashboardState.ConfirmDelete {
+		t.Error("Esc should cancel delete confirmation")
+	}
+}
+
+func TestDashboardDeleteError(t *testing.T) {
+	t.Parallel()
+
+	remover := &mockRemover{err: fmt.Errorf("worktree is locked")}
+	m := NewModel(dashboardState(), WithWorktreeRemover(remover))
+	m.width = 80
+	m.height = 30
+	m.State.DashboardState.SelectedIdx = 2 // clean worktree
+
+	// d → y → error.
+	updated, _ := m.Update(keyMsg('d'))
+	um := updated.(Model)
+	updated2, cmd := um.Update(keyMsg('y'))
+	um2 := updated2.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	msg := cmd()
+	updated3, _ := um2.Update(msg)
+	um3 := updated3.(Model)
+
+	if um3.State.DashboardState.DeleteErr == "" {
+		t.Error("DeleteErr should be set on removal failure")
+	}
+	view := um3.View()
+	if !strings.Contains(view, "delete failed") {
+		t.Errorf("expected delete error in view, got:\n%s", view)
+	}
+}
