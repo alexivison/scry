@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
@@ -20,14 +21,29 @@ var (
 	statusModifiedStyle = lipgloss.NewStyle().Foreground(theme.Dirty)
 	statusRenamedStyle  = lipgloss.NewStyle().Foreground(theme.HunkHeader)
 	statusDefaultStyle  = lipgloss.NewStyle().Foreground(theme.Muted)
+
+	// Freshness markers.
+	freshnessHotStyle  = lipgloss.NewStyle().Foreground(theme.Added).Bold(true)
+	freshnessWarmStyle = lipgloss.NewStyle().Foreground(theme.Muted)
 )
+
+// FileListOpts holds optional parameters for file list rendering.
+type FileListOpts struct {
+	ChangeGen  map[string]int // per-file last-change generation (nil to disable)
+	CurrentGen int            // current CacheGeneration for freshness calculation
+}
 
 // RenderFileList renders a scrollable file list constrained to the given dimensions.
 // It adjusts scrollOffset to keep selectedIdx visible and returns the rendered
 // string along with the new scroll offset.
-func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width, height int, active bool) (string, int) {
+func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width, height int, active bool, opts ...FileListOpts) (string, int) {
 	if len(files) == 0 {
 		return "No files changed.", 0
+	}
+
+	var o FileListOpts
+	if len(opts) > 0 {
+		o = opts[0]
 	}
 
 	// Ensure selected item is visible.
@@ -41,7 +57,13 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 
 	lines := make([]string, 0, end-scrollOffset)
 	for i := scrollOffset; i < end; i++ {
-		line := renderFileEntry(files[i], i, selectedIdx, width)
+		tier := review.FreshnessCold
+		if o.ChangeGen != nil {
+			if gen, ok := o.ChangeGen[files[i].Path]; ok {
+				tier = review.ComputeFreshness(gen, o.CurrentGen)
+			}
+		}
+		line := renderFileEntry(files[i], i, selectedIdx, width, tier)
 		if !active {
 			line = fileDimStyle.Render(line)
 		}
@@ -64,21 +86,23 @@ func EnsureVisible(selectedIdx, scrollOffset, height, total int) int {
 	return scrollOffset
 }
 
-func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int) string {
+func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier) string {
 	selected := idx == selectedIdx
 	path := f.Path
 	if f.OldPath != "" {
 		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
 	}
 
+	marker := freshnessMarker(tier, selected)
+
 	prefix := "  "
 	if selected {
 		prefix = "> "
 	}
 
-	// Reserve space: prefix(2) + gap(2) + status(1) + gap(2) + counts + gap(1).
+	// Reserve space: prefix(2) + marker(1) + gap(1) + status(1) + gap(2) + counts + gap(1).
 	countsWidth := lipgloss.Width(FormatCounts(f))
-	pathWidth := width - 2 - 2 - 1 - 2 - countsWidth - 1
+	pathWidth := width - 2 - 1 - 1 - 1 - 2 - countsWidth - 1
 	if pathWidth < 5 {
 		pathWidth = 5
 	}
@@ -93,9 +117,32 @@ func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int) string {
 
 	if selected {
 		rev := fileSelectedStyle
-		return rev.Render(prefix+"  ") + icon + rev.Render("  "+paddedPath+" ") + counts
+		return rev.Render(prefix) + marker + rev.Render(" ") + icon + rev.Render("  "+paddedPath+" ") + counts
 	}
-	return fmt.Sprintf("%s  %s  %s %s", prefix, icon, paddedPath, counts)
+	return prefix + marker + " " + icon + "  " + paddedPath + " " + counts
+}
+
+// freshnessMarker returns a styled single-character freshness indicator.
+func freshnessMarker(tier review.FreshnessTier, selected bool) string {
+	switch tier {
+	case review.FreshnessHot:
+		s := freshnessHotStyle
+		if selected {
+			s = s.Reverse(true)
+		}
+		return s.Render("●")
+	case review.FreshnessWarm:
+		s := freshnessWarmStyle
+		if selected {
+			s = s.Reverse(true)
+		}
+		return s.Render("○")
+	default:
+		if selected {
+			return fileSelectedStyle.Render(" ")
+		}
+		return " "
+	}
 }
 
 // truncatePath trims a path to fit within maxWidth, adding "…" as ellipsis.

@@ -20,11 +20,11 @@ V3-T5, V3-T7.
 - `internal/review/refresh.go`
 
 ## Deliverables
-- [ ] `FileChangeGen` map populated during refresh reconciliation.
-- [ ] Hot/warm/cold markers render in file list (hot: bright marker, warm: dim marker, cold: none).
-- [ ] Markers decay across subsequent refresh generations.
-- [ ] `]c` / `[c` jump to next/prev hot or warm file, wrapping around.
-- [ ] Normal selection/scroll behavior unaffected.
+- [x] `FileChangeGen` map populated during refresh reconciliation.
+- [x] Hot/warm/cold markers render in file list (hot: bright marker, warm: dim marker, cold: none).
+- [x] Markers decay across subsequent refresh generations.
+- [x] `]c` / `[c` jump to next/prev hot or warm file, wrapping around.
+- [x] Normal selection/scroll behavior unaffected.
 
 ## Test Strategy
 - Unit tests for generation tracking across multiple refreshes.

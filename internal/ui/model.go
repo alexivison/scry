@@ -71,6 +71,7 @@ type Model struct {
 	tooSmall        bool // terminal below minimum dimensions
 	sizeErr         string
 
+	pendingKey     rune          // buffered prefix key for multi-key sequences (]/[)
 	searchInput    string        // text being typed in search mode
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
@@ -116,6 +117,9 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	}
 	if state.Patches == nil {
 		state.Patches = make(map[string]model.PatchLoadState)
+	}
+	if state.FileChangeGen == nil {
+		state.FileChangeGen = make(map[string]int)
 	}
 	m := Model{State: state}
 	for _, opt := range opts {
@@ -277,6 +281,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Clear pending multi-key buffer on any global key handler to prevent
+		// stale ] or [ from stealing a later keystroke.
+		if msg.String() != "]" && msg.String() != "[" && msg.String() != "c" {
+			m.pendingKey = 0
+		}
 		// r triggers refresh from any pane (except help/search/commit).
 		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			if m.State.WorktreeMode {
@@ -328,7 +337,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle pending multi-key sequence (]c / [c).
+	if m.pendingKey != 0 {
+		pending := m.pendingKey
+		m.pendingKey = 0
+		if msg.String() == "c" {
+			return m.jumpChangedFile(pending == ']')
+		}
+		// Not a recognized sequence — discard pending and fall through.
+	}
+
 	switch msg.String() {
+	case "]", "[":
+		if len(msg.Runes) > 0 {
+			m.pendingKey = msg.Runes[0]
+		}
+		return m, nil
 	case "j", "down":
 		if m.State.SelectedFile < len(m.State.Files)-1 {
 			m.State.SelectedFile++
@@ -359,6 +383,26 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.showHelp = true
+	}
+	return m, nil
+}
+
+// jumpChangedFile navigates to the next (forward=true) or previous hot/warm file.
+func (m Model) jumpChangedFile(forward bool) (tea.Model, tea.Cmd) {
+	var idx int
+	var ok bool
+	if forward {
+		idx, ok = review.NextChangedFile(m.State.Files, m.State.FileChangeGen, m.State.CacheGeneration, m.State.SelectedFile)
+	} else {
+		idx, ok = review.PrevChangedFile(m.State.Files, m.State.FileChangeGen, m.State.CacheGeneration, m.State.SelectedFile)
+	}
+	if !ok {
+		return m, nil
+	}
+	m.State.SelectedFile = idx
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
 	}
 	return m, nil
 }
@@ -768,6 +812,9 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		m.savedSearchQuery = m.State.SearchQuery
 	}
 
+	// Track per-file freshness before updating the file list.
+	review.UpdateFileChangeGen(&m.State, m.State.Files, msg.Files)
+
 	// Selectively invalidate cache: preserve unchanged files, evict changed/removed.
 	review.SelectiveInvalidate(&m.State, m.State.Files, msg.Files)
 
@@ -1053,6 +1100,7 @@ func (m Model) viewFileList() string {
 	content, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, 0,
 		innerW, innerH, true,
+		m.freshnessOpts(),
 	)
 	footer := fmt.Sprintf("%d files", len(m.State.Files))
 	return panes.BorderedPane(content, "Files", footer, m.width, outerHeight, true, m.showFooter())
@@ -1178,6 +1226,14 @@ func (m Model) showFooter() bool {
 	return ht >= terminal.HeightFooterVisible
 }
 
+// freshnessOpts returns the FileListOpts for freshness rendering.
+func (m Model) freshnessOpts() panes.FileListOpts {
+	return panes.FileListOpts{
+		ChangeGen:  m.State.FileChangeGen,
+		CurrentGen: m.State.CacheGeneration,
+	}
+}
+
 // patchScrollLine returns the inner row index for the scroll indicator,
 // or -1 if no indicator should be shown.
 func (m Model) patchScrollLine(innerHeight int) int {
@@ -1185,7 +1241,7 @@ func (m Model) patchScrollLine(innerHeight int) int {
 		return -1
 	}
 	total := m.patchViewport.TotalLines()
-	if total <= m.patchViewport.Height {
+	if total <= innerHeight {
 		return -1 // content fits — no scrollbar needed
 	}
 	pos := m.patchViewport.ScrollIndicatorPos()
@@ -1279,6 +1335,7 @@ func (m Model) viewSplit() string {
 	leftContent, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, m.fileListScroll,
 		flInnerW, flInnerH, filesActive,
+		m.freshnessOpts(),
 	)
 	rightContent := m.renderPatch(patchInnerW, patchInnerH, patchOuterWidth)
 

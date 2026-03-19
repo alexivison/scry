@@ -78,6 +78,9 @@ type AppState struct {
 	CommitAuto    bool
 	CommitState   CommitState
 
+	// Freshness tracking (v0.3).
+	FileChangeGen map[string]int // path → CacheGeneration when file last changed
+
 	// Worktree dashboard mode (v0.2).
 	WorktreeMode   bool
 	DashboardState DashboardState
