@@ -11,13 +11,17 @@ import (
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
-func (m Model) renderErrorBar(msg string) string {
+func (m Model) renderBar(msg string, style lipgloss.Style) string {
 	bar := " " + msg
 	gap := m.width - lipgloss.Width(bar)
 	if gap > 0 {
 		bar += strings.Repeat(" ", gap)
 	}
-	return searchNotFoundStyle.Width(m.width).Render(bar)
+	return style.Width(m.width).Render(bar)
+}
+
+func (m Model) renderErrorBar(msg string) string {
+	return m.renderBar(msg, searchNotFoundStyle)
 }
 
 func (m Model) viewStatusBar() string {
@@ -36,6 +40,9 @@ func (m Model) viewStatusBar() string {
 	}
 	if m.searchNotFound != "" {
 		return m.renderErrorBar(m.searchNotFound)
+	}
+	if m.exportMsg != "" {
+		return m.renderBar(m.exportMsg, statusBarStyle)
 	}
 
 	sep := segmentSepStyle.Render(" │ ")

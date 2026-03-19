@@ -662,6 +662,126 @@ func TestCommitUI_EscCancelsContext(t *testing.T) {
 	}
 }
 
+// --- V3-T14: Commit screen polish tests ---
+
+func TestCommitUI_GeneratedMessageInBorderedArea(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	// Commit message should be inside a bordered area (rounded border).
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "╯") {
+		t.Errorf("commit view should use bordered area for message, got:\n%s", view)
+	}
+	if !strings.Contains(view, "feat: add feature") {
+		t.Errorf("commit view should show generated message, got:\n%s", view)
+	}
+}
+
+func TestCommitUI_ActionKeyBadgesStyled(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	// Action hints: Enter, e, r, Esc should be present with labels.
+	for _, action := range []string{"Enter", "commit", "edit", "regenerate", "Esc", "cancel"} {
+		if !strings.Contains(view, action) {
+			t.Errorf("commit view should show action %q, got:\n%s", action, view)
+		}
+	}
+}
+
+func TestCommitUI_SuccessViewBordered(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	s.CommitState.CommitSHA = "abc1234"
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	if !strings.Contains(view, "abc1234") {
+		t.Errorf("commit success view should show SHA, got:\n%s", view)
+	}
+	if !strings.Contains(view, "╭") {
+		t.Errorf("commit success view should be bordered, got:\n%s", view)
+	}
+}
+
+func TestCommitUI_ErrorViewBordered(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	s.CommitState.Err = fmt.Errorf("API error")
+	s.CommitState.GeneratedMessage = ""
+	m := NewModel(s)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	if !strings.Contains(view, "API error") {
+		t.Errorf("commit error view should show error, got:\n%s", view)
+	}
+	if !strings.Contains(view, "╭") {
+		t.Errorf("commit error view should be bordered, got:\n%s", view)
+	}
+}
+
+func TestCommitUI_NarrowWidthAdapts(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 50
+	m.height = 24
+
+	view := m.View()
+	// Should render without panic at narrow width.
+	if !strings.Contains(view, "feat: add feature") {
+		t.Errorf("narrow commit view should still show message, got:\n%s", view)
+	}
+}
+
+func TestCommitUI_NarrowWidthWrapsBadges(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 45 // narrow — badges must wrap to multiple lines
+	m.height = 24
+
+	view := m.View()
+	// All action labels should still be visible (wrapped, not truncated).
+	for _, action := range []string{"Enter", "commit", "Esc", "cancel"} {
+		if !strings.Contains(view, action) {
+			t.Errorf("narrow commit view should show action %q (wrapped), got:\n%s", action, view)
+		}
+	}
+}
+
+func TestCommitUI_CompactHeightAdapts(t *testing.T) {
+	t.Parallel()
+
+	s := commitReadyState()
+	m := NewModel(s)
+	m.width = 100
+	m.height = 16
+
+	view := m.View()
+	if !strings.Contains(view, "feat: add feature") {
+		t.Errorf("compact commit view should show message, got:\n%s", view)
+	}
+}
+
 func TestCommitExecution_viewShowsSuccessSHA(t *testing.T) {
 	t.Parallel()
 

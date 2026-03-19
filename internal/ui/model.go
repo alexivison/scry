@@ -78,6 +78,7 @@ type Model struct {
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
 	refreshErr     string        // shown in status bar when metadata reload fails
+	exportMsg      string        // shown in status bar after ctrl+e export
 	fileListScroll int           // scroll offset for file list in split mode
 
 	// Scroll preservation state: saved before refresh, restored if content unchanged.
@@ -101,7 +102,8 @@ type Model struct {
 	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
 	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
 
-	spinner spinner.Model // shared spinner for loading states
+	spinner   spinner.Model // shared spinner for loading states
+	idlePulse bool          // toggles on spinner tick for idle screen pulse indicator
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -319,6 +321,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Clear transient status messages on any key press.
+		m.exportMsg = ""
 		// Clear pending multi-key buffer on global keys to prevent stale
 		// ] / [ / g from stealing a later keystroke.
 		switch msg.String() {
@@ -349,6 +353,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Tab toggles layout (except during help/search/commit).
 		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleLayout()
+		}
+		// ctrl+e exports flagged files (except help/search/commit/idle).
+		if msg.Type == tea.KeyCtrlE && !m.showHelp &&
+			m.State.FocusPane != model.PaneSearch &&
+			m.State.FocusPane != model.PaneCommit &&
+			m.State.FocusPane != model.PaneIdle {
+			return m.exportFlaggedFiles()
 		}
 		if m.showHelp {
 			return m.updateHelp(msg)
@@ -787,6 +798,8 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 		return m, nil
 	}
 	m.lastCheckAt = time.Now()
+	// Toggle idle pulse indicator on each watch check.
+	m.idlePulse = !m.idlePulse
 
 	// tickCmd returns the polling tick command, or nil for FS-triggered checks
 	// (to avoid multiplying polling timers).
@@ -957,6 +970,31 @@ func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		return m.selectFile()
 	}
+	return m, nil
+}
+
+// exportFlaggedFiles copies flagged file paths to the system clipboard.
+func (m Model) exportFlaggedFiles() (tea.Model, tea.Cmd) {
+	m.exportMsg = ""
+
+	// Collect flagged paths in file-list order for deterministic output.
+	var paths []string
+	for _, f := range m.State.Files {
+		if m.State.FlaggedFiles[f.Path] {
+			paths = append(paths, f.Path)
+		}
+	}
+	if len(paths) == 0 {
+		m.exportMsg = "No flagged files"
+		return m, nil
+	}
+
+	text := terminal.FormatPaths(paths)
+	if err := terminal.CopyToClipboard(text); err != nil {
+		m.exportMsg = fmt.Sprintf("Export failed: %v", err)
+		return m, nil
+	}
+	m.exportMsg = fmt.Sprintf("Copied %d flagged paths to clipboard", len(paths))
 	return m, nil
 }
 
@@ -1369,29 +1407,56 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	return m.patchViewport.Render()
 }
 
-// viewCommit renders the commit generation pane.
+// viewCommit renders the commit generation pane with bordered message area
+// and styled action key badges.
 func (m Model) viewCommit() string {
 	cs := m.State.CommitState
+	contentH := m.height - 1 // reserve status bar
 
-	if cs.InFlight {
-		return m.spinner.View() + " Generating commit message..."
+	var body string
+	var badges []string
+	title := "Commit"
+
+	switch {
+	case cs.InFlight:
+		body = m.spinner.View() + " Generating commit message..."
+	case cs.Executing:
+		body = m.spinner.View() + " Committing..."
+	case cs.CommitSHA != "":
+		title = "Committed"
+		body = "  " + cs.CommitSHA
+		badges = []string{keyBadge("Esc", "back to files")}
+	case cs.CommitErr != nil:
+		title = "Commit Failed"
+		body = fmt.Sprintf("  %v", cs.CommitErr)
+		badges = []string{keyBadge("Enter", "retry"), keyBadge("r", "regenerate"), keyBadge("Esc", "cancel")}
+	case cs.Err != nil:
+		title = "Error"
+		body = fmt.Sprintf("  %v", cs.Err)
+		badges = []string{keyBadge("r", "regenerate"), keyBadge("Esc", "cancel")}
+	case cs.GeneratedMessage != "":
+		body = cs.GeneratedMessage
+		badges = []string{keyBadge("Enter", "commit"), keyBadge("e", "edit"), keyBadge("r", "regenerate"), keyBadge("Esc", "cancel")}
+	default:
+		body = "No commit message."
 	}
-	if cs.Executing {
-		return m.spinner.View() + " Committing..."
+
+	// Determine box width first (needed for badge wrapping).
+	boxW := m.width - 4
+	if boxW < 30 {
+		boxW = 30
 	}
-	if cs.CommitSHA != "" {
-		return fmt.Sprintf("Committed: %s\n\n  Esc  back to files", cs.CommitSHA)
+
+	// Build bordered box content with badge wrapping.
+	content := body
+	if len(badges) > 0 {
+		content += "\n\n" + wrapBadges(badges, boxW-2) // -2 for border columns
 	}
-	if cs.CommitErr != nil {
-		return fmt.Sprintf("Commit failed: %v\n\n  Enter  retry\n  r  regenerate\n  Esc  cancel", cs.CommitErr)
-	}
-	if cs.Err != nil {
-		return fmt.Sprintf("Error: %v\n\n  r  regenerate\n  Esc  cancel", cs.Err)
-	}
-	if cs.GeneratedMessage != "" {
-		return fmt.Sprintf("%s\n\n  Enter  commit\n  e  edit in $EDITOR\n  r  regenerate\n  Esc  cancel", cs.GeneratedMessage)
-	}
-	return "No commit message."
+	boxH := strings.Count(content, "\n") + 1 + 2 // lines + borders
+
+	box := panes.BorderedPane(content, title, "", boxW, boxH, true, false)
+
+	return centerBox(box, contentH, m.width, boxW)
 }
 
 func (m Model) viewHelp() string {

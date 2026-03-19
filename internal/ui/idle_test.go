@@ -224,6 +224,180 @@ func TestIdleNoPatchLoadOnEnter(t *testing.T) {
 	}
 }
 
+// --- V3-T14: Idle screen polish tests ---
+
+func TestIdleViewHasBorderedBox(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	// Bordered idle box uses rounded corners from lipgloss.
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "╯") {
+		t.Errorf("idle view should use rounded border (╭/╯), got:\n%s", view)
+	}
+}
+
+func TestIdleViewCenteredVertically(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 40
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	// Find first line with border top — should not be line 0 (centered).
+	firstBorder := -1
+	for i, l := range lines {
+		if strings.Contains(l, "╭") {
+			firstBorder = i
+			break
+		}
+	}
+	if firstBorder <= 0 {
+		t.Errorf("idle box should be vertically centered (first border at line %d), got:\n%s", firstBorder, view)
+	}
+}
+
+func TestIdleViewPulseIndicator(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	// Pulse indicator: either ◉ (filled) or ○ (hollow).
+	hasFilled := strings.Contains(view, "◉")
+	hasHollow := strings.Contains(view, "○")
+	if !hasFilled && !hasHollow {
+		t.Errorf("idle view should show pulse indicator (◉ or ○), got:\n%s", view)
+	}
+}
+
+func TestIdleViewShowsInterval(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	if !strings.Contains(view, "2s") {
+		t.Errorf("idle view should show interval '2s', got:\n%s", view)
+	}
+}
+
+func TestIdleViewShowsLastCheckTime(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 24
+	m.lastCheckAt = time.Date(2026, 3, 19, 14, 30, 45, 0, time.UTC)
+
+	view := m.View()
+	if !strings.Contains(view, "14:30:45") {
+		t.Errorf("idle view should show last check time, got:\n%s", view)
+	}
+}
+
+func TestIdleViewShowsNoDivergenceStatus(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	if !strings.Contains(view, "No divergence") {
+		t.Errorf("idle view should show 'No divergence' status, got:\n%s", view)
+	}
+}
+
+func TestIdleViewShowsDiffRange(t *testing.T) {
+	t.Parallel()
+	state := idleState()
+	state.Compare.WorkingTree = false
+	m := NewModel(state)
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	if !strings.Contains(view, "abc123...def456") {
+		t.Errorf("idle view should show diff range for non-worktree, got:\n%s", view)
+	}
+}
+
+func TestIdleViewAdaptsToNarrowWidth(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 45
+	m.height = 24
+
+	view := m.View()
+	// Should still render without panic and contain key info.
+	if !strings.Contains(view, "abc123") {
+		t.Errorf("narrow idle view should still show base ref, got:\n%s", view)
+	}
+}
+
+func TestIdleViewAdaptsToCompactHeight(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 16
+
+	view := m.View()
+	// Should still render essential info at compact height.
+	if !strings.Contains(view, "Watching") || !strings.Contains(view, "abc123") {
+		t.Errorf("compact idle view should show essential info, got:\n%s", view)
+	}
+}
+
+func TestIdleViewStyledKeyBadges(t *testing.T) {
+	t.Parallel()
+	m := NewModel(idleState())
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	// Key hints should contain action labels.
+	if !strings.Contains(view, "q") || !strings.Contains(view, "quit") {
+		t.Errorf("idle view should show styled key badges with actions, got:\n%s", view)
+	}
+	if !strings.Contains(view, "?") || !strings.Contains(view, "help") {
+		t.Errorf("idle view should show help key badge, got:\n%s", view)
+	}
+	if !strings.Contains(view, "r") || !strings.Contains(view, "refresh") {
+		t.Errorf("idle view should show refresh key badge, got:\n%s", view)
+	}
+}
+
+func TestIdlePulseTogglesOnWatchFingerprint(t *testing.T) {
+	t.Parallel()
+	fp := &mockFingerprinter{fingerprint: "fp1"}
+	state := idleState()
+	state.LastFingerprint = "fp0"
+	m := NewModel(state, WithWatch(fp, "origin/main"))
+	m.width = 80
+	m.height = 24
+
+	pulseBefore := m.idlePulse
+
+	// Simulate a fingerprint message (watch tick result).
+	updated, _ := m.Update(watch.FingerprintMsg{Fingerprint: "fp0"})
+	um := updated.(Model)
+
+	if um.idlePulse == pulseBefore {
+		t.Error("idlePulse should toggle on watch fingerprint message")
+	}
+
+	// Second fingerprint toggles back.
+	updated2, _ := um.Update(watch.FingerprintMsg{Fingerprint: "fp0"})
+	um2 := updated2.(Model)
+	if um2.idlePulse != pulseBefore {
+		t.Error("idlePulse should toggle back on second fingerprint")
+	}
+}
+
 // --- Init test ---
 
 func TestIdleInitReturnsWatchCmd(t *testing.T) {

@@ -12,13 +12,13 @@ V3-T0, V3-T1, V3-T2, V3-T13.
 - `internal/ui/model.go`
 
 ## Deliverables
-- [ ] Idle view centered and bordered with `lipgloss.RoundedBorder()`.
-- [ ] Watch indicator pulses (alternates symbols on watch tick).
-- [ ] Idle shows: base ref, interval, last check time, status.
-- [ ] Commit view renders message in bordered area.
-- [ ] Action hints use styled key badges (contrasting background).
-- [ ] Existing commit actions (`Enter`, `e`, `r`, `Esc`) behavior unchanged.
-- [ ] Both screens adapt to responsive breakpoints.
+- [x] Idle view centered and bordered with `lipgloss.RoundedBorder()`.
+- [x] Watch indicator pulses (alternates symbols on watch tick).
+- [x] Idle shows: base ref, interval, last check time, status.
+- [x] Commit view renders message in bordered area.
+- [x] Action hints use styled key badges (contrasting background).
+- [x] Existing commit actions (`Enter`, `e`, `r`, `Esc`) behavior unchanged.
+- [x] Both screens adapt to responsive breakpoints.
 
 ## Test Strategy
 - Render tests for idle screen at various sizes.
