@@ -92,10 +92,11 @@ type Model struct {
 	commitExecutor CommitExecutor     // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
-	fingerprinter WatchFingerprinter // optional watch mode fingerprinter
-	watchBaseRef  string             // symbolic base ref for fingerprint checks
-	lastCheckAt   time.Time          // when the last fingerprint check completed
-	watchErr      bool               // true when last fingerprint check failed
+	fingerprinter  WatchFingerprinter // optional watch mode fingerprinter
+	watchBaseRef   string             // symbolic base ref for fingerprint checks
+	lastCheckAt    time.Time          // when the last fingerprint check completed
+	watchErr       bool               // true when last fingerprint check failed
+	fingerprintGen int                // monotonic counter to discard stale fingerprint results
 
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
@@ -285,6 +286,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// fsnotify detected a file change — trigger immediate fingerprint check
 		// without rescheduling the polling timer (to avoid timer multiplication).
 		if m.State.WatchEnabled && m.fingerprinter != nil && !m.State.WorktreeMode {
+			m.fingerprintGen++
 			return m, m.buildFSCheckCmd()
 		}
 		if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
@@ -762,25 +764,29 @@ func (m Model) buildCommitCmd(gen int) (tea.Cmd, context.CancelFunc) {
 // --- Watch mode handlers ---
 
 // buildCheckCmd creates an async Cmd that computes the repo fingerprint (polling path).
+// Captures the current fingerprintGen so stale results are discarded on arrival.
 func (m Model) buildCheckCmd() tea.Cmd {
+	gen := m.fingerprintGen
 	fp := m.fingerprinter
 	baseRef := m.watchBaseRef
 	wt := m.State.Compare.WorkingTree
 	return func() tea.Msg {
 		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
-		return watch.FingerprintMsg{Fingerprint: result, Err: err}
+		return watch.FingerprintMsg{Fingerprint: result, Err: err, Gen: gen}
 	}
 }
 
 // buildFSCheckCmd creates an async Cmd that computes the repo fingerprint (fsnotify path).
 // The result has FromFS=true so handleWatchFingerprint won't reschedule the polling timer.
+// Captures the current fingerprintGen so stale results are discarded on arrival.
 func (m Model) buildFSCheckCmd() tea.Cmd {
+	gen := m.fingerprintGen
 	fp := m.fingerprinter
 	baseRef := m.watchBaseRef
 	wt := m.State.Compare.WorkingTree
 	return func() tea.Msg {
 		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
-		return watch.FingerprintMsg{Fingerprint: result, Err: err, FromFS: true}
+		return watch.FingerprintMsg{Fingerprint: result, Err: err, FromFS: true, Gen: gen}
 	}
 }
 
@@ -789,12 +795,21 @@ func (m Model) handleWatchTick(_ watch.TickMsg) (tea.Model, tea.Cmd) {
 	if !m.State.WatchEnabled || m.fingerprinter == nil {
 		return m, nil
 	}
+	m.fingerprintGen++
 	return m, m.buildCheckCmd()
 }
 
 // handleWatchFingerprint processes a fingerprint check result.
 func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.Cmd) {
 	if !m.State.WatchEnabled {
+		return m, nil
+	}
+	// Discard stale results from superseded checks, but keep the polling
+	// chain alive for non-FS results (TickCmd is one-shot).
+	if msg.Gen != m.fingerprintGen {
+		if !msg.FromFS {
+			return m, watch.TickCmd(m.State.WatchInterval)
+		}
 		return m, nil
 	}
 	m.lastCheckAt = time.Now()
