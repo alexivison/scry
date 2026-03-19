@@ -132,6 +132,20 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 	m := ui.NewModel(state, opts...)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
+	// Start fsnotify watcher for accelerated refresh (polling remains as fallback).
+	if cfg.Watch {
+		repoRoot := boot.Repo.WorktreeRoot
+		if repoRoot == "" {
+			repoRoot = boot.Repo.GitDir
+		}
+		fsw := watch.NewFSWatcher(repoRoot, boot.Repo.GitDir, func() {
+			p.Send(watch.FSEventMsg{})
+		})
+		if fsw != nil {
+			defer fsw.Close()
+		}
+	}
+
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
 		return 1

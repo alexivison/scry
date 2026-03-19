@@ -76,10 +76,15 @@ type TickMsg struct {
 	At time.Time
 }
 
+// FSEventMsg is sent by the fsnotify watcher when file changes are detected.
+// It triggers an immediate fingerprint check, bypassing the polling timer.
+type FSEventMsg struct{}
+
 // FingerprintMsg carries the result of a fingerprint check.
 type FingerprintMsg struct {
 	Fingerprint string
 	Err         error
+	FromFS      bool // true when triggered by fsnotify (don't reschedule polling tick)
 }
 
 // --- Bubble Tea commands -------------------------------------------------

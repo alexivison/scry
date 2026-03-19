@@ -238,6 +238,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CommitEditedMsg:
 		return m.handleCommitEdited(msg)
 
+	case watch.FSEventMsg:
+		// fsnotify detected a file change — trigger immediate fingerprint check
+		// without rescheduling the polling timer (to avoid timer multiplication).
+		if m.State.WatchEnabled && m.fingerprinter != nil && !m.State.WorktreeMode {
+			return m, m.buildFSCheckCmd()
+		}
+		if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
+			return m.handleDashboardTick()
+		}
+		return m, nil
+
 	case watch.TickMsg:
 		if m.State.WorktreeMode {
 			return m.handleDashboardTick()
@@ -507,7 +518,7 @@ func (m Model) buildCommitCmd(gen int) (tea.Cmd, context.CancelFunc) {
 
 // --- Watch mode handlers ---
 
-// buildCheckCmd creates an async Cmd that computes the repo fingerprint.
+// buildCheckCmd creates an async Cmd that computes the repo fingerprint (polling path).
 func (m Model) buildCheckCmd() tea.Cmd {
 	fp := m.fingerprinter
 	baseRef := m.watchBaseRef
@@ -515,6 +526,18 @@ func (m Model) buildCheckCmd() tea.Cmd {
 	return func() tea.Msg {
 		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
 		return watch.FingerprintMsg{Fingerprint: result, Err: err}
+	}
+}
+
+// buildFSCheckCmd creates an async Cmd that computes the repo fingerprint (fsnotify path).
+// The result has FromFS=true so handleWatchFingerprint won't reschedule the polling timer.
+func (m Model) buildFSCheckCmd() tea.Cmd {
+	fp := m.fingerprinter
+	baseRef := m.watchBaseRef
+	wt := m.State.Compare.WorkingTree
+	return func() tea.Msg {
+		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
+		return watch.FingerprintMsg{Fingerprint: result, Err: err, FromFS: true}
 	}
 }
 
@@ -533,8 +556,17 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 	}
 	m.lastCheckAt = time.Now()
 
+	// tickCmd returns the polling tick command, or nil for FS-triggered checks
+	// (to avoid multiplying polling timers).
+	tickCmd := func() tea.Cmd {
+		if msg.FromFS {
+			return nil
+		}
+		return watch.TickCmd(m.State.WatchInterval)
+	}
+
 	if msg.Err != nil {
-		return m, watch.TickCmd(m.State.WatchInterval)
+		return m, tickCmd()
 	}
 
 	// First fingerprint: seed without refresh (bootstrap already loaded data).
@@ -544,20 +576,26 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 		m.State.LastFingerprint = msg.Fingerprint
 		if m.State.FocusPane == model.PaneIdle {
 			refreshed, refreshCmd := m.startRefresh()
-			return refreshed, tea.Batch(refreshCmd, watch.TickCmd(m.State.WatchInterval))
+			if tc := tickCmd(); tc != nil {
+				return refreshed, tea.Batch(refreshCmd, tc)
+			}
+			return refreshed, refreshCmd
 		}
-		return m, watch.TickCmd(m.State.WatchInterval)
+		return m, tickCmd()
 	}
 
 	if watch.ShouldRefresh(&m.State, msg.Fingerprint) {
 		m.State.LastFingerprint = msg.Fingerprint
 		refreshed, refreshCmd := m.startRefresh()
-		return refreshed, tea.Batch(refreshCmd, watch.TickCmd(m.State.WatchInterval))
+		if tc := tickCmd(); tc != nil {
+			return refreshed, tea.Batch(refreshCmd, tc)
+		}
+		return refreshed, refreshCmd
 	}
 
 	// When RefreshInFlight is true, LastFingerprint is intentionally NOT updated
 	// so the mismatch triggers a refresh once the in-flight one completes.
-	return m, watch.TickCmd(m.State.WatchInterval)
+	return m, tickCmd()
 }
 
 // selectFile checks the cache and either uses a cached result or fires an async load.
