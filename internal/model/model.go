@@ -47,7 +47,8 @@ const (
 	StatusRenamed  FileStatus = "R"
 	StatusCopied   FileStatus = "C"
 	StatusTypeChg  FileStatus = "T"
-	StatusUnmerged FileStatus = "U"
+	StatusUnmerged  FileStatus = "U"
+	StatusUntracked FileStatus = "?"
 )
 
 type FileSummary struct {

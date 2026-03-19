@@ -122,6 +122,8 @@ func StatusIcon(s model.FileStatus) string {
 		return "T"
 	case model.StatusUnmerged:
 		return "U"
+	case model.StatusUntracked:
+		return "?"
 	default:
 		return "?"
 	}

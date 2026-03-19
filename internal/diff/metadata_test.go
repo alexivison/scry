@@ -162,8 +162,9 @@ func TestListFiles(t *testing.T) {
 		},
 		"working tree mode uses base-only range": {
 			runner: routeGit(map[string]string{
-				"diff --name-status -z -M aaa111": "M\x00main.go\x00",
-				"diff --numstat -z -M aaa111":     "10\t5\tmain.go\x00",
+				"diff --name-status -z -M aaa111":          "M\x00main.go\x00",
+				"diff --numstat -z -M aaa111":              "10\t5\tmain.go\x00",
+				"ls-files --others --exclude-standard -z":  "",
 			}),
 			compare: &model.ResolvedCompare{DiffRange: "aaa111", WorkingTree: true},
 			want: []model.FileSummary{

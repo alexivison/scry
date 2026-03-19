@@ -16,7 +16,7 @@ type countingPatchLoader struct {
 	err     error
 }
 
-func (c *countingPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, filePath string, _ bool) (model.FilePatch, error) {
+func (c *countingPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, filePath string, _ model.FileStatus, _ bool) (model.FilePatch, error) {
 	c.calls.Add(1)
 	if c.err != nil {
 		return model.FilePatch{}, c.err

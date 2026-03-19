@@ -24,7 +24,7 @@ import (
 
 // PatchLoader loads a file's unified diff.
 type PatchLoader interface {
-	LoadPatch(ctx context.Context, cmp model.ResolvedCompare, filePath string, ignoreWhitespace bool) (model.FilePatch, error)
+	LoadPatch(ctx context.Context, cmp model.ResolvedCompare, filePath string, status model.FileStatus, ignoreWhitespace bool) (model.FilePatch, error)
 }
 
 // MetadataLoader lists changed files for a compare range.
@@ -583,10 +583,11 @@ func (m Model) selectFile() (tea.Model, tea.Cmd) {
 	gen := m.State.CacheGeneration
 	cmp := m.State.Compare
 	ignoreWS := m.State.IgnoreWhitespace
+	status := file.Status
 	loader := m.patchLoader
 
 	cmd := func() tea.Msg {
-		fp, err := loader.LoadPatch(context.Background(), cmp, path, ignoreWS)
+		fp, err := loader.LoadPatch(context.Background(), cmp, path, status, ignoreWS)
 		return PatchLoadedMsg{Path: path, Patch: fp, Gen: gen, Err: err}
 	}
 

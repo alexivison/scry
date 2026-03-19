@@ -63,7 +63,7 @@ type mockPatchLoader struct {
 	}
 }
 
-func (m *mockPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, filePath string, _ bool) (model.FilePatch, error) {
+func (m *mockPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, filePath string, _ model.FileStatus, _ bool) (model.FilePatch, error) {
 	if pf, ok := m.perFile[filePath]; ok {
 		return pf.patch, pf.err
 	}

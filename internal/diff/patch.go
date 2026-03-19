@@ -2,6 +2,7 @@ package diff
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,14 +36,9 @@ type PatchService struct {
 }
 
 // LoadPatch runs git diff --patch for a single file and parses the result.
-func (s *PatchService) LoadPatch(ctx context.Context, cmp model.ResolvedCompare, filePath string, ignoreWhitespace bool) (model.FilePatch, error) {
-	args := []string{"diff", "--patch", "--no-color", "--no-ext-diff", "-M"}
-	if ignoreWhitespace {
-		args = append(args, "-w")
-	}
-	args = append(args, cmp.DiffRange, "--", filePath)
-
-	raw, err := s.Runner.RunGit(ctx, args...)
+// For untracked files (status == StatusUntracked), it uses --no-index against /dev/null.
+func (s *PatchService) LoadPatch(ctx context.Context, cmp model.ResolvedCompare, filePath string, status model.FileStatus, ignoreWhitespace bool) (model.FilePatch, error) {
+	raw, err := s.runDiff(ctx, cmp, filePath, status, ignoreWhitespace)
 	if err != nil {
 		return model.FilePatch{}, fmt.Errorf("git diff --patch: %w", err)
 	}
@@ -88,6 +84,40 @@ func (s *PatchService) LoadPatch(ctx context.Context, cmp model.ResolvedCompare,
 	}
 
 	return model.FilePatch{Summary: summary, Hunks: hunks}, nil
+}
+
+// runDiff executes the appropriate git diff command for the file.
+func (s *PatchService) runDiff(ctx context.Context, cmp model.ResolvedCompare, filePath string, status model.FileStatus, ignoreWS bool) (string, error) {
+	if status == model.StatusUntracked {
+		return s.runNoIndexDiff(ctx, filePath, ignoreWS)
+	}
+
+	args := []string{"diff", "--patch", "--no-color", "--no-ext-diff", "-M"}
+	if ignoreWS {
+		args = append(args, "-w")
+	}
+	args = append(args, cmp.DiffRange, "--", filePath)
+	return s.Runner.RunGit(ctx, args...)
+}
+
+// runNoIndexDiff diffs /dev/null against an untracked file.
+// git diff --no-index exits 1 when files differ, so we recover stdout from GitError.
+func (s *PatchService) runNoIndexDiff(ctx context.Context, filePath string, ignoreWS bool) (string, error) {
+	args := []string{"diff", "--no-index", "--patch", "--no-color", "--no-ext-diff"}
+	if ignoreWS {
+		args = append(args, "-w")
+	}
+	args = append(args, "--", "/dev/null", filePath)
+
+	raw, err := s.Runner.RunGit(ctx, args...)
+	if err != nil {
+		var ge *gitexec.GitError
+		if errors.As(err, &ge) && ge.ExitCode == 1 && ge.Stdout != "" {
+			return ge.Stdout, nil
+		}
+		return "", err
+	}
+	return raw, nil
 }
 
 // splitRawBodies extracts raw hunk body text between @@ headers,

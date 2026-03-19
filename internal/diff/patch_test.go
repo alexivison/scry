@@ -488,7 +488,7 @@ func TestLoadPatch(t *testing.T) {
 				c = *tc.compare
 			}
 			svc := &PatchService{Runner: &mockRunner{fn: tc.runner}}
-			got, err := svc.LoadPatch(context.Background(), c, tc.filePath, tc.ignoreWS)
+			got, err := svc.LoadPatch(context.Background(), c, tc.filePath, model.StatusModified, tc.ignoreWS)
 
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {

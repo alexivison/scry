@@ -323,7 +323,7 @@ func TestSmoke_FullDiffPipeline(t *testing.T) {
 		if f.Status == model.StatusDeleted {
 			continue
 		}
-		fp, err := patchSvc.LoadPatch(ctx, cmp, f.Path, false)
+		fp, err := patchSvc.LoadPatch(ctx, cmp, f.Path, f.Status, false)
 		if err != nil {
 			t.Errorf("LoadPatch(%s): %v", f.Path, err)
 			continue

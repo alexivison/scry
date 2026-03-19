@@ -27,10 +27,13 @@ type GitRunnerConfig struct {
 }
 
 // GitError wraps a non-zero git exit with structured context.
+// Stdout is populated so callers can recover output from commands
+// that exit non-zero by design (e.g. git diff --no-index).
 type GitError struct {
 	Args     []string
 	ExitCode int
 	Stderr   string
+	Stdout   string
 }
 
 func (e *GitError) Error() string {
@@ -75,6 +78,7 @@ func (r *runner) RunGit(ctx context.Context, args ...string) (string, error) {
 				Args:     args,
 				ExitCode: exitErr.ExitCode(),
 				Stderr:   strings.TrimSpace(stderr.String()),
+				Stdout:   stdout.String(),
 			}
 		}
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)

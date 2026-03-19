@@ -2,8 +2,11 @@
 package diff
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -41,7 +44,68 @@ func (s *MetadataService) ListFiles(ctx context.Context, cmp model.ResolvedCompa
 	stats := parseNumstat(numOut)
 	mergeStats(files, stats)
 
+	if cmp.WorkingTree {
+		untracked, err := s.listUntracked(ctx, cmp.Repo.WorktreeRoot)
+		if err != nil {
+			return nil, fmt.Errorf("untracked: %w", err)
+		}
+		files = append(files, untracked...)
+	}
+
 	return files, nil
+}
+
+// listUntracked returns FileSummary entries for untracked files.
+func (s *MetadataService) listUntracked(ctx context.Context, root string) ([]model.FileSummary, error) {
+	out, err := s.Runner.RunGit(ctx, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+
+	paths := strings.Split(out, "\x00")
+	if len(paths) > 0 && paths[len(paths)-1] == "" {
+		paths = paths[:len(paths)-1]
+	}
+
+	files := make([]model.FileSummary, 0, len(paths))
+	for _, p := range paths {
+		fs := model.FileSummary{
+			Path:   p,
+			Status: model.StatusUntracked,
+		}
+		fs.Additions, fs.IsBinary = countFileLines(filepath.Join(root, p))
+		files = append(files, fs)
+	}
+	return files, nil
+}
+
+// countFileLines returns the line count and binary flag for a file.
+// Binary detection uses a simple NUL-byte heuristic on the first 8 KiB.
+func countFileLines(path string) (lines int, binary bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	// Check first 8 KiB for NUL bytes (binary heuristic).
+	probe := data
+	if len(probe) > 8192 {
+		probe = probe[:8192]
+	}
+	if bytes.ContainsRune(probe, 0) {
+		return 0, true
+	}
+	if len(data) == 0 {
+		return 0, false
+	}
+	n := bytes.Count(data, []byte{'\n'})
+	// Count final line even without trailing newline.
+	if data[len(data)-1] != '\n' {
+		n++
+	}
+	return n, false
 }
 
 // parseNameStatus parses NUL-delimited --name-status -z output.

@@ -141,7 +141,7 @@ func TestGoldenSimplePatchParity(t *testing.T) {
 	patchSvc := &diff.PatchService{Runner: runner}
 
 	// Load patch for greet.txt and verify hunks match raw diff.
-	fp, err := patchSvc.LoadPatch(context.Background(), cmp, "greet.txt", false)
+	fp, err := patchSvc.LoadPatch(context.Background(), cmp, "greet.txt", model.StatusModified, false)
 	if err != nil {
 		t.Fatalf("LoadPatch: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestGoldenSubmodule(t *testing.T) {
 	cmp := resolvedCompare(t, runner)
 	patchSvc := &diff.PatchService{Runner: runner}
 
-	_, err := patchSvc.LoadPatch(context.Background(), cmp, "sub", false)
+	_, err := patchSvc.LoadPatch(context.Background(), cmp, "sub", model.StatusModified, false)
 	if err == nil {
 		t.Fatal("expected ErrSubmodule, got nil")
 	}
@@ -274,7 +274,7 @@ func TestGoldenLargeOversized(t *testing.T) {
 	cmp := resolvedCompare(t, runner)
 	patchSvc := &diff.PatchService{Runner: runner}
 
-	_, err := patchSvc.LoadPatch(context.Background(), cmp, "big.txt", false)
+	_, err := patchSvc.LoadPatch(context.Background(), cmp, "big.txt", model.StatusModified, false)
 	if err == nil {
 		t.Fatal("expected OversizedError, got nil")
 	}
