@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/ui/theme"
 )
 
 // PatchViewport tracks scroll position and hunk navigation for a loaded patch.
@@ -291,18 +292,18 @@ func (vp *PatchViewport) ViewportLineToDiffLine(vpLine int) int {
 // Styles for patch rendering.
 var (
 	hunkHeaderStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("6")).
+			Foreground(theme.HunkHeader).
 			Bold(true)
 
 	addedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("2"))
+			Foreground(theme.Added)
 
 	deletedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("1"))
+			Foreground(theme.Deleted)
 
 	contextStyle = lipgloss.NewStyle()
 
 	noNewlineStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8")).
+			Foreground(theme.Muted).
 			Italic(true)
 )

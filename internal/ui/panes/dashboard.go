@@ -8,13 +8,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/ui/theme"
 )
 
 var (
-	cleanStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
-	dirtyStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	cleanStyle        = lipgloss.NewStyle().Foreground(theme.Clean)
+	dirtyStyle        = lipgloss.NewStyle().Foreground(theme.Dirty)
 	dashSelectedStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
-	hashStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // dim
+	hashStyle         = lipgloss.NewStyle().Foreground(theme.Muted)
 )
 
 // RenderDashboard renders the worktree dashboard list constrained to the given dimensions.

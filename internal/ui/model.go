@@ -19,6 +19,7 @@ import (
 	"github.com/alexivison/scry/internal/search"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
+	"github.com/alexivison/scry/internal/ui/theme"
 	"github.com/alexivison/scry/internal/watch"
 )
 
@@ -1251,11 +1252,11 @@ const (
 var (
 	selectedStyle  = lipgloss.NewStyle().Bold(true).Reverse(true)
 	statusBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("235")).
-			Foreground(lipgloss.Color("252"))
+			Background(theme.StatusBg).
+			Foreground(theme.StatusFg)
 	searchNotFoundStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("1")).
-				Foreground(lipgloss.Color("15"))
+				Background(theme.Error).
+				Foreground(theme.BrightText)
 	dividerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
+			Foreground(theme.DividerFg)
 )
