@@ -114,6 +114,9 @@ func (vp *PatchViewport) ScrollUp() {
 
 // PageDown moves the viewport one full page down.
 func (vp *PatchViewport) PageDown() {
+	if len(vp.lines) == 0 {
+		return
+	}
 	vp.ScrollOffset += vp.Height
 	if vp.ScrollOffset > len(vp.lines)-1 {
 		vp.ScrollOffset = len(vp.lines) - 1
@@ -132,6 +135,9 @@ func (vp *PatchViewport) PageUp() {
 
 // HalfPageDown moves the viewport half a page down.
 func (vp *PatchViewport) HalfPageDown() {
+	if len(vp.lines) == 0 {
+		return
+	}
 	vp.ScrollOffset += vp.Height / 2
 	if vp.ScrollOffset > len(vp.lines)-1 {
 		vp.ScrollOffset = len(vp.lines) - 1
@@ -245,19 +251,33 @@ func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool
 
 func highlightMatch(line, query string, baseStyle lipgloss.Style) string {
 	caseSensitive := strings.ToLower(query) != query
-	var idx int
 	if caseSensitive {
-		idx = strings.Index(line, query)
-	} else {
-		idx = strings.Index(strings.ToLower(line), strings.ToLower(query))
+		idx := strings.Index(line, query)
+		if idx < 0 {
+			return baseStyle.Render(line)
+		}
+		hlStyle := baseStyle.Reverse(true)
+		return baseStyle.Render(line[:idx]) + hlStyle.Render(line[idx:idx+len(query)]) + baseStyle.Render(line[idx+len(query):])
 	}
-	if idx < 0 {
+	// Case-insensitive: ToLower can change byte lengths, so find the match
+	// by rune position to avoid slicing the original with misaligned byte offsets.
+	lowerLine := strings.ToLower(line)
+	lowerQuery := strings.ToLower(query)
+	byteIdx := strings.Index(lowerLine, lowerQuery)
+	if byteIdx < 0 {
 		return baseStyle.Render(line)
 	}
+	// Map byte offset in lowered string to rune offset, then back to original byte offset.
+	runeStart := len([]rune(lowerLine[:byteIdx]))
+	runeLen := len([]rune(lowerQuery))
+	origRunes := []rune(line)
+	if runeStart+runeLen > len(origRunes) {
+		return baseStyle.Render(line)
+	}
+	before := string(origRunes[:runeStart])
+	match := string(origRunes[runeStart : runeStart+runeLen])
+	after := string(origRunes[runeStart+runeLen:])
 	hlStyle := baseStyle.Reverse(true)
-	before := line[:idx]
-	match := line[idx : idx+len(query)]
-	after := line[idx+len(query):]
 	return baseStyle.Render(before) + hlStyle.Render(match) + baseStyle.Render(after)
 }
 

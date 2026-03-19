@@ -555,6 +555,62 @@ func TestRenderGutterSuppression(t *testing.T) {
 	}
 }
 
+func TestHighlightMatch_UnicodeByteLengthChange(t *testing.T) {
+	t.Parallel()
+
+	// U+023A (Ⱥ, 2 bytes) lowercases to U+2C65 (ⱥ, 3 bytes).
+	// The lowered string is longer than the original. A byte index from the
+	// lowered string applied to the original causes a slice bounds panic.
+	line := "a\u023Ab"       // 4 bytes: a(1) + Ⱥ(2) + b(1)
+	query := "b"             // case-insensitive (all lowercase)
+
+	style := lipgloss.NewStyle()
+	// Must not panic.
+	result := highlightMatch(line, query, style)
+	if result == "" {
+		t.Error("highlightMatch returned empty string")
+	}
+}
+
+func TestHighlightMatch_CaseInsensitiveASCII(t *testing.T) {
+	t.Parallel()
+
+	line := "Hello World"
+	query := "hello" // all-lowercase → case-insensitive search
+	style := lipgloss.NewStyle()
+
+	result := highlightMatch(line, query, style)
+	// Should find and highlight "Hello" even though query is "hello".
+	if !strings.Contains(result, "Hello") {
+		t.Errorf("expected result to contain 'Hello', got: %s", result)
+	}
+}
+
+func TestPageDown_EmptyPatch_NoNegativeOffset(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(emptyPatch())
+	vp.Height = 20
+
+	// Bug #12: PageDown on empty patch clamps to len(lines)-1 = -1.
+	vp.PageDown()
+	if vp.ScrollOffset < 0 {
+		t.Errorf("PageDown on empty patch: ScrollOffset = %d, want >= 0", vp.ScrollOffset)
+	}
+}
+
+func TestHalfPageDown_EmptyPatch_NoNegativeOffset(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(emptyPatch())
+	vp.Height = 20
+
+	vp.HalfPageDown()
+	if vp.ScrollOffset < 0 {
+		t.Errorf("HalfPageDown on empty patch: ScrollOffset = %d, want >= 0", vp.ScrollOffset)
+	}
+}
+
 func TestViewportLineToDiffLine(t *testing.T) {
 	t.Parallel()
 
