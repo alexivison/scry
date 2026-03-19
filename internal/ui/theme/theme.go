@@ -17,6 +17,7 @@ var (
 	Error = lipgloss.Color("1")     // red
 
 	// Chrome.
+	Accent     = lipgloss.Color("4")   // blue — active pane border
 	Muted      = lipgloss.Color("8")   // dim / bright-black
 	StatusBg   = lipgloss.Color("235") // dark gray
 	StatusFg   = lipgloss.Color("252") // light gray

@@ -2074,3 +2074,34 @@ func TestRefreshResetsScrollForChangedPatchContent(t *testing.T) {
 		t.Errorf("ScrollOffset = %d, want 0 (reset for changed content)", result.patchViewport.ScrollOffset)
 	}
 }
+
+func TestFooterSuppressedAtCompactHeight(t *testing.T) {
+	t.Parallel()
+
+	t.Run("footer visible at height 30", func(t *testing.T) {
+		t.Parallel()
+		m := NewModel(sampleState())
+		m.width = 80
+		m.height = 31 // 30 content + 1 status bar → HeightFooterVisible
+		output := m.View()
+		if !strings.Contains(output, "files") {
+			t.Error("footer should show file count at height ≥ 30")
+		}
+	})
+
+	t.Run("footer hidden at height 29", func(t *testing.T) {
+		t.Parallel()
+		m := NewModel(sampleState())
+		m.width = 80
+		m.height = 29 // below HeightFooterVisible threshold
+		output := m.View()
+		lines := strings.Split(output, "\n")
+		// Bottom border line (second-to-last, before status bar) should not contain "files".
+		if len(lines) >= 2 {
+			bottomBorder := lines[len(lines)-2]
+			if strings.Contains(bottomBorder, "files") {
+				t.Errorf("footer should be hidden at compact height, got: %q", bottomBorder)
+			}
+		}
+	})
+}
