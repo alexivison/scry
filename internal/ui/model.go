@@ -99,6 +99,7 @@ type Model struct {
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
 	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
+	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
 
 	spinner spinner.Model // shared spinner for loading states
 }
@@ -220,13 +221,19 @@ type pendingKeyTimeoutMsg struct {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{m.spinner.Tick}
 	if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
-		return tea.Batch(m.spinner.Tick, watch.TickCmd(m.State.WatchInterval))
+		cmds = append(cmds, watch.TickCmd(m.State.WatchInterval))
+	} else if m.State.WatchEnabled && m.fingerprinter != nil {
+		cmds = append(cmds, m.buildCheckCmd())
 	}
-	if m.State.WatchEnabled && m.fingerprinter != nil {
-		return tea.Batch(m.spinner.Tick, m.buildCheckCmd())
+	// Load initial dashboard preview if in dashboard mode.
+	if m.State.FocusPane == model.PaneDashboard {
+		if pc := m.maybeLoadPreview(); pc != nil {
+			cmds = append(cmds, pc)
+		}
 	}
-	return m.spinner.Tick
+	return tea.Batch(cmds...)
 }
 
 // Update implements tea.Model.
@@ -297,6 +304,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DrillDownLoadedMsg:
 		return m.handleDrillDownLoaded(msg)
+
+	case PreviewLoadedMsg:
+		return m.handlePreviewLoaded(msg)
 
 	case WorktreeRemovedMsg:
 		return m.handleWorktreeRemoved(msg)

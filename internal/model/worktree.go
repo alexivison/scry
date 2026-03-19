@@ -14,6 +14,11 @@ type WorktreeInfo struct {
 	LastActivityAt time.Time // updated when snapshot state changes (dirty, count, commit)
 }
 
+// PreviewEntry holds cached preview data for a worktree.
+type PreviewEntry struct {
+	Files []FileSummary
+}
+
 // PaneDashboard is the focus pane for worktree dashboard mode.
 const PaneDashboard Pane = "dashboard"
 
@@ -24,6 +29,10 @@ type DashboardState struct {
 	ScrollOffset    int
 	DrillDown       bool // true when viewing a worktree's diff
 	DrillGeneration int  // monotonic counter to discard stale drill-down results
+
+	// Preview pane state.
+	PreviewCache map[string]PreviewEntry // cache key (snap) → preview data
+	PreviewFiles []FileSummary           // current selection's preview (for rendering)
 
 	// Deletion confirmation state.
 	ConfirmDelete bool   // true when awaiting deletion confirmation

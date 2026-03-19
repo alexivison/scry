@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,6 +29,24 @@ type DrillDownResult struct {
 // DrillDownProvider creates the diff context for a specific worktree.
 type DrillDownProvider interface {
 	LoadDrillDown(ctx context.Context, worktreePath string) (DrillDownResult, error)
+}
+
+// PreviewLoader loads the top changed files for a worktree preview.
+type PreviewLoader interface {
+	LoadPreview(ctx context.Context, worktreePath string) ([]model.FileSummary, error)
+}
+
+// WithPreviewLoader sets the PreviewLoader for dashboard preview pane.
+func WithPreviewLoader(pl PreviewLoader) ModelOption {
+	return func(m *Model) { m.previewLoader = pl }
+}
+
+// PreviewLoadedMsg is sent when an async preview load completes.
+type PreviewLoadedMsg struct {
+	Path  string
+	Snap  string
+	Files []model.FileSummary
+	Err   error
 }
 
 // WorktreeRemover removes a worktree.
@@ -126,24 +145,33 @@ func (m Model) handleWorktreeRefreshed(msg WorktreeRefreshedMsg) (tea.Model, tea
 	ds.Worktrees = msg.Worktrees
 
 	// Reconcile selection.
+	found := false
 	if prevBranch != "" {
 		for i, wt := range ds.Worktrees {
 			if wt.Branch == prevBranch {
 				ds.SelectedIdx = i
-				return m, nextTick
+				found = true
+				break
 			}
 		}
 	}
-	// Clamp selection to valid range.
-	if len(ds.Worktrees) == 0 {
-		ds.SelectedIdx = 0
-		return m, nextTick
+	if !found {
+		// Clamp selection to valid range.
+		if len(ds.Worktrees) == 0 {
+			ds.SelectedIdx = 0
+		} else {
+			if ds.SelectedIdx >= len(ds.Worktrees) {
+				ds.SelectedIdx = len(ds.Worktrees) - 1
+			}
+			if ds.SelectedIdx < 0 {
+				ds.SelectedIdx = 0
+			}
+		}
 	}
-	if ds.SelectedIdx >= len(ds.Worktrees) {
-		ds.SelectedIdx = len(ds.Worktrees) - 1
-	}
-	if ds.SelectedIdx < 0 {
-		ds.SelectedIdx = 0
+
+	// Trigger preview load for the (possibly new) selection.
+	if previewCmd := m.maybeLoadPreview(); previewCmd != nil {
+		return m, tea.Batch(nextTick, previewCmd)
 	}
 	return m, nextTick
 }
@@ -165,11 +193,17 @@ func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if ds.SelectedIdx < len(ds.Worktrees)-1 {
 			ds.SelectedIdx++
 			m.syncDashboardScroll()
+			if cmd := m.maybeLoadPreview(); cmd != nil {
+				return m, cmd
+			}
 		}
 	case "k", "up":
 		if ds.SelectedIdx > 0 {
 			ds.SelectedIdx--
 			m.syncDashboardScroll()
+			if cmd := m.maybeLoadPreview(); cmd != nil {
+				return m, cmd
+			}
 		}
 	case "l", "enter":
 		if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
@@ -353,6 +387,74 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.updateFiles(msg)
 }
 
+// WorktreeSnapshotKey returns a cache key for a worktree's mutable state.
+func WorktreeSnapshotKey(wt model.WorktreeInfo) string {
+	return fmt.Sprintf("%s|%s|%v|%d", wt.Path, wt.CommitHash, wt.Dirty, wt.ChangedFiles)
+}
+
+// maybeLoadPreview triggers a preview load for the selected worktree if not cached.
+func (m *Model) maybeLoadPreview() tea.Cmd {
+	if m.previewLoader == nil {
+		return nil
+	}
+	ds := &m.State.DashboardState
+	if m.width < 100 {
+		ds.PreviewFiles = nil // clear stale preview at narrow width
+		return nil
+	}
+	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) {
+		return nil
+	}
+	wt := ds.Worktrees[ds.SelectedIdx]
+	snap := WorktreeSnapshotKey(wt)
+
+	// Cache hit.
+	if ds.PreviewCache != nil {
+		if entry, ok := ds.PreviewCache[snap]; ok {
+			ds.PreviewFiles = entry.Files
+			return nil
+		}
+	}
+
+	// Cache miss: clear stale preview and fire async load.
+	ds.PreviewFiles = nil
+	loader := m.previewLoader
+	path := wt.Path
+	return func() tea.Msg {
+		files, err := loader.LoadPreview(context.Background(), path)
+		return PreviewLoadedMsg{Path: path, Snap: snap, Files: files, Err: err}
+	}
+}
+
+// handlePreviewLoaded applies the loaded preview data and caches it.
+func (m Model) handlePreviewLoaded(msg PreviewLoadedMsg) (tea.Model, tea.Cmd) {
+	ds := &m.State.DashboardState
+	if msg.Err != nil {
+		ds.PreviewFiles = nil
+		return m, nil
+	}
+
+	// Limit to top 5 files.
+	files := msg.Files
+	if len(files) > 5 {
+		files = files[:5]
+	}
+
+	// Store in cache.
+	if ds.PreviewCache == nil {
+		ds.PreviewCache = make(map[string]model.PreviewEntry)
+	}
+	ds.PreviewCache[msg.Snap] = model.PreviewEntry{Files: files}
+
+	// Apply to current view if the selected worktree still matches.
+	if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
+		if ds.Worktrees[ds.SelectedIdx].Path == msg.Path {
+			ds.PreviewFiles = files
+		}
+	}
+	return m, nil
+}
+
 // reconcileActivity compares old and new worktree snapshots and updates
 // LastActivityAt on new entries when state changes are detected.
 func reconcileActivity(old, new []model.WorktreeInfo) {
@@ -397,8 +499,46 @@ func (m Model) viewDashboard() string {
 		return prompt
 	}
 
+	showPreview := m.width >= 100 && len(ds.PreviewFiles) > 0
+	if showPreview {
+		return m.viewDashboardSplit(outerHeight)
+	}
+
 	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
 	content := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, innerW, innerH)
 	footer := fmt.Sprintf("%d worktrees", len(ds.Worktrees))
 	return panes.BorderedPane(content, "Worktrees", footer, m.width, outerHeight, true, m.showFooter())
+}
+
+// viewDashboardSplit renders the dashboard with a side preview pane.
+func (m Model) viewDashboardSplit(outerHeight int) string {
+	ds := m.State.DashboardState
+	showFoot := m.showFooter()
+
+	// Allocate 60% to worktree list, 40% to preview.
+	listW := m.width * 6 / 10
+	previewW := m.width - listW
+
+	listInnerW, listInnerH := panes.ContentDimensions(listW, outerHeight)
+	previewInnerW, previewInnerH := panes.ContentDimensions(previewW, outerHeight)
+
+	listContent := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, listInnerW, listInnerH)
+	previewContent := panes.RenderPreview(ds.PreviewFiles, previewInnerW, previewInnerH)
+
+	listFooter := fmt.Sprintf("%d worktrees", len(ds.Worktrees))
+	left := panes.BorderedPane(listContent, "Worktrees", listFooter, listW, outerHeight, true, showFoot)
+	right := panes.BorderedPane(previewContent, "Preview", "", previewW, outerHeight, false, showFoot)
+
+	// Join panes side by side.
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	rows := make([]string, len(leftLines))
+	for i := range leftLines {
+		r := ""
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		rows[i] = leftLines[i] + r
+	}
+	return strings.Join(rows, "\n")
 }
