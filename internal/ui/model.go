@@ -839,7 +839,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp := panes.NewPatchViewport(*ps.Patch)
 	vp.Width = m.width
 	vp.Height = m.height - 1
-	vp.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
+	vp.GutterVisible = m.width >= 60
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
@@ -1064,12 +1064,14 @@ func (m Model) viewPatch() string {
 		outerHeight = 3
 	}
 	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
-	content := m.renderPatch(innerW, innerH)
-	return panes.BorderedPane(content, m.patchTitle(), m.patchFooter(), m.width, outerHeight, true, m.showFooter())
+	content := m.renderPatch(innerW, innerH, m.width)
+	scrollLine := m.patchScrollLine(innerH)
+	return panes.BorderedPaneWithScroll(content, m.patchTitle(), m.patchFooter(), m.width, outerHeight, true, m.showFooter(), scrollLine)
 }
 
 // renderPatch renders the patch pane content at the given dimensions.
-func (m Model) renderPatch(width, height int) string {
+// outerWidth is the pane's outer width (including borders) for gutter decisions.
+func (m Model) renderPatch(width, height, outerWidth int) string {
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
 	}
@@ -1089,7 +1091,7 @@ func (m Model) renderPatch(width, height int) string {
 	}
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
-	m.patchViewport.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
+	m.patchViewport.GutterVisible = outerWidth >= 60
 	return m.patchViewport.Render()
 }
 
@@ -1176,6 +1178,24 @@ func (m Model) showFooter() bool {
 	return ht >= terminal.HeightFooterVisible
 }
 
+// patchScrollLine returns the inner row index for the scroll indicator,
+// or -1 if no indicator should be shown.
+func (m Model) patchScrollLine(innerHeight int) int {
+	if m.patchViewport == nil || innerHeight <= 0 {
+		return -1
+	}
+	total := m.patchViewport.TotalLines()
+	if total <= m.patchViewport.Height {
+		return -1 // content fits — no scrollbar needed
+	}
+	pos := m.patchViewport.ScrollIndicatorPos()
+	line := int(pos * float64(innerHeight-1))
+	if line >= innerHeight {
+		line = innerHeight - 1
+	}
+	return line
+}
+
 // patchTitle returns the title for the patch pane (current filename).
 func (m Model) patchTitle() string {
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
@@ -1260,12 +1280,13 @@ func (m Model) viewSplit() string {
 		m.State.Files, m.State.SelectedFile, m.fileListScroll,
 		flInnerW, flInnerH, filesActive,
 	)
-	rightContent := m.renderPatch(patchInnerW, patchInnerH)
+	rightContent := m.renderPatch(patchInnerW, patchInnerH, patchOuterWidth)
 
 	showFoot := m.showFooter()
 	fileFooter := fmt.Sprintf("%d files", len(m.State.Files))
 	left := panes.BorderedPane(leftContent, "Files", fileFooter, flOuterWidth, outerHeight, filesActive, showFoot)
-	right := panes.BorderedPane(rightContent, m.patchTitle(), m.patchFooter(), patchOuterWidth, outerHeight, !filesActive, showFoot)
+	scrollLine := m.patchScrollLine(patchInnerH)
+	right := panes.BorderedPaneWithScroll(rightContent, m.patchTitle(), m.patchFooter(), patchOuterWidth, outerHeight, !filesActive, showFoot, scrollLine)
 
 	// Join bordered panes side by side, line by line.
 	leftLines := strings.Split(left, "\n")

@@ -149,11 +149,7 @@ func (vp *PatchViewport) Render() string {
 		absLine := start + i
 		switch pl.typ {
 		case lineTypeHunkHeader:
-			header := pl.header
-			if vp.Width > 0 && lipgloss.Width(header) > vp.Width {
-				header = truncateToWidth(header, vp.Width)
-			}
-			rendered = append(rendered, hunkHeaderStyle.Render(header))
+			rendered = append(rendered, renderHunkSeparator(pl.header, vp.Width))
 		case lineTypeDiff:
 			isMatch := vp.SearchQuery != "" && absLine == vp.MatchLine
 			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch, vp.GutterVisible))
@@ -168,22 +164,31 @@ func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool
 	}
 
 	prefix, style := diffLineStyle(dl.Kind)
-	var line string
+	body := prefix + dl.Text
+
 	if gutterVisible {
-		line = formatGutter(dl.OldNo, dl.NewNo) + prefix + dl.Text
-	} else {
-		line = prefix + dl.Text
+		gutter := formatGutter(dl.OldNo, dl.NewNo)
+		if width > 0 {
+			bodyBudget := width - lipgloss.Width(gutter)
+			if bodyBudget > 0 && lipgloss.Width(body) > bodyBudget {
+				body = truncateToWidth(body, bodyBudget)
+			}
+		}
+		if highlight && query != "" {
+			return gutter + highlightMatch(body, query, style)
+		}
+		return gutter + style.Render(body)
 	}
 
-	if width > 0 && lipgloss.Width(line) > width {
-		line = truncateToWidth(line, width)
+	if width > 0 && lipgloss.Width(body) > width {
+		body = truncateToWidth(body, width)
 	}
 
 	if highlight && query != "" {
-		return highlightMatch(line, query, style)
+		return highlightMatch(body, query, style)
 	}
 
-	return style.Render(line)
+	return style.Render(body)
 }
 
 func highlightMatch(line, query string, baseStyle lipgloss.Style) string {
@@ -226,7 +231,45 @@ func formatGutter(oldNo, newNo *int) string {
 	if newNo != nil {
 		new = fmt.Sprintf("%4d", *newNo)
 	}
-	return old + " " + new + " "
+	return gutterStyle.Render(old+" "+new) + gutterStyle.Render(" │") + " "
+}
+
+// renderHunkSeparator renders a hunk header as a horizontal rule with the @@ text embedded.
+// Example: ─── @@ -10,3 +11,4 @@ func main() ───────
+func renderHunkSeparator(header string, width int) string {
+	prefix := "── "
+	middle := header
+	suffix := " "
+
+	core := prefix + middle + suffix
+	coreW := lipgloss.Width(core)
+
+	if width > 0 && coreW >= width {
+		return hunkHeaderStyle.Render(truncateToWidth(core, width))
+	}
+
+	// Fill remaining width with ─.
+	remaining := 0
+	if width > 0 {
+		remaining = width - coreW
+	}
+	line := core + strings.Repeat("─", remaining)
+
+	return hunkHeaderStyle.Render(line)
+}
+
+// ScrollIndicatorPos returns the scroll position as a ratio (0.0–1.0) for
+// rendering a scroll indicator on the border edge.
+func (vp *PatchViewport) ScrollIndicatorPos() float64 {
+	total := len(vp.lines)
+	if total <= vp.Height || total == 0 {
+		return 0
+	}
+	maxScroll := total - vp.Height
+	if vp.ScrollOffset >= maxScroll {
+		return 1.0
+	}
+	return float64(vp.ScrollOffset) / float64(maxScroll)
 }
 
 // truncateToWidth trims a string to fit within a terminal-cell width budget.
@@ -311,4 +354,7 @@ var (
 	noNewlineStyle = lipgloss.NewStyle().
 			Foreground(theme.Muted).
 			Italic(true)
+
+	gutterStyle = lipgloss.NewStyle().
+			Foreground(theme.Muted)
 )

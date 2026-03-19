@@ -13,11 +13,11 @@ V3-T0, V3-T1, V3-T2.
 - `internal/ui/model.go`
 
 ## Deliverables
-- [ ] Gutter uses `theme.Muted` with a thin separator column.
-- [ ] Hunks separated by styled horizontal rules containing the `@@` header.
-- [ ] Scroll indicator visible as a highlighted border segment mapping to `scrollOffset / totalLines`.
-- [ ] All rendering adapts to minimal mode (no gutter when width < 60).
-- [ ] Overflowing patches don't break narrow layouts.
+- [x] Gutter uses `theme.Muted` with a thin separator column.
+- [x] Hunks separated by styled horizontal rules containing the `@@` header.
+- [x] Scroll indicator visible as a highlighted border segment mapping to `scrollOffset / totalLines`.
+- [x] All rendering adapts to minimal mode (no gutter when width < 60).
+- [x] Overflowing patches don't break narrow layouts.
 
 ## Test Strategy
 - Render tests for gutter format, hunk separators, and scroll indicator position.

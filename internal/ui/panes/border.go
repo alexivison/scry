@@ -13,6 +13,13 @@ import (
 // When active is true the border uses theme.Accent; otherwise theme.Muted.
 // When showFooter is false the footer text is suppressed (used for compact tiers).
 func BorderedPane(content, title, footer string, outerWidth, outerHeight int, active, showFooter bool) string {
+	return BorderedPaneWithScroll(content, title, footer, outerWidth, outerHeight, active, showFooter, -1)
+}
+
+// BorderedPaneWithScroll is like BorderedPane but highlights a right-border segment
+// as a scroll indicator. scrollLine is the 0-based inner row to highlight; negative
+// means no indicator.
+func BorderedPaneWithScroll(content, title, footer string, outerWidth, outerHeight int, active, showFooter bool, scrollLine int) string {
 	if outerWidth < 4 || outerHeight < 3 {
 		return content
 	}
@@ -22,6 +29,7 @@ func BorderedPane(content, title, footer string, outerWidth, outerHeight int, ac
 		borderColor = theme.Accent
 	}
 	colorStyle := lipgloss.NewStyle().Foreground(borderColor)
+	scrollStyle := lipgloss.NewStyle().Foreground(theme.BrightText)
 
 	innerWidth := outerWidth - 2
 
@@ -45,7 +53,11 @@ func BorderedPane(content, title, footer string, outerWidth, outerHeight int, ac
 		if i < len(contentLines) {
 			line = contentLines[i]
 		}
-		rows[i] = side + padOrTruncate(line, innerWidth) + side
+		rightSide := side
+		if i == scrollLine {
+			rightSide = scrollStyle.Render("┃")
+		}
+		rows[i] = side + padOrTruncate(line, innerWidth) + rightSide
 	}
 
 	parts := make([]string, 0, outerHeight)
