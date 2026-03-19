@@ -13,11 +13,11 @@ V3-T0, V3-T1.
 - `internal/ui/panes/filelist.go`
 
 ## Deliverables
-- [ ] Status letters render in semantic theme colors.
-- [ ] `+/-` counts render in green/red respectively.
-- [ ] Selection uses `Reverse(true)` without bold.
-- [ ] Row truncation still works for long paths and renames.
-- [ ] Row format has a stable slot for prefix markers (to be used by V3-T8 and V3-T10).
+- [x] Status letters render in semantic theme colors.
+- [x] `+/-` counts render in green/red respectively.
+- [x] Selection uses `Reverse(true)` without bold.
+- [x] Row truncation still works for long paths and renames.
+- [x] Row format has a stable slot for prefix markers (to be used by V3-T8 and V3-T10).
 
 ## Test Strategy
 - Render tests for each file status type with expected color styling.

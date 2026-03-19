@@ -161,8 +161,8 @@ var (
 	segmentSepStyle = lipgloss.NewStyle().
 			Foreground(theme.Muted)
 	badgeActiveStyle = lipgloss.NewStyle().
-			Foreground(theme.BrightText).
-			Bold(true)
+				Foreground(theme.BrightText).
+				Bold(true)
 	badgeDimStyle = lipgloss.NewStyle().
 			Foreground(theme.Muted)
 	watchDotStyle = lipgloss.NewStyle().

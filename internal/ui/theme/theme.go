@@ -12,9 +12,9 @@ var (
 	HunkHeader = lipgloss.Color("6") // cyan
 
 	// Status semantics.
-	Clean = Added                    // green — same hue as diff additions
-	Dirty = lipgloss.Color("3")     // yellow
-	Error = lipgloss.Color("1")     // red
+	Clean = Added               // green — same hue as diff additions
+	Dirty = lipgloss.Color("3") // yellow
+	Error = lipgloss.Color("1") // red
 
 	// Chrome.
 	Accent     = lipgloss.Color("4")   // blue — active pane border

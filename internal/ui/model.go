@@ -84,8 +84,8 @@ type Model struct {
 	savedCurrentHunk  int
 	savedSearchQuery  string
 
-	commitProvider CommitProvider      // optional provider for AI commit messages
-	commitExecutor CommitExecutor      // optional executor for git commit
+	commitProvider CommitProvider     // optional provider for AI commit messages
+	commitExecutor CommitExecutor     // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
 	fingerprinter WatchFingerprinter // optional watch mode fingerprinter
@@ -1057,7 +1057,6 @@ func (m Model) viewFileList() string {
 	footer := fmt.Sprintf("%d files", len(m.State.Files))
 	return panes.BorderedPane(content, "Files", footer, m.width, outerHeight, true, m.showFooter())
 }
-
 
 func (m Model) viewPatch() string {
 	outerHeight := m.height - 1
