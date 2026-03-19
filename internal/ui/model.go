@@ -78,6 +78,7 @@ type Model struct {
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
 	refreshErr     string        // shown in status bar when metadata reload fails
+	exportMsg      string        // shown in status bar after ctrl+e export
 	fileListScroll int           // scroll offset for file list in split mode
 
 	// Scroll preservation state: saved before refresh, restored if content unchanged.
@@ -320,6 +321,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Clear transient status messages on any key press.
+		m.exportMsg = ""
 		// Clear pending multi-key buffer on global keys to prevent stale
 		// ] / [ / g from stealing a later keystroke.
 		switch msg.String() {
@@ -350,6 +353,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Tab toggles layout (except during help/search/commit).
 		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleLayout()
+		}
+		// ctrl+e exports flagged files (except help/search/commit/idle).
+		if msg.Type == tea.KeyCtrlE && !m.showHelp &&
+			m.State.FocusPane != model.PaneSearch &&
+			m.State.FocusPane != model.PaneCommit &&
+			m.State.FocusPane != model.PaneIdle {
+			return m.exportFlaggedFiles()
 		}
 		if m.showHelp {
 			return m.updateHelp(msg)
@@ -960,6 +970,31 @@ func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		return m.selectFile()
 	}
+	return m, nil
+}
+
+// exportFlaggedFiles copies flagged file paths to the system clipboard.
+func (m Model) exportFlaggedFiles() (tea.Model, tea.Cmd) {
+	m.exportMsg = ""
+
+	// Collect flagged paths in file-list order for deterministic output.
+	var paths []string
+	for _, f := range m.State.Files {
+		if m.State.FlaggedFiles[f.Path] {
+			paths = append(paths, f.Path)
+		}
+	}
+	if len(paths) == 0 {
+		m.exportMsg = "No flagged files"
+		return m, nil
+	}
+
+	text := terminal.FormatPaths(paths)
+	if err := terminal.CopyToClipboard(text); err != nil {
+		m.exportMsg = fmt.Sprintf("Export failed: %v", err)
+		return m, nil
+	}
+	m.exportMsg = fmt.Sprintf("Copied %d flagged paths to clipboard", len(paths))
 	return m, nil
 }
 
