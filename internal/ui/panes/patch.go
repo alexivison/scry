@@ -112,6 +112,58 @@ func (vp *PatchViewport) ScrollUp() {
 	}
 }
 
+// PageDown moves the viewport one full page down.
+func (vp *PatchViewport) PageDown() {
+	vp.ScrollOffset += vp.Height
+	if vp.ScrollOffset > len(vp.lines)-1 {
+		vp.ScrollOffset = len(vp.lines) - 1
+	}
+	vp.SyncCurrentHunk()
+}
+
+// PageUp moves the viewport one full page up.
+func (vp *PatchViewport) PageUp() {
+	vp.ScrollOffset -= vp.Height
+	if vp.ScrollOffset < 0 {
+		vp.ScrollOffset = 0
+	}
+	vp.SyncCurrentHunk()
+}
+
+// HalfPageDown moves the viewport half a page down.
+func (vp *PatchViewport) HalfPageDown() {
+	vp.ScrollOffset += vp.Height / 2
+	if vp.ScrollOffset > len(vp.lines)-1 {
+		vp.ScrollOffset = len(vp.lines) - 1
+	}
+	vp.SyncCurrentHunk()
+}
+
+// HalfPageUp moves the viewport half a page up.
+func (vp *PatchViewport) HalfPageUp() {
+	vp.ScrollOffset -= vp.Height / 2
+	if vp.ScrollOffset < 0 {
+		vp.ScrollOffset = 0
+	}
+	vp.SyncCurrentHunk()
+}
+
+// ScrollToTop jumps to the beginning of the patch.
+func (vp *PatchViewport) ScrollToTop() {
+	vp.ScrollOffset = 0
+	vp.CurrentHunk = 0
+}
+
+// ScrollToBottom jumps to the end of the patch.
+func (vp *PatchViewport) ScrollToBottom() {
+	max := len(vp.lines) - vp.Height
+	if max < 0 {
+		max = 0
+	}
+	vp.ScrollOffset = max
+	vp.SyncCurrentHunk()
+}
+
 // SyncCurrentHunk derives CurrentHunk from ScrollOffset so that n/p
 // navigate relative to the hunk the user is actually viewing.
 func (vp *PatchViewport) SyncCurrentHunk() {

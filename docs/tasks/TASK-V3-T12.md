@@ -24,13 +24,13 @@ Two-key chord: first `g` sets a "pending g" flag, second `g` within 500ms execut
 - `internal/ui/panes/patch.go`
 
 ## Deliverables
-- [ ] Help renders as an overlay, not a full-screen replacement.
-- [ ] Background dimmed when help is visible.
-- [ ] Help text organized by section (Navigation, Search, Actions).
-- [ ] All page navigation keys work in both file list and patch panes.
-- [ ] `gg` chord implemented with timeout.
-- [ ] `?` and `Esc` close the overlay.
-- [ ] Help text reflects all currently bound keys.
+- [x] Help renders as an overlay, not a full-screen replacement.
+- [x] Background dimmed when help is visible.
+- [x] Help text organized by section (Navigation, Search, Actions).
+- [x] All page navigation keys work in both file list and patch panes.
+- [x] `gg` chord implemented with timeout.
+- [x] `?` and `Esc` close the overlay.
+- [x] Help text reflects all currently bound keys.
 
 ## Test Strategy
 - Overlay render test (overlay on top of content).

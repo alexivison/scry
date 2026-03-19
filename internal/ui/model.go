@@ -71,7 +71,8 @@ type Model struct {
 	tooSmall        bool // terminal below minimum dimensions
 	sizeErr         string
 
-	pendingKey     rune          // buffered prefix key for multi-key sequences (]/[)
+	pendingKey     rune          // buffered prefix key for multi-key sequences (]/[/g)
+	pendingKeySeq  int           // monotonic counter to detect stale timeout cancellations
 	searchInput    string        // text being typed in search mode
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
@@ -206,6 +207,11 @@ type CommitEditedMsg struct {
 	Err     error
 }
 
+// pendingKeyTimeoutMsg fires when the gg chord timer expires.
+type pendingKeyTimeoutMsg struct {
+	Seq int
+}
+
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
@@ -220,6 +226,12 @@ func (m Model) Init() tea.Cmd {
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case pendingKeyTimeoutMsg:
+		if msg.Seq == m.pendingKeySeq && m.pendingKey != 0 {
+			m.pendingKey = 0
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -284,9 +296,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Clear pending multi-key buffer on any global key handler to prevent
-		// stale ] or [ from stealing a later keystroke.
-		if msg.String() != "]" && msg.String() != "[" && msg.String() != "c" {
+		// Clear pending multi-key buffer on global keys to prevent stale
+		// ] / [ / g from stealing a later keystroke.
+		switch msg.String() {
+		case "]", "[", "c", "g":
+			// These participate in multi-key sequences — don't clear.
+		default:
 			m.pendingKey = 0
 		}
 		// r triggers refresh from any pane (except help/search/commit).
@@ -340,11 +355,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Handle pending multi-key sequence (]c / [c).
+	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
 		pending := m.pendingKey
 		m.pendingKey = 0
-		if msg.String() == "c" {
+		switch {
+		case pending == 'g' && msg.String() == "g":
+			m.State.SelectedFile = 0
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
+			return m, nil
+		case (pending == ']' || pending == '[') && msg.String() == "c":
 			return m.jumpChangedFile(pending == ']')
 		}
 		// Not a recognized sequence — discard pending and fall through.
@@ -354,8 +377,21 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "]", "[":
 		if len(msg.Runes) > 0 {
 			m.pendingKey = msg.Runes[0]
+			m.pendingKeySeq++ // invalidate any stale g timeout
 		}
 		return m, nil
+	case "g":
+		m.pendingKey = 'g'
+		m.pendingKeySeq++
+		return m, m.pendingKeyTimeout()
+	case "G":
+		if len(m.State.Files) > 0 {
+			m.State.SelectedFile = len(m.State.Files) - 1
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
+		}
 	case "j", "down":
 		if m.State.SelectedFile < len(m.State.Files)-1 {
 			m.State.SelectedFile++
@@ -372,6 +408,14 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.selectFile()
 			}
 		}
+	case "ctrl+d":
+		return m.fileListHalfPageDown()
+	case "ctrl+u":
+		return m.fileListHalfPageUp()
+	case "ctrl+f":
+		return m.fileListPageDown()
+	case "ctrl+b":
+		return m.fileListPageUp()
 	case "l", "enter":
 		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 			m.State.FocusPane = model.PanePatch
@@ -398,6 +442,90 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.showHelp = true
+	}
+	return m, nil
+}
+
+// pendingKeyTimeout returns a Cmd that fires a timeout message after 500ms.
+func (m Model) pendingKeyTimeout() tea.Cmd {
+	seq := m.pendingKeySeq
+	return func() tea.Msg {
+		time.Sleep(500 * time.Millisecond)
+		return pendingKeyTimeoutMsg{Seq: seq}
+	}
+}
+
+// fileListInnerHeight returns the visible row count for the file list pane.
+func (m Model) fileListInnerHeight() int {
+	outerH := m.height - 1 // status bar
+	_, h := panes.ContentDimensions(m.width, outerH)
+	return h
+}
+
+// fileListHalfPageDown moves selection half a page down in the file list.
+func (m Model) fileListHalfPageDown() (tea.Model, tea.Cmd) {
+	half := m.fileListInnerHeight() / 2
+	if half < 1 {
+		half = 1
+	}
+	m.State.SelectedFile += half
+	if m.State.SelectedFile >= len(m.State.Files) {
+		m.State.SelectedFile = len(m.State.Files) - 1
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// fileListHalfPageUp moves selection half a page up in the file list.
+func (m Model) fileListHalfPageUp() (tea.Model, tea.Cmd) {
+	half := m.fileListInnerHeight() / 2
+	if half < 1 {
+		half = 1
+	}
+	m.State.SelectedFile -= half
+	if m.State.SelectedFile < 0 {
+		m.State.SelectedFile = 0
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// fileListPageDown moves selection one full page down in the file list.
+func (m Model) fileListPageDown() (tea.Model, tea.Cmd) {
+	page := m.fileListInnerHeight()
+	if page < 1 {
+		page = 1
+	}
+	m.State.SelectedFile += page
+	if m.State.SelectedFile >= len(m.State.Files) {
+		m.State.SelectedFile = len(m.State.Files) - 1
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// fileListPageUp moves selection one full page up in the file list.
+func (m Model) fileListPageUp() (tea.Model, tea.Cmd) {
+	page := m.fileListInnerHeight()
+	if page < 1 {
+		page = 1
+	}
+	m.State.SelectedFile -= page
+	if m.State.SelectedFile < 0 {
+		m.State.SelectedFile = 0
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
 	}
 	return m, nil
 }
@@ -947,6 +1075,19 @@ func buildFallback(summary model.FileSummary, err error) string {
 }
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle gg chord in patch pane.
+	if m.pendingKey == 'g' && msg.String() == "g" {
+		m.pendingKey = 0
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollToTop()
+		}
+		return m, nil
+	}
+	if m.pendingKey != 0 {
+		m.pendingKey = 0
+		// Fall through to normal handling.
+	}
+
 	switch msg.String() {
 	case "esc", "h":
 		m.State.FocusPane = model.PaneFiles
@@ -966,7 +1107,31 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollUp()
 		}
-	case "n":
+	case "g":
+		m.pendingKey = 'g'
+		m.pendingKeySeq++
+		return m, m.pendingKeyTimeout()
+	case "G":
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollToBottom()
+		}
+	case "ctrl+d":
+		if m.patchViewport != nil {
+			m.patchViewport.HalfPageDown()
+		}
+	case "ctrl+u":
+		if m.patchViewport != nil {
+			m.patchViewport.HalfPageUp()
+		}
+	case "ctrl+f":
+		if m.patchViewport != nil {
+			m.patchViewport.PageDown()
+		}
+	case "ctrl+b":
+		if m.patchViewport != nil {
+			m.patchViewport.PageUp()
+		}
+	case "n", "}":
 		if m.patchViewport != nil {
 			m.patchViewport.NextHunk()
 		}
@@ -978,7 +1143,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneSearch
 		m.searchInput = ""
 		m.searchNotFound = ""
-	case "p":
+	case "p", "{":
 		if m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
 		}
@@ -1079,22 +1244,27 @@ func (m Model) View() string {
 		return m.sizeErr + "\nPress q to quit."
 	}
 
-	var b strings.Builder
-
-	if m.showHelp {
-		b.WriteString(m.viewHelp())
-	} else if m.State.FocusPane == model.PaneIdle {
-		b.WriteString(m.viewIdle())
+	// Render the base content view.
+	var base string
+	if m.State.FocusPane == model.PaneIdle {
+		base = m.viewIdle()
 	} else if m.State.FocusPane == model.PaneDashboard {
-		b.WriteString(m.viewDashboard())
+		base = m.viewDashboard()
 	} else if m.State.FocusPane == model.PaneCommit {
-		b.WriteString(m.viewCommit())
+		base = m.viewCommit()
 	} else if m.State.Layout == model.LayoutSplit && m.widthTierNow() >= terminal.WidthCompactSplit {
-		b.WriteString(m.viewSplit())
+		base = m.viewSplit()
 	} else if m.State.FocusPane == model.PaneSearch || m.State.FocusPane == model.PanePatch {
-		b.WriteString(m.viewPatch())
+		base = m.viewPatch()
 	} else {
-		b.WriteString(m.viewFileList())
+		base = m.viewFileList()
+	}
+
+	var b strings.Builder
+	if m.showHelp {
+		b.WriteString(m.overlayHelp(base))
+	} else {
+		b.WriteString(base)
 	}
 
 	b.WriteString("\n")
@@ -1186,48 +1356,140 @@ func (m Model) viewCommit() string {
 
 func (m Model) viewHelp() string {
 	if m.State.WorktreeMode && !m.State.DashboardState.DrillDown {
-		help := []string{
-			"Dashboard Key Bindings",
+		return strings.Join([]string{
+			"Navigation",
+			"  j/k       navigate worktree list",
+			"  l/Enter   drill into worktree diff",
 			"",
-			"  j/k     navigate worktree list",
-			"  l/Enter drill into worktree diff",
-			"  q       quit",
-			"  ?       toggle help",
-		}
-		return strings.Join(help, "\n")
+			"Actions",
+			"  ?/Esc     close help",
+			"  q         quit",
+		}, "\n")
 	}
 
 	help := []string{
-		"Key Bindings",
-		"",
-		"  j/k     navigate file list / scroll diff",
-		"  l/Enter select file / focus patch pane",
+		"Navigation",
+		"  j/k       scroll / navigate",
+		"  l/Enter   select file / focus patch",
 	}
 	if m.State.WorktreeMode {
-		help = append(help, "  h/Esc   back to dashboard")
+		help = append(help, "  h/Esc     back to dashboard")
 	} else {
-		help = append(help, "  h/Esc   back to file list")
+		help = append(help, "  h/Esc     back to file list")
 	}
 	help = append(help,
-		"  n/p     next/previous hunk",
-		"  /       search in patch",
-		"  r       refresh",
-		"  W       toggle whitespace ignore",
-		"  Tab     toggle split/modal layout",
-		"  q       quit",
-		"  ?       toggle help",
+		"  n/p       next/previous hunk",
+		"  }/{       next/prev hunk (alias)",
+		"  gg        jump to top",
+		"  G         jump to bottom",
+		"  ctrl+d/u  half-page down/up",
+		"  ctrl+f/b  full page down/up",
+		"  ]c/[c     next/prev changed file",
+		"",
+		"Search",
+		"  /         search in patch",
+		"  enter/N   next/prev match",
+		"",
+		"Actions",
+		"  r         refresh",
+		"  W         toggle whitespace ignore",
+		"  Tab       toggle split/modal layout",
+		"  m         toggle file flag",
+		"  M         jump to next flagged file",
+		"  ?/Esc     close help",
+		"  q         quit",
 	)
 	if m.State.WatchEnabled {
-		watchLine := fmt.Sprintf("  [watch]  auto-refresh every %s", m.State.WatchInterval)
+		watchLine := fmt.Sprintf("  [watch]   auto-refresh every %s", m.State.WatchInterval)
 		if !m.State.LastRefreshAt.IsZero() {
 			watchLine += fmt.Sprintf(", last refresh %s", m.State.LastRefreshAt.Format("15:04:05"))
 		}
 		help = append(help, watchLine)
 	}
 	if m.State.CommitEnabled {
-		help = append(help, "  c       generate commit message")
+		help = append(help, "  c         generate commit message")
 	}
 	return strings.Join(help, "\n")
+}
+
+// overlayHelp renders the help text as a centered overlay on top of the base content.
+func (m Model) overlayHelp(base string) string {
+	helpText := m.viewHelp()
+	helpLines := strings.Split(helpText, "\n")
+
+	// Calculate overlay dimensions.
+	maxW := 0
+	for _, l := range helpLines {
+		if w := lipgloss.Width(l); w > maxW {
+			maxW = w
+		}
+	}
+	overlayW := maxW + 4 // padding
+	if overlayW > m.width-4 {
+		overlayW = m.width - 4
+	}
+	overlayH := len(helpLines) + 2 // top/bottom border
+	contentH := m.height - 1       // reserve status bar
+
+	// Build the bordered help box.
+	helpBox := panes.BorderedPane(helpText, "Help", "?/Esc close", overlayW, overlayH, true, true)
+	helpBoxLines := strings.Split(helpBox, "\n")
+
+	// Dim the base content and overlay help centered.
+	baseLines := strings.Split(base, "\n")
+	dimStyle := lipgloss.NewStyle().Faint(true)
+	startRow := (contentH - overlayH) / 2
+	if startRow < 0 {
+		startRow = 0
+	}
+	startCol := (m.width - overlayW) / 2
+	if startCol < 0 {
+		startCol = 0
+	}
+
+	result := make([]string, contentH)
+	for i := 0; i < contentH; i++ {
+		baseLine := ""
+		if i < len(baseLines) {
+			baseLine = baseLines[i]
+		}
+		helpIdx := i - startRow
+		if helpIdx >= 0 && helpIdx < len(helpBoxLines) {
+			// Overlay row: dimmed left + help box + dimmed right.
+			left := dimStyle.Render(padOrTruncateStr(baseLine, startCol))
+			rightStart := startCol + overlayW
+			rightBg := ""
+			if rightStart < m.width {
+				rightBg = dimStyle.Render(padOrTruncateStr(suffixFrom(baseLine, rightStart), m.width-rightStart))
+			}
+			result[i] = left + helpBoxLines[helpIdx] + rightBg
+		} else {
+			result[i] = dimStyle.Render(padOrTruncateStr(baseLine, m.width))
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+// suffixFrom extracts the visual portion of a string starting at column startCol.
+func suffixFrom(s string, startCol int) string {
+	w := 0
+	for i, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w >= startCol {
+			return s[i:]
+		}
+		w += rw
+	}
+	return ""
+}
+
+// padOrTruncateStr pads or truncates a string to exactly the given width.
+func padOrTruncateStr(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return truncateToWidth(s, width)
+	}
+	return s + strings.Repeat(" ", width-w)
 }
 
 // widthTierNow returns the current width tier computed from the model dimensions.
