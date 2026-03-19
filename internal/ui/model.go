@@ -1547,9 +1547,10 @@ func (m Model) showFooter() bool {
 // freshnessOpts returns the FileListOpts for freshness and flag rendering.
 func (m Model) freshnessOpts() panes.FileListOpts {
 	return panes.FileListOpts{
-		ChangeGen:    m.State.FileChangeGen,
-		CurrentGen:   m.State.CacheGeneration,
-		FlaggedFiles: m.State.FlaggedFiles,
+		ChangeGen:        m.State.FileChangeGen,
+		CurrentGen:       m.State.CacheGeneration,
+		FlaggedFiles:     m.State.FlaggedFiles,
+		GroupByDirectory: m.State.GroupByDirectory,
 	}
 }
 

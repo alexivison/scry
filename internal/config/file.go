@@ -14,9 +14,15 @@ import (
 // Pointer fields distinguish "not set" from zero-value, allowing higher-precedence
 // layers to override lower-precedence values (including resetting to defaults).
 type FileConfig struct {
-	Diff   DiffFileConfig   `toml:"diff"`
-	Watch  WatchFileConfig  `toml:"watch"`
-	Commit CommitFileConfig `toml:"commit"`
+	Diff     DiffFileConfig     `toml:"diff"`
+	Watch    WatchFileConfig    `toml:"watch"`
+	Commit   CommitFileConfig   `toml:"commit"`
+	FileList FileListFileConfig `toml:"filelist"`
+}
+
+// FileListFileConfig holds file list display settings.
+type FileListFileConfig struct {
+	GroupByDirectory *bool `toml:"group_by_directory"`
 }
 
 // DiffFileConfig holds diff-related config file settings.
@@ -71,6 +77,9 @@ func MergeFileConfigs(user, repo FileConfig) FileConfig {
 	}
 	if repo.Commit.Model != nil {
 		merged.Commit.Model = repo.Commit.Model
+	}
+	if repo.FileList.GroupByDirectory != nil {
+		merged.FileList.GroupByDirectory = repo.FileList.GroupByDirectory
 	}
 	return merged
 }

@@ -2,6 +2,8 @@ package panes
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -28,13 +30,17 @@ var (
 
 	// Flag marker.
 	flagStyle = lipgloss.NewStyle().Foreground(theme.Dirty).Bold(true)
+
+	// Directory header style.
+	dirHeaderStyle = lipgloss.NewStyle().Foreground(theme.Muted).Faint(true)
 )
 
 // FileListOpts holds optional parameters for file list rendering.
 type FileListOpts struct {
-	ChangeGen    map[string]int  // per-file last-change generation (nil to disable)
-	CurrentGen   int             // current CacheGeneration for freshness calculation
-	FlaggedFiles map[string]bool // session-scoped bookmarks
+	ChangeGen        map[string]int  // per-file last-change generation (nil to disable)
+	CurrentGen       int             // current CacheGeneration for freshness calculation
+	FlaggedFiles     map[string]bool // session-scoped bookmarks
+	GroupByDirectory bool            // when true, group files by directory with dim headers
 }
 
 // RenderFileList renders a scrollable file list constrained to the given dimensions.
@@ -50,8 +56,24 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 		o = opts[0]
 	}
 
+	// When grouping, sort files by directory for proper grouping.
+	if o.GroupByDirectory {
+		files = sortByDirectory(files)
+	}
+
 	// Ensure selected item is visible.
-	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, height, len(files))
+	// When grouping, reduce effective height to account for directory headers.
+	effectiveHeight := height
+	if o.GroupByDirectory {
+		headerCount := countHeadersInRange(files, scrollOffset, scrollOffset+height)
+		if headerCount > 0 {
+			effectiveHeight = height - headerCount
+			if effectiveHeight < 1 {
+				effectiveHeight = 1
+			}
+		}
+	}
+	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, effectiveHeight, len(files))
 
 	// Determine visible window.
 	end := scrollOffset + height
@@ -59,8 +81,27 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 		end = len(files)
 	}
 
+	// Initialize lastDir from the file before scrollOffset for consistent header logic.
+	lastDir := ""
+	if o.GroupByDirectory && scrollOffset > 0 {
+		lastDir = fileDir(files[scrollOffset-1].Path)
+	}
+
 	lines := make([]string, 0, end-scrollOffset)
 	for i := scrollOffset; i < end; i++ {
+		// Insert directory header when grouping is enabled and directory changes.
+		if o.GroupByDirectory {
+			dir := fileDir(files[i].Path)
+			if dir != lastDir {
+				lastDir = dir
+				if dir != "" && len(lines) < height {
+					lines = append(lines, dirHeaderStyle.Render("  "+dir))
+				}
+			}
+		}
+		if len(lines) >= height {
+			break
+		}
 		tier := review.FreshnessCold
 		if o.ChangeGen != nil {
 			if gen, ok := o.ChangeGen[files[i].Path]; ok {
@@ -245,6 +286,62 @@ func StatusIcon(s model.FileStatus) string {
 	default:
 		return "?"
 	}
+}
+
+// sortByDirectory returns a copy of files sorted by directory, preserving
+// order within each directory. Root-level files come last.
+func sortByDirectory(files []model.FileSummary) []model.FileSummary {
+	sorted := make([]model.FileSummary, len(files))
+	copy(sorted, files)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		di := fileDir(sorted[i].Path)
+		dj := fileDir(sorted[j].Path)
+		// Root files (empty dir) sort after directories.
+		if di == "" && dj != "" {
+			return false
+		}
+		if di != "" && dj == "" {
+			return true
+		}
+		return di < dj
+	})
+	return sorted
+}
+
+// countHeadersInRange counts how many directory headers would be inserted
+// between file indices start and end.
+func countHeadersInRange(files []model.FileSummary, start, end int) int {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(files) {
+		end = len(files)
+	}
+	count := 0
+	lastDir := ""
+	if start > 0 {
+		lastDir = fileDir(files[start-1].Path)
+	}
+	for i := start; i < end; i++ {
+		dir := fileDir(files[i].Path)
+		if dir != lastDir && dir != "" {
+			count++
+			lastDir = dir
+		} else if dir != lastDir {
+			lastDir = dir
+		}
+	}
+	return count
+}
+
+// fileDir returns the directory portion of a file path, with trailing slash.
+// Returns "" for root-level files.
+func fileDir(path string) string {
+	dir := filepath.Dir(path)
+	if dir == "." {
+		return ""
+	}
+	return dir + "/"
 }
 
 // FormatCounts formats addition/deletion counts for display.

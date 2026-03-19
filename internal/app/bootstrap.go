@@ -95,6 +95,7 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		WatchInterval:    cfg.WatchInterval,
 		CommitEnabled:    cfg.Commit,
 		CommitAuto:       cfg.CommitAuto,
+		GroupByDirectory: cfg.GroupByDirectory,
 	}
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
@@ -194,9 +195,10 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 
 	state := model.AppState{
 		FocusPane:    model.PaneDashboard,
-		WorktreeMode: true,
-		WatchEnabled: cfg.Watch,
-		WatchInterval: interval,
+		WorktreeMode:     true,
+		WatchEnabled:     cfg.Watch,
+		WatchInterval:    interval,
+		GroupByDirectory: cfg.GroupByDirectory,
 		DashboardState: model.DashboardState{
 			Worktrees: worktrees,
 		},
