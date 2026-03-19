@@ -16,11 +16,11 @@ None.
 - `internal/ui/panes/dashboard.go`
 
 ## Deliverables
-- [ ] `WorktreeInfo` gains `ChangedFiles int` and `LastActivityAt time.Time`.
-- [ ] Changed-file count discovered via `git -C <path> diff --name-only` or status porcelain count.
-- [ ] Last-activity updated when worktree snapshot state changes (dirty/clean transition, count change, new commit).
-- [ ] Dashboard rows show count and relative time.
-- [ ] Selection reconciliation remains stable across refreshes.
+- [x] `WorktreeInfo` gains `ChangedFiles int` and `LastActivityAt time.Time`.
+- [x] Changed-file count discovered via `git -C <path> diff --name-only` or status porcelain count.
+- [x] Last-activity updated when worktree snapshot state changes (dirty/clean transition, count change, new commit).
+- [x] Dashboard rows show count and relative time.
+- [x] Selection reconciliation remains stable across refreshes.
 
 ## Design Note
 `LastActivityAt` is maintained in the reconciliation layer when comparing old and new snapshots,

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -103,6 +104,9 @@ func (m Model) handleWorktreeRefreshed(msg WorktreeRefreshedMsg) (tea.Model, tea
 	if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
 		prevBranch = ds.Worktrees[ds.SelectedIdx].Branch
 	}
+
+	// Reconcile LastActivityAt: compare old and new snapshots.
+	reconcileActivity(ds.Worktrees, msg.Worktrees)
 	ds.Worktrees = msg.Worktrees
 
 	// Reconcile selection.
@@ -253,6 +257,34 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.updateFiles(msg)
+}
+
+// reconcileActivity compares old and new worktree snapshots and updates
+// LastActivityAt on new entries when state changes are detected.
+func reconcileActivity(old, new []model.WorktreeInfo) {
+	oldByPath := make(map[string]model.WorktreeInfo, len(old))
+	for _, wt := range old {
+		oldByPath[wt.Path] = wt
+	}
+
+	now := time.Now()
+	for i := range new {
+		prev, existed := oldByPath[new[i].Path]
+		if !existed {
+			// New worktree — mark as active now.
+			new[i].LastActivityAt = now
+			continue
+		}
+		// Carry forward previous activity timestamp.
+		new[i].LastActivityAt = prev.LastActivityAt
+
+		// Detect state changes: dirty/clean transition, count change, new commit.
+		if new[i].Dirty != prev.Dirty ||
+			new[i].ChangedFiles != prev.ChangedFiles ||
+			new[i].CommitHash != prev.CommitHash {
+			new[i].LastActivityAt = now
+		}
+	}
 }
 
 func (m Model) viewDashboard() string {

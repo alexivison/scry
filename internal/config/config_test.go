@@ -90,8 +90,8 @@ func TestParseWatchDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Watch {
-		t.Error("Watch = true, want false")
+	if !cfg.Watch {
+		t.Error("Watch = false, want true (v0.3 default)")
 	}
 	if cfg.WatchInterval != 2*time.Second {
 		t.Errorf("WatchInterval = %v, want 2s", cfg.WatchInterval)
@@ -231,5 +231,99 @@ func TestParseWorktreesFlag(t *testing.T) {
 	}
 	if !cfg.Worktrees {
 		t.Error("Worktrees = false, want true")
+	}
+}
+
+// --- v0.3 zero-config defaults tests ---
+
+func TestParseWatchDefaultTrue(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Watch {
+		t.Error("Watch = false, want true (v0.3 default)")
+	}
+}
+
+func TestParseNoWatchFlag(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{"--no-watch"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Watch {
+		t.Error("Watch = true, want false after --no-watch")
+	}
+}
+
+func TestParseWatchFlagStillAccepted(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{"--watch"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Watch {
+		t.Error("Watch = false, want true with explicit --watch")
+	}
+}
+
+func TestParseNoDashboardFlag(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{"--no-dashboard"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.NoDashboard {
+		t.Error("NoDashboard = false, want true after --no-dashboard")
+	}
+}
+
+func TestParseNoDashboardWithWorktrees(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{"--worktrees", "--no-dashboard"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Worktrees {
+		t.Error("Worktrees = false, want true")
+	}
+	if !cfg.NoDashboard {
+		t.Error("NoDashboard = false, want true")
+	}
+}
+
+func TestShouldUseDashboard(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		worktreeCount  int
+		worktrees      bool
+		noDashboard    bool
+		want           bool
+	}{
+		{"single worktree, no flags", 1, false, false, false},
+		{"multiple worktrees, auto-detect", 2, false, false, true},
+		{"multiple worktrees, no-dashboard", 2, false, true, false},
+		{"explicit worktrees flag", 1, true, false, true},
+		{"worktrees + no-dashboard, no-dashboard wins", 2, true, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Config{Worktrees: tt.worktrees, NoDashboard: tt.noDashboard}
+			got := cfg.ShouldUseDashboard(tt.worktreeCount)
+			if got != tt.want {
+				t.Errorf("ShouldUseDashboard(%d) = %v, want %v", tt.worktreeCount, got, tt.want)
+			}
+		})
 	}
 }

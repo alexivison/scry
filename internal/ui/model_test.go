@@ -10,6 +10,7 @@ import (
 
 	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
 
@@ -1160,21 +1161,27 @@ func TestManualRefreshBumpsGeneration(t *testing.T) {
 	}
 }
 
-func TestManualRefreshClearsCache(t *testing.T) {
+func TestManualRefreshStalensCache(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithRefresh(sampleFiles())
-	// Pre-populate cache.
+	// Pre-populate cache at current generation.
+	oldGen := m.State.CacheGeneration
 	m.State.Patches["main.go"] = model.PatchLoadState{
 		Status:     model.LoadLoaded,
-		Generation: m.State.CacheGeneration,
+		Generation: oldGen,
 	}
 
 	updated, _ := m.Update(keyMsg('r'))
 	um := updated.(Model)
 
-	if len(um.State.Patches) != 0 {
-		t.Errorf("Patches should be cleared on refresh, got %d entries", len(um.State.Patches))
+	// Patches preserved for selective invalidation, but generation is bumped
+	// so CacheLookup misses on old-generation entries.
+	if um.State.CacheGeneration == oldGen {
+		t.Error("CacheGeneration should be bumped after refresh")
+	}
+	if _, hit := review.CacheLookup(um.State, "main.go"); hit {
+		t.Error("CacheLookup should miss for stale-generation entry")
 	}
 }
 
@@ -1281,6 +1288,55 @@ func TestManualRefreshFromPatchPane(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("r from patch pane should return a Cmd")
+	}
+}
+
+func TestRefreshPreservesViewportForUnchangedFile(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	// Enter patch pane and load a patch for the selected file.
+	um := enterAndLoad(t, m)
+	if um.patchViewport == nil {
+		t.Fatal("expected patchViewport after enter")
+	}
+
+	// Refresh returns the same files (unchanged summaries).
+	um.metadataLoader = &mockMetadataLoader{files: sampleFiles()}
+	result := refreshAndComplete(t, um)
+
+	// Viewport should be preserved since the file is unchanged and cache hit.
+	if _, hit := review.CacheLookup(result.State, "main.go"); !hit {
+		t.Error("unchanged file should have cache hit after refresh")
+	}
+}
+
+func TestRefreshInvalidatesChangedFileCache(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	um := enterAndLoad(t, m)
+	if um.patchViewport == nil {
+		t.Fatal("expected patchViewport after enter")
+	}
+	// Simulate refresh: bump generation (as startRefresh does).
+	um.State.CacheGeneration++
+
+	// Selective invalidation with changed file (different counts).
+	changedFiles := []model.FileSummary{
+		{Path: "main.go", Status: model.StatusModified, Additions: 99, Deletions: 50},
+		{Path: "new.go", Status: model.StatusAdded, Additions: 30, Deletions: 0},
+		{Path: "old.go", Status: model.StatusDeleted, Additions: 0, Deletions: 20},
+	}
+	review.SelectiveInvalidate(&um.State, sampleFiles(), changedFiles)
+
+	// Changed file should be evicted — CacheLookup misses.
+	if _, hit := review.CacheLookup(um.State, "main.go"); hit {
+		t.Error("changed file cache should miss after selective invalidation")
+	}
+	// Cache entry should be evicted entirely (prevents stale re-promotion on future refreshes).
+	if _, exists := um.State.Patches["main.go"]; exists {
+		t.Error("changed file should be evicted from Patches map")
 	}
 }
 

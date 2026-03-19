@@ -19,6 +19,7 @@ import (
 	"github.com/alexivison/scry/internal/search"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
+	"github.com/alexivison/scry/internal/ui/theme"
 	"github.com/alexivison/scry/internal/watch"
 )
 
@@ -616,15 +617,12 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// startRefresh uses the shared refresh orchestrator to bump generation, clear cache,
+// startRefresh uses the shared refresh orchestrator to bump generation,
 // optionally re-resolve the compare, and fire an async metadata reload.
+// Patch cache is selectively invalidated when metadata arrives (not blanket-cleared).
 func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 	review.PrepareRefresh(&m.State)
-	m.patchViewport = nil
-	m.patchErr = ""
 	m.refreshErr = ""
-	m.searchIndex = nil
-	m.searchNotFound = ""
 
 	if m.metadataLoader == nil {
 		m.State.RefreshInFlight = false
@@ -691,6 +689,9 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		m.State.Compare = *msg.Compare
 	}
 
+	// Selectively invalidate cache: preserve unchanged files, evict changed/removed.
+	review.SelectiveInvalidate(&m.State, m.State.Files, msg.Files)
+
 	var selectedPath string
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		selectedPath = m.State.Files[m.State.SelectedFile].Path
@@ -698,6 +699,21 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	m.State.Files = msg.Files
 	review.ReconcileSelection(&m.State, selectedPath)
 	review.CompleteRefresh(&m.State)
+
+	// Clear viewport if selected file's cache was invalidated or no file selected.
+	clearViewport := true
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		path := m.State.Files[m.State.SelectedFile].Path
+		if _, hit := review.CacheLookup(m.State, path); hit {
+			clearViewport = false
+		}
+	}
+	if clearViewport {
+		m.patchViewport = nil
+		m.patchErr = ""
+		m.searchIndex = nil
+		m.searchNotFound = ""
+	}
 
 	// Transition from idle to review when first files arrive.
 	if m.State.FocusPane == model.PaneIdle && len(m.State.Files) > 0 {
@@ -1251,11 +1267,11 @@ const (
 var (
 	selectedStyle  = lipgloss.NewStyle().Bold(true).Reverse(true)
 	statusBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("235")).
-			Foreground(lipgloss.Color("252"))
+			Background(theme.StatusBg).
+			Foreground(theme.StatusFg)
 	searchNotFoundStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("1")).
-				Foreground(lipgloss.Color("15"))
+				Background(theme.Error).
+				Foreground(theme.BrightText)
 	dividerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
+			Foreground(theme.DividerFg)
 )

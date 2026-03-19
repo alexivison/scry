@@ -627,3 +627,91 @@ func TestDashboardTickSkipsDuringDrillDown(t *testing.T) {
 		t.Error("expected next tick command during drill-down, got nil")
 	}
 }
+
+// --- Activity reconciliation tests ---
+
+func TestReconcileActivityCarriesForward(t *testing.T) {
+	t.Parallel()
+
+	past := time.Now().Add(-5 * time.Minute)
+	old := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Dirty: false, ChangedFiles: 0, LastActivityAt: past},
+	}
+	new := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Dirty: false, ChangedFiles: 0},
+	}
+	reconcileActivity(old, new)
+
+	if new[0].LastActivityAt != past {
+		t.Errorf("LastActivityAt = %v, want %v (carried forward)", new[0].LastActivityAt, past)
+	}
+}
+
+func TestReconcileActivityUpdatesOnDirtyTransition(t *testing.T) {
+	t.Parallel()
+
+	past := time.Now().Add(-5 * time.Minute)
+	old := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Dirty: false, ChangedFiles: 0, LastActivityAt: past},
+	}
+	new := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Dirty: true, ChangedFiles: 1},
+	}
+	before := time.Now()
+	reconcileActivity(old, new)
+
+	if new[0].LastActivityAt.Before(before) {
+		t.Error("LastActivityAt should be updated to now on dirty transition")
+	}
+}
+
+func TestReconcileActivityUpdatesOnCountChange(t *testing.T) {
+	t.Parallel()
+
+	past := time.Now().Add(-5 * time.Minute)
+	old := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Dirty: true, ChangedFiles: 3, LastActivityAt: past},
+	}
+	new := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Dirty: true, ChangedFiles: 5},
+	}
+	before := time.Now()
+	reconcileActivity(old, new)
+
+	if new[0].LastActivityAt.Before(before) {
+		t.Error("LastActivityAt should be updated on count change")
+	}
+}
+
+func TestReconcileActivityUpdatesOnNewCommit(t *testing.T) {
+	t.Parallel()
+
+	past := time.Now().Add(-5 * time.Minute)
+	old := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Dirty: false, ChangedFiles: 0, LastActivityAt: past},
+	}
+	new := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "def", Dirty: false, ChangedFiles: 0},
+	}
+	before := time.Now()
+	reconcileActivity(old, new)
+
+	if new[0].LastActivityAt.Before(before) {
+		t.Error("LastActivityAt should be updated on new commit")
+	}
+}
+
+func TestReconcileActivityNewWorktree(t *testing.T) {
+	t.Parallel()
+
+	old := []model.WorktreeInfo{}
+	new := []model.WorktreeInfo{
+		{Path: "/new", Branch: "feat", CommitHash: "xyz"},
+	}
+	before := time.Now()
+	reconcileActivity(old, new)
+
+	if new[0].LastActivityAt.Before(before) {
+		t.Error("new worktree should get current time as LastActivityAt")
+	}
+}

@@ -61,15 +61,6 @@ func WorktreeList(ctx context.Context, r GitRunner) ([]WorktreeEntry, error) {
 	return entries, nil
 }
 
-// StatusClean returns true if the worktree at the given path has no uncommitted changes.
-func StatusClean(ctx context.Context, r GitRunner, worktreePath string) (bool, error) {
-	out, err := r.RunGit(ctx, "-C", worktreePath, "status", "--porcelain")
-	if err != nil {
-		return false, fmt.Errorf("status check for %s: %w", worktreePath, err)
-	}
-	return strings.TrimSpace(out) == "", nil
-}
-
 // CommitSubject returns the short hash and subject of a commit.
 func CommitSubject(ctx context.Context, r GitRunner, worktreePath string) (hash, subject string, err error) {
 	out, err := r.RunGit(ctx, "-C", worktreePath, "log", "-1", "--format=%h %s")
@@ -81,6 +72,20 @@ func CommitSubject(ctx context.Context, r GitRunner, worktreePath string) (hash,
 		return line[:idx], line[idx+1:], nil
 	}
 	return line, "", nil
+}
+
+// StatusCount returns the number of changed files in a worktree via `git status --porcelain`.
+// Note: untracked directories are reported as a single entry unless status.showUntrackedFiles=all.
+func StatusCount(ctx context.Context, r GitRunner, worktreePath string) (int, error) {
+	out, err := r.RunGit(ctx, "-C", worktreePath, "status", "--porcelain")
+	if err != nil {
+		return 0, fmt.Errorf("status count for %s: %w", worktreePath, err)
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return 0, nil
+	}
+	return len(strings.Split(out, "\n")), nil
 }
 
 // ShortBranch strips the "refs/heads/" prefix from a branch ref.

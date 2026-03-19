@@ -18,11 +18,11 @@ None.
 - `internal/ui/model.go`
 
 ## Deliverables
-- [ ] Metadata refresh preserves cached patches for unchanged files.
-- [ ] Removed files are evicted; changed files are evicted and reloaded if selected.
-- [ ] New files load on first selection.
-- [ ] Cache generation still increments on refresh (for stale-response guards).
-- [ ] Selected file reconciliation works without blanket cache clear.
+- [x] Metadata refresh preserves cached patches for unchanged files.
+- [x] Removed files are evicted; changed files are evicted and reloaded if selected.
+- [x] New files load on first selection.
+- [x] Cache generation still increments on refresh (for stale-response guards).
+- [x] Selected file reconciliation works without blanket cache clear.
 
 ## Design Note
 Summary-level comparison (additions/deletions/status) is sufficient for cache invalidation.

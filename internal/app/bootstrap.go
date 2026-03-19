@@ -42,7 +42,16 @@ func Run(cfg config.Config) int {
 		return 128
 	}
 
-	if cfg.Worktrees {
+	// Auto-detect dashboard mode from worktree count unless overridden.
+	worktreeCount := 1
+	if !cfg.NoDashboard && !cfg.Worktrees {
+		entries, err := gitexec.WorktreeList(ctx, boot.Runner)
+		if err == nil {
+			worktreeCount = len(entries)
+		}
+	}
+
+	if cfg.ShouldUseDashboard(worktreeCount) {
 		return runDashboard(ctx, cfg, boot)
 	}
 	return runDiff(ctx, cfg, boot)
@@ -166,7 +175,7 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	state := model.AppState{
 		FocusPane:    model.PaneDashboard,
 		WorktreeMode: true,
-		WatchEnabled: true,
+		WatchEnabled: cfg.Watch,
 		WatchInterval: interval,
 		DashboardState: model.DashboardState{
 			Worktrees: worktrees,
@@ -209,10 +218,11 @@ func (w *worktreeLoaderImpl) LoadWorktrees(ctx context.Context) ([]model.Worktre
 			continue
 		}
 
-		// Get dirty state.
-		clean, err := gitexec.StatusClean(ctx, w.runner, e.Path)
+		// Get changed file count (also derives dirty state).
+		count, err := gitexec.StatusCount(ctx, w.runner, e.Path)
 		if err == nil {
-			info.Dirty = !clean
+			info.ChangedFiles = count
+			info.Dirty = count > 0
 		}
 
 		// Get commit info.

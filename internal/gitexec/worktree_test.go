@@ -136,42 +136,6 @@ func TestWorktreeListGitError(t *testing.T) {
 	}
 }
 
-func TestStatusClean(t *testing.T) {
-	t.Parallel()
-
-	tests := map[string]struct {
-		output string
-		want   bool
-	}{
-		"clean worktree": {
-			output: "",
-			want:   true,
-		},
-		"dirty worktree": {
-			output: " M main.go\n?? new.go\n",
-			want:   false,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			runner := &mockRunner{fn: routeGit(map[string]string{
-				"-C /home/user/project status --porcelain": tc.output,
-			})}
-
-			got, err := StatusClean(t.Context(), runner, "/home/user/project")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("clean = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestCommitSubject(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +178,46 @@ func TestCommitSubject(t *testing.T) {
 			}
 			if subject != tc.wantSubject {
 				t.Errorf("subject = %q, want %q", subject, tc.wantSubject)
+			}
+		})
+	}
+}
+
+func TestStatusCount(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		output string
+		want   int
+	}{
+		"clean worktree": {
+			output: "",
+			want:   0,
+		},
+		"two changed files": {
+			output: " M main.go\n?? new.go\n",
+			want:   2,
+		},
+		"one changed file": {
+			output: " M main.go\n",
+			want:   1,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &mockRunner{fn: routeGit(map[string]string{
+				"-C /home/user/project status --porcelain": tc.output,
+			})}
+
+			got, err := StatusCount(t.Context(), runner, "/home/user/project")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("count = %d, want %d", got, tc.want)
 			}
 		})
 	}
