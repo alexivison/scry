@@ -208,15 +208,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		if err := terminal.CheckDimensions(msg.Width, msg.Height); err != nil {
-			// In split mode, degrade to modal for terminals that are usable
-			// but too narrow for split (40-79 cols). Only block on truly tiny terminals.
-			if m.State.Layout == model.LayoutSplit && msg.Width >= splitFallbackMinWidth && msg.Height >= splitFallbackMinHeight {
-				m.tooSmall = false
-				m.sizeErr = ""
-			} else {
-				m.tooSmall = true
-				m.sizeErr = err.Error()
-			}
+			m.tooSmall = true
+			m.sizeErr = err.Error()
 		} else {
 			m.tooSmall = false
 			m.sizeErr = ""
@@ -767,6 +760,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp := panes.NewPatchViewport(*ps.Patch)
 	vp.Width = m.width
 	vp.Height = m.height - 1
+	vp.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
@@ -953,7 +947,7 @@ func (m Model) View() string {
 		b.WriteString(m.viewDashboard())
 	} else if m.State.FocusPane == model.PaneCommit {
 		b.WriteString(m.viewCommit())
-	} else if m.State.Layout == model.LayoutSplit && m.width >= terminal.MinWidth {
+	} else if m.State.Layout == model.LayoutSplit && m.widthTierNow() >= terminal.WidthCompactSplit {
 		b.WriteString(m.viewSplit())
 	} else if m.State.FocusPane == model.PaneSearch || m.State.FocusPane == model.PanePatch {
 		b.WriteString(m.viewPatch())
@@ -972,36 +966,15 @@ func (m Model) View() string {
 }
 
 func (m Model) viewFileList() string {
-	if len(m.State.Files) == 0 {
-		return "No files changed."
+	contentHeight := m.height - 1 // reserve status bar
+	if contentHeight <= 0 {
+		contentHeight = 1
 	}
-
-	var lines []string
-	for i, f := range m.State.Files {
-		line := m.renderFileLine(i, f)
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m Model) renderFileLine(idx int, f model.FileSummary) string {
-	status := panes.StatusIcon(f.Status)
-	path := f.Path
-	if f.OldPath != "" {
-		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
-	}
-
-	counts := panes.FormatCounts(f)
-	prefix := "  "
-	if idx == m.State.SelectedFile {
-		prefix = "> "
-	}
-	line := fmt.Sprintf("%s%s  %-40s %s", prefix, status, path, counts)
-
-	if idx == m.State.SelectedFile {
-		return selectedStyle.Render(line)
-	}
-	return line
+	content, _ := panes.RenderFileList(
+		m.State.Files, m.State.SelectedFile, 0,
+		m.width, contentHeight, true,
+	)
+	return content
 }
 
 func (m Model) viewStatusBar() string {
@@ -1022,29 +995,49 @@ func (m Model) viewStatusBar() string {
 		return searchNotFoundStyle.Width(m.width).Render(bar)
 	}
 	var left, right string
+	minimal := m.widthTierNow() <= terminal.WidthMinimal
 	if m.State.FocusPane == model.PaneDashboard {
 		left = " Worktree Dashboard "
 		right = fmt.Sprintf(" %d worktrees ", len(m.State.DashboardState.Worktrees))
 	} else {
-		if m.State.Compare.WorkingTree {
-			left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
+		if minimal {
+			// Abbreviated status bar for 40–59 column terminals.
+			right = fmt.Sprintf(" %d ", len(m.State.Files))
+			if m.State.Compare.WorkingTree {
+				left = fmt.Sprintf(" %s ", m.State.Compare.BaseRef)
+			} else {
+				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+			}
 		} else {
-			left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+			if m.State.Compare.WorkingTree {
+				left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
+			} else {
+				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+			}
+			if m.State.IgnoreWhitespace {
+				left += "[W] "
+			}
+			if m.State.CommitEnabled {
+				left += "[C] "
+			}
+			right = fmt.Sprintf(" %d files ", len(m.State.Files))
 		}
-		if m.State.IgnoreWhitespace {
-			left += "[W] "
-		}
-		if m.State.CommitEnabled {
-			left += "[C] "
-		}
-		right = fmt.Sprintf(" %d files ", len(m.State.Files))
 	}
 	if m.State.WatchEnabled && m.State.FocusPane != model.PaneDashboard {
-		watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
-		if !m.lastCheckAt.IsZero() {
-			watchTag += " " + m.lastCheckAt.Format("15:04:05")
+		if minimal {
+			left += "[W] "
+		} else {
+			watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
+			if !m.lastCheckAt.IsZero() {
+				watchTag += " " + m.lastCheckAt.Format("15:04:05")
+			}
+			left += watchTag + "] "
 		}
-		left += watchTag + "] "
+	}
+	// Truncate left segment if it overflows available space.
+	maxLeft := m.width - lipgloss.Width(right)
+	if maxLeft > 0 && lipgloss.Width(left) > maxLeft {
+		left = truncateToWidth(left, maxLeft)
 	}
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
@@ -1088,6 +1081,7 @@ func (m Model) renderPatch(width, height int) string {
 	}
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
+	m.patchViewport.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
 	return m.patchViewport.Render()
 }
 
@@ -1160,6 +1154,12 @@ func (m Model) viewHelp() string {
 		help = append(help, "  c       generate commit message")
 	}
 	return strings.Join(help, "\n")
+}
+
+// widthTierNow returns the current width tier computed from the model dimensions.
+func (m Model) widthTierNow() terminal.WidthTier {
+	wt, _ := terminal.LayoutTier(m.width, m.height)
+	return wt
 }
 
 // syncFileListScroll adjusts fileListScroll so the selected file stays visible
@@ -1248,6 +1248,19 @@ func splitIntoLines(content string, n int) []string {
 	return lines
 }
 
+// truncateToWidth trims a string to fit within a terminal-cell width budget.
+func truncateToWidth(s string, maxWidth int) string {
+	w := 0
+	for i, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > maxWidth {
+			return s[:i]
+		}
+		w += rw
+	}
+	return s
+}
+
 // padToWidth pads a string with spaces to reach the target visual width.
 func padToWidth(s string, width int) string {
 	w := lipgloss.Width(s)
@@ -1257,15 +1270,9 @@ func padToWidth(s string, width int) string {
 	return s + strings.Repeat(" ", width-w)
 }
 
-// Minimum dimensions for modal fallback when split mode degrades on narrow terminals.
-const (
-	splitFallbackMinWidth  = 40
-	splitFallbackMinHeight = 10
-)
 
 // Styles — kept minimal; will degrade gracefully when color is unavailable.
 var (
-	selectedStyle  = lipgloss.NewStyle().Bold(true).Reverse(true)
 	statusBarStyle = lipgloss.NewStyle().
 			Background(theme.StatusBg).
 			Foreground(theme.StatusFg)

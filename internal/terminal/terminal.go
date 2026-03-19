@@ -10,11 +10,63 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-// MinWidth is the minimum terminal width required.
-const MinWidth = 80
+// MinWidth is the minimum terminal width required (below this: "too small" error).
+const MinWidth = 40
 
-// MinHeight is the minimum terminal height required.
-const MinHeight = 24
+// MinHeight is the minimum terminal height required (below this: "too small" error).
+const MinHeight = 15
+
+// WidthTier classifies the terminal width into layout buckets.
+type WidthTier int
+
+const (
+	WidthTooSmall    WidthTier = iota // <40
+	WidthMinimal                      // 40–59: truncated paths, no gutter
+	WidthModalOnly                    // 60–79: modal layout only
+	WidthCompactSplit                 // 80–119: compact split
+	WidthWideSplit                    // ≥120: wide split
+)
+
+// HeightTier classifies the terminal height into layout buckets.
+type HeightTier int
+
+const (
+	HeightTooSmall      HeightTier = iota // <15
+	HeightCompact                         // 15–23: reduced padding
+	HeightStandard                        // 24–29: normal
+	HeightFooterVisible                   // ≥30: footer visible
+)
+
+// LayoutTier returns the width and height tiers for the given terminal dimensions.
+func LayoutTier(width, height int) (WidthTier, HeightTier) {
+	var wt WidthTier
+	switch {
+	case width >= 120:
+		wt = WidthWideSplit
+	case width >= 80:
+		wt = WidthCompactSplit
+	case width >= 60:
+		wt = WidthModalOnly
+	case width >= 40:
+		wt = WidthMinimal
+	default:
+		wt = WidthTooSmall
+	}
+
+	var ht HeightTier
+	switch {
+	case height >= 30:
+		ht = HeightFooterVisible
+	case height >= 24:
+		ht = HeightStandard
+	case height >= 15:
+		ht = HeightCompact
+	default:
+		ht = HeightTooSmall
+	}
+
+	return wt, ht
+}
 
 // ColorProfile describes the terminal's color capability.
 type ColorProfile int
@@ -45,7 +97,7 @@ func IsTTY(f *os.File) bool {
 	return isatty.IsTerminal(f.Fd())
 }
 
-// CheckDimensions returns an error if the terminal is smaller than 80x24.
+// CheckDimensions returns an error if the terminal is smaller than 40x15.
 func CheckDimensions(width, height int) error {
 	if width < MinWidth || height < MinHeight {
 		return fmt.Errorf("terminal too small (%dx%d); scry requires at least %dx%d",
