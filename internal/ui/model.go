@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -71,6 +72,8 @@ type Model struct {
 	tooSmall        bool // terminal below minimum dimensions
 	sizeErr         string
 
+	pendingKey     rune          // buffered prefix key for multi-key sequences (]/[/g)
+	pendingKeySeq  int           // monotonic counter to detect stale timeout cancellations
 	searchInput    string        // text being typed in search mode
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
@@ -96,6 +99,9 @@ type Model struct {
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
 	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
+	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
+
+	spinner spinner.Model // shared spinner for loading states
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -117,7 +123,16 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	if state.Patches == nil {
 		state.Patches = make(map[string]model.PatchLoadState)
 	}
-	m := Model{State: state}
+	if state.FileChangeGen == nil {
+		state.FileChangeGen = make(map[string]int)
+	}
+	if state.FlaggedFiles == nil {
+		state.FlaggedFiles = make(map[string]bool)
+	}
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(theme.Accent)
+	m := Model{State: state, spinner: s}
 	for _, opt := range opts {
 		opt(&m)
 	}
@@ -199,20 +214,44 @@ type CommitEditedMsg struct {
 	Err     error
 }
 
+// pendingKeyTimeoutMsg fires when the gg chord timer expires.
+type pendingKeyTimeoutMsg struct {
+	Seq int
+}
+
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{m.spinner.Tick}
 	if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
-		return watch.TickCmd(m.State.WatchInterval)
+		cmds = append(cmds, watch.TickCmd(m.State.WatchInterval))
+	} else if m.State.WatchEnabled && m.fingerprinter != nil {
+		cmds = append(cmds, m.buildCheckCmd())
 	}
-	if m.State.WatchEnabled && m.fingerprinter != nil {
-		return m.buildCheckCmd()
+	// Load initial dashboard preview if in dashboard mode.
+	if m.State.FocusPane == model.PaneDashboard {
+		if pc := m.maybeLoadPreview(); pc != nil {
+			cmds = append(cmds, pc)
+		}
 	}
-	return nil
+	return tea.Batch(cmds...)
 }
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if m.needsSpinner() {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	case pendingKeyTimeoutMsg:
+		if msg.Seq == m.pendingKeySeq && m.pendingKey != 0 {
+			m.pendingKey = 0
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -266,6 +305,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DrillDownLoadedMsg:
 		return m.handleDrillDownLoaded(msg)
 
+	case PreviewLoadedMsg:
+		return m.handlePreviewLoaded(msg)
+
 	case WorktreeRemovedMsg:
 		return m.handleWorktreeRemoved(msg)
 
@@ -276,6 +318,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		}
+		// Clear pending multi-key buffer on global keys to prevent stale
+		// ] / [ / g from stealing a later keystroke.
+		switch msg.String() {
+		case "]", "[", "c", "g":
+			// These participate in multi-key sequences — don't clear.
+		default:
+			m.pendingKey = 0
 		}
 		// r triggers refresh from any pane (except help/search/commit).
 		if msg.String() == "r" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
@@ -328,7 +378,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle pending multi-key sequences (]c, [c, gg).
+	if m.pendingKey != 0 {
+		pending := m.pendingKey
+		m.pendingKey = 0
+		switch {
+		case pending == 'g' && msg.String() == "g":
+			m.State.SelectedFile = 0
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
+			return m, nil
+		case (pending == ']' || pending == '[') && msg.String() == "c":
+			return m.jumpChangedFile(pending == ']')
+		}
+		// Not a recognized sequence — discard pending and fall through.
+	}
+
 	switch msg.String() {
+	case "]", "[":
+		if len(msg.Runes) > 0 {
+			m.pendingKey = msg.Runes[0]
+			m.pendingKeySeq++ // invalidate any stale g timeout
+		}
+		return m, nil
+	case "g":
+		m.pendingKey = 'g'
+		m.pendingKeySeq++
+		return m, m.pendingKeyTimeout()
+	case "G":
+		if len(m.State.Files) > 0 {
+			m.State.SelectedFile = len(m.State.Files) - 1
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
+		}
 	case "j", "down":
 		if m.State.SelectedFile < len(m.State.Files)-1 {
 			m.State.SelectedFile++
@@ -345,10 +431,30 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.selectFile()
 			}
 		}
+	case "ctrl+d":
+		return m.fileListHalfPageDown()
+	case "ctrl+u":
+		return m.fileListHalfPageUp()
+	case "ctrl+f":
+		return m.fileListPageDown()
+	case "ctrl+b":
+		return m.fileListPageUp()
 	case "l", "enter":
 		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 			m.State.FocusPane = model.PanePatch
 			return m.selectFile()
+		}
+	case "m":
+		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+			review.ToggleFlag(&m.State, m.State.Files[m.State.SelectedFile].Path)
+		}
+	case "M":
+		if idx, ok := review.NextFlaggedFile(m.State.Files, m.State.FlaggedFiles, m.State.SelectedFile); ok {
+			m.State.SelectedFile = idx
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
 		}
 	case "c":
 		if m.State.CommitEnabled && m.commitProvider != nil {
@@ -359,6 +465,127 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.showHelp = true
+	}
+	return m, nil
+}
+
+// needsSpinner reports whether any loading state requires spinner animation.
+func (m Model) needsSpinner() bool {
+	if m.State.CommitState.InFlight || m.State.CommitState.Executing {
+		return true
+	}
+	if m.State.RefreshInFlight {
+		return true
+	}
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		path := m.State.Files[m.State.SelectedFile].Path
+		if ps, ok := m.State.Patches[path]; ok && ps.Status == model.LoadLoading {
+			return true
+		}
+	}
+	return false
+}
+
+// pendingKeyTimeout returns a Cmd that fires a timeout message after 500ms.
+func (m Model) pendingKeyTimeout() tea.Cmd {
+	seq := m.pendingKeySeq
+	return func() tea.Msg {
+		time.Sleep(500 * time.Millisecond)
+		return pendingKeyTimeoutMsg{Seq: seq}
+	}
+}
+
+// fileListInnerHeight returns the visible row count for the file list pane.
+func (m Model) fileListInnerHeight() int {
+	outerH := m.height - 1 // status bar
+	_, h := panes.ContentDimensions(m.width, outerH)
+	return h
+}
+
+// fileListHalfPageDown moves selection half a page down in the file list.
+func (m Model) fileListHalfPageDown() (tea.Model, tea.Cmd) {
+	half := m.fileListInnerHeight() / 2
+	if half < 1 {
+		half = 1
+	}
+	m.State.SelectedFile += half
+	if m.State.SelectedFile >= len(m.State.Files) {
+		m.State.SelectedFile = len(m.State.Files) - 1
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// fileListHalfPageUp moves selection half a page up in the file list.
+func (m Model) fileListHalfPageUp() (tea.Model, tea.Cmd) {
+	half := m.fileListInnerHeight() / 2
+	if half < 1 {
+		half = 1
+	}
+	m.State.SelectedFile -= half
+	if m.State.SelectedFile < 0 {
+		m.State.SelectedFile = 0
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// fileListPageDown moves selection one full page down in the file list.
+func (m Model) fileListPageDown() (tea.Model, tea.Cmd) {
+	page := m.fileListInnerHeight()
+	if page < 1 {
+		page = 1
+	}
+	m.State.SelectedFile += page
+	if m.State.SelectedFile >= len(m.State.Files) {
+		m.State.SelectedFile = len(m.State.Files) - 1
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// fileListPageUp moves selection one full page up in the file list.
+func (m Model) fileListPageUp() (tea.Model, tea.Cmd) {
+	page := m.fileListInnerHeight()
+	if page < 1 {
+		page = 1
+	}
+	m.State.SelectedFile -= page
+	if m.State.SelectedFile < 0 {
+		m.State.SelectedFile = 0
+	}
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+// jumpChangedFile navigates to the next (forward=true) or previous hot/warm file.
+func (m Model) jumpChangedFile(forward bool) (tea.Model, tea.Cmd) {
+	var idx int
+	var ok bool
+	if forward {
+		idx, ok = review.NextChangedFile(m.State.Files, m.State.FileChangeGen, m.State.CacheGeneration, m.State.SelectedFile)
+	} else {
+		idx, ok = review.PrevChangedFile(m.State.Files, m.State.FileChangeGen, m.State.CacheGeneration, m.State.SelectedFile)
+	}
+	if !ok {
+		return m, nil
+	}
+	m.State.SelectedFile = idx
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit {
+		return m.selectFile()
 	}
 	return m, nil
 }
@@ -377,9 +604,9 @@ func (m Model) startCommitGeneration() (tea.Model, tea.Cmd) {
 	m.State.FocusPane = model.PaneCommit
 	gen := m.State.CommitState.Generation + 1
 	m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
-	cmd, cancel := m.buildCommitCmd(gen)
+	genCmd, cancel := m.buildCommitCmd(gen)
 	m.commitCancel = cancel
-	return m, cmd
+	return m, tea.Batch(genCmd, m.spinner.Tick)
 }
 
 // handleCommitGenerated processes the result of an async commit generation.
@@ -460,9 +687,9 @@ func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancelCommit()
 			gen := m.State.CommitState.Generation + 1
 			m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
-			cmd, cancel := m.buildCommitCmd(gen)
+			regenCmd, cancel := m.buildCommitCmd(gen)
 			m.commitCancel = cancel
-			return m, cmd
+			return m, tea.Batch(regenCmd, m.spinner.Tick)
 		}
 	case "q":
 		m.cancelCommit()
@@ -482,11 +709,11 @@ func (m Model) startCommitExecution() (tea.Model, tea.Cmd) {
 	executor := m.commitExecutor
 	message := m.State.CommitState.GeneratedMessage
 
-	cmd := func() tea.Msg {
+	execCmd := func() tea.Msg {
 		sha, err := executor.Execute(context.Background(), message)
 		return CommitExecutedMsg{SHA: sha, Err: err, Generation: gen}
 	}
-	return m, cmd
+	return m, tea.Batch(execCmd, m.spinner.Tick)
 }
 
 // startEditor opens $EDITOR with the commit message for user editing.
@@ -632,12 +859,12 @@ func (m Model) selectFile() (tea.Model, tea.Cmd) {
 	status := file.Status
 	loader := m.patchLoader
 
-	cmd := func() tea.Msg {
+	loadCmd := func() tea.Msg {
 		fp, err := loader.LoadPatch(context.Background(), cmp, path, status, ignoreWS)
 		return PatchLoadedMsg{Path: path, Patch: fp, Gen: gen, Err: err}
 	}
 
-	return m, cmd
+	return m, tea.Batch(loadCmd, m.spinner.Tick)
 }
 
 func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
@@ -712,7 +939,7 @@ func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 		files, err := loader.ListFiles(ctx, cmp)
 		return MetadataLoadedMsg{Compare: resolvedCmp, Files: files, Gen: gen, Err: err}
 	}
-	return m, cmd
+	return m, tea.Batch(cmd, m.spinner.Tick)
 }
 
 // toggleWhitespace flips IgnoreWhitespace, resets the patch cache, and reloads
@@ -767,6 +994,10 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		}
 		m.savedSearchQuery = m.State.SearchQuery
 	}
+
+	// Track per-file freshness before updating the file list.
+	review.UpdateFileChangeGen(&m.State, m.State.Files, msg.Files)
+	review.PruneFlags(&m.State, msg.Files)
 
 	// Selectively invalidate cache: preserve unchanged files, evict changed/removed.
 	review.SelectiveInvalidate(&m.State, m.State.Files, msg.Files)
@@ -839,7 +1070,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp := panes.NewPatchViewport(*ps.Patch)
 	vp.Width = m.width
 	vp.Height = m.height - 1
-	vp.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
+	vp.GutterVisible = m.width >= 60
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
@@ -884,6 +1115,19 @@ func buildFallback(summary model.FileSummary, err error) string {
 }
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle gg chord in patch pane.
+	if m.pendingKey == 'g' && msg.String() == "g" {
+		m.pendingKey = 0
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollToTop()
+		}
+		return m, nil
+	}
+	if m.pendingKey != 0 {
+		m.pendingKey = 0
+		// Fall through to normal handling.
+	}
+
 	switch msg.String() {
 	case "esc", "h":
 		m.State.FocusPane = model.PaneFiles
@@ -903,7 +1147,31 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollUp()
 		}
-	case "n":
+	case "g":
+		m.pendingKey = 'g'
+		m.pendingKeySeq++
+		return m, m.pendingKeyTimeout()
+	case "G":
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollToBottom()
+		}
+	case "ctrl+d":
+		if m.patchViewport != nil {
+			m.patchViewport.HalfPageDown()
+		}
+	case "ctrl+u":
+		if m.patchViewport != nil {
+			m.patchViewport.HalfPageUp()
+		}
+	case "ctrl+f":
+		if m.patchViewport != nil {
+			m.patchViewport.PageDown()
+		}
+	case "ctrl+b":
+		if m.patchViewport != nil {
+			m.patchViewport.PageUp()
+		}
+	case "n", "}":
 		if m.patchViewport != nil {
 			m.patchViewport.NextHunk()
 		}
@@ -915,7 +1183,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneSearch
 		m.searchInput = ""
 		m.searchNotFound = ""
-	case "p":
+	case "p", "{":
 		if m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
 		}
@@ -1010,28 +1278,33 @@ func (m Model) View() string {
 		return ""
 	}
 	if m.width == 0 || m.height == 0 {
-		return "Initializing..."
+		return m.spinner.View() + " Initializing..."
 	}
 	if m.tooSmall {
 		return m.sizeErr + "\nPress q to quit."
 	}
 
-	var b strings.Builder
-
-	if m.showHelp {
-		b.WriteString(m.viewHelp())
-	} else if m.State.FocusPane == model.PaneIdle {
-		b.WriteString(m.viewIdle())
+	// Render the base content view.
+	var base string
+	if m.State.FocusPane == model.PaneIdle {
+		base = m.viewIdle()
 	} else if m.State.FocusPane == model.PaneDashboard {
-		b.WriteString(m.viewDashboard())
+		base = m.viewDashboard()
 	} else if m.State.FocusPane == model.PaneCommit {
-		b.WriteString(m.viewCommit())
+		base = m.viewCommit()
 	} else if m.State.Layout == model.LayoutSplit && m.widthTierNow() >= terminal.WidthCompactSplit {
-		b.WriteString(m.viewSplit())
+		base = m.viewSplit()
 	} else if m.State.FocusPane == model.PaneSearch || m.State.FocusPane == model.PanePatch {
-		b.WriteString(m.viewPatch())
+		base = m.viewPatch()
 	} else {
-		b.WriteString(m.viewFileList())
+		base = m.viewFileList()
+	}
+
+	var b strings.Builder
+	if m.showHelp {
+		b.WriteString(m.overlayHelp(base))
+	} else {
+		b.WriteString(base)
 	}
 
 	b.WriteString("\n")
@@ -1053,6 +1326,7 @@ func (m Model) viewFileList() string {
 	content, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, 0,
 		innerW, innerH, true,
+		m.freshnessOpts(),
 	)
 	footer := fmt.Sprintf("%d files", len(m.State.Files))
 	return panes.BorderedPane(content, "Files", footer, m.width, outerHeight, true, m.showFooter())
@@ -1064,12 +1338,14 @@ func (m Model) viewPatch() string {
 		outerHeight = 3
 	}
 	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
-	content := m.renderPatch(innerW, innerH)
-	return panes.BorderedPane(content, m.patchTitle(), m.patchFooter(), m.width, outerHeight, true, m.showFooter())
+	content := m.renderPatch(innerW, innerH, m.width)
+	scrollLine := m.patchScrollLine(innerH)
+	return panes.BorderedPaneWithScroll(content, m.patchTitle(), m.patchFooter(), m.width, outerHeight, true, m.showFooter(), scrollLine)
 }
 
 // renderPatch renders the patch pane content at the given dimensions.
-func (m Model) renderPatch(width, height int) string {
+// outerWidth is the pane's outer width (including borders) for gutter decisions.
+func (m Model) renderPatch(width, height, outerWidth int) string {
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
 	}
@@ -1080,7 +1356,7 @@ func (m Model) renderPatch(width, height int) string {
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		path := m.State.Files[m.State.SelectedFile].Path
 		if ps, ok := m.State.Patches[path]; ok && ps.Status == model.LoadLoading {
-			return "Loading..."
+			return m.spinner.View() + " Loading..."
 		}
 	}
 
@@ -1089,7 +1365,7 @@ func (m Model) renderPatch(width, height int) string {
 	}
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
-	m.patchViewport.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
+	m.patchViewport.GutterVisible = outerWidth >= 60
 	return m.patchViewport.Render()
 }
 
@@ -1098,10 +1374,10 @@ func (m Model) viewCommit() string {
 	cs := m.State.CommitState
 
 	if cs.InFlight {
-		return "Generating commit message..."
+		return m.spinner.View() + " Generating commit message..."
 	}
 	if cs.Executing {
-		return "Committing..."
+		return m.spinner.View() + " Committing..."
 	}
 	if cs.CommitSHA != "" {
 		return fmt.Sprintf("Committed: %s\n\n  Esc  back to files", cs.CommitSHA)
@@ -1120,48 +1396,140 @@ func (m Model) viewCommit() string {
 
 func (m Model) viewHelp() string {
 	if m.State.WorktreeMode && !m.State.DashboardState.DrillDown {
-		help := []string{
-			"Dashboard Key Bindings",
+		return strings.Join([]string{
+			"Navigation",
+			"  j/k       navigate worktree list",
+			"  l/Enter   drill into worktree diff",
 			"",
-			"  j/k     navigate worktree list",
-			"  l/Enter drill into worktree diff",
-			"  q       quit",
-			"  ?       toggle help",
-		}
-		return strings.Join(help, "\n")
+			"Actions",
+			"  ?/Esc     close help",
+			"  q         quit",
+		}, "\n")
 	}
 
 	help := []string{
-		"Key Bindings",
-		"",
-		"  j/k     navigate file list / scroll diff",
-		"  l/Enter select file / focus patch pane",
+		"Navigation",
+		"  j/k       scroll / navigate",
+		"  l/Enter   select file / focus patch",
 	}
 	if m.State.WorktreeMode {
-		help = append(help, "  h/Esc   back to dashboard")
+		help = append(help, "  h/Esc     back to dashboard")
 	} else {
-		help = append(help, "  h/Esc   back to file list")
+		help = append(help, "  h/Esc     back to file list")
 	}
 	help = append(help,
-		"  n/p     next/previous hunk",
-		"  /       search in patch",
-		"  r       refresh",
-		"  W       toggle whitespace ignore",
-		"  Tab     toggle split/modal layout",
-		"  q       quit",
-		"  ?       toggle help",
+		"  n/p       next/previous hunk",
+		"  }/{       next/prev hunk (alias)",
+		"  gg        jump to top",
+		"  G         jump to bottom",
+		"  ctrl+d/u  half-page down/up",
+		"  ctrl+f/b  full page down/up",
+		"  ]c/[c     next/prev changed file",
+		"",
+		"Search",
+		"  /         search in patch",
+		"  enter/N   next/prev match",
+		"",
+		"Actions",
+		"  r         refresh",
+		"  W         toggle whitespace ignore",
+		"  Tab       toggle split/modal layout",
+		"  m         toggle file flag",
+		"  M         jump to next flagged file",
+		"  ?/Esc     close help",
+		"  q         quit",
 	)
 	if m.State.WatchEnabled {
-		watchLine := fmt.Sprintf("  [watch]  auto-refresh every %s", m.State.WatchInterval)
+		watchLine := fmt.Sprintf("  [watch]   auto-refresh every %s", m.State.WatchInterval)
 		if !m.State.LastRefreshAt.IsZero() {
 			watchLine += fmt.Sprintf(", last refresh %s", m.State.LastRefreshAt.Format("15:04:05"))
 		}
 		help = append(help, watchLine)
 	}
 	if m.State.CommitEnabled {
-		help = append(help, "  c       generate commit message")
+		help = append(help, "  c         generate commit message")
 	}
 	return strings.Join(help, "\n")
+}
+
+// overlayHelp renders the help text as a centered overlay on top of the base content.
+func (m Model) overlayHelp(base string) string {
+	helpText := m.viewHelp()
+	helpLines := strings.Split(helpText, "\n")
+
+	// Calculate overlay dimensions.
+	maxW := 0
+	for _, l := range helpLines {
+		if w := lipgloss.Width(l); w > maxW {
+			maxW = w
+		}
+	}
+	overlayW := maxW + 4 // padding
+	if overlayW > m.width-4 {
+		overlayW = m.width - 4
+	}
+	overlayH := len(helpLines) + 2 // top/bottom border
+	contentH := m.height - 1       // reserve status bar
+
+	// Build the bordered help box.
+	helpBox := panes.BorderedPane(helpText, "Help", "?/Esc close", overlayW, overlayH, true, true)
+	helpBoxLines := strings.Split(helpBox, "\n")
+
+	// Dim the base content and overlay help centered.
+	baseLines := strings.Split(base, "\n")
+	dimStyle := lipgloss.NewStyle().Faint(true)
+	startRow := (contentH - overlayH) / 2
+	if startRow < 0 {
+		startRow = 0
+	}
+	startCol := (m.width - overlayW) / 2
+	if startCol < 0 {
+		startCol = 0
+	}
+
+	result := make([]string, contentH)
+	for i := 0; i < contentH; i++ {
+		baseLine := ""
+		if i < len(baseLines) {
+			baseLine = baseLines[i]
+		}
+		helpIdx := i - startRow
+		if helpIdx >= 0 && helpIdx < len(helpBoxLines) {
+			// Overlay row: dimmed left + help box + dimmed right.
+			left := dimStyle.Render(padOrTruncateStr(baseLine, startCol))
+			rightStart := startCol + overlayW
+			rightBg := ""
+			if rightStart < m.width {
+				rightBg = dimStyle.Render(padOrTruncateStr(suffixFrom(baseLine, rightStart), m.width-rightStart))
+			}
+			result[i] = left + helpBoxLines[helpIdx] + rightBg
+		} else {
+			result[i] = dimStyle.Render(padOrTruncateStr(baseLine, m.width))
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+// suffixFrom extracts the visual portion of a string starting at column startCol.
+func suffixFrom(s string, startCol int) string {
+	w := 0
+	for i, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w >= startCol {
+			return s[i:]
+		}
+		w += rw
+	}
+	return ""
+}
+
+// padOrTruncateStr pads or truncates a string to exactly the given width.
+func padOrTruncateStr(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return truncateToWidth(s, width)
+	}
+	return s + strings.Repeat(" ", width-w)
 }
 
 // widthTierNow returns the current width tier computed from the model dimensions.
@@ -1174,6 +1542,34 @@ func (m Model) widthTierNow() terminal.WidthTier {
 func (m Model) showFooter() bool {
 	_, ht := terminal.LayoutTier(m.width, m.height)
 	return ht >= terminal.HeightFooterVisible
+}
+
+// freshnessOpts returns the FileListOpts for freshness and flag rendering.
+func (m Model) freshnessOpts() panes.FileListOpts {
+	return panes.FileListOpts{
+		ChangeGen:        m.State.FileChangeGen,
+		CurrentGen:       m.State.CacheGeneration,
+		FlaggedFiles:     m.State.FlaggedFiles,
+		GroupByDirectory: m.State.GroupByDirectory,
+	}
+}
+
+// patchScrollLine returns the inner row index for the scroll indicator,
+// or -1 if no indicator should be shown.
+func (m Model) patchScrollLine(innerHeight int) int {
+	if m.patchViewport == nil || innerHeight <= 0 {
+		return -1
+	}
+	total := m.patchViewport.TotalLines()
+	if total <= innerHeight {
+		return -1 // content fits — no scrollbar needed
+	}
+	pos := m.patchViewport.ScrollIndicatorPos()
+	line := int(pos * float64(innerHeight-1))
+	if line >= innerHeight {
+		line = innerHeight - 1
+	}
+	return line
 }
 
 // patchTitle returns the title for the patch pane (current filename).
@@ -1259,13 +1655,15 @@ func (m Model) viewSplit() string {
 	leftContent, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, m.fileListScroll,
 		flInnerW, flInnerH, filesActive,
+		m.freshnessOpts(),
 	)
-	rightContent := m.renderPatch(patchInnerW, patchInnerH)
+	rightContent := m.renderPatch(patchInnerW, patchInnerH, patchOuterWidth)
 
 	showFoot := m.showFooter()
 	fileFooter := fmt.Sprintf("%d files", len(m.State.Files))
 	left := panes.BorderedPane(leftContent, "Files", fileFooter, flOuterWidth, outerHeight, filesActive, showFoot)
-	right := panes.BorderedPane(rightContent, m.patchTitle(), m.patchFooter(), patchOuterWidth, outerHeight, !filesActive, showFoot)
+	scrollLine := m.patchScrollLine(patchInnerH)
+	right := panes.BorderedPaneWithScroll(rightContent, m.patchTitle(), m.patchFooter(), patchOuterWidth, outerHeight, !filesActive, showFoot, scrollLine)
 
 	// Join bordered panes side by side, line by line.
 	leftLines := strings.Split(left, "\n")

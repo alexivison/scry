@@ -124,7 +124,7 @@ func (m Model) watchSegment() string {
 		dot = watchErrorDotStyle.Render("●")
 	}
 	if m.State.RefreshInFlight {
-		dot = watchRefreshDotStyle.Render("●")
+		dot = m.spinner.View()
 	}
 	s := dot + " " + m.State.WatchInterval.String()
 	if !m.lastCheckAt.IsZero() {

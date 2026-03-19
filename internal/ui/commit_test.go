@@ -448,10 +448,8 @@ func TestCommitExecution_enterExecutesCommit(t *testing.T) {
 		t.Fatal("expected a command to be returned for async commit execution")
 	}
 
-	// Execute the command and feed result back.
-	msg := cmd()
-	result, _ := m.Update(msg)
-	um := result.(Model)
+	// Execute the command (possibly batched with spinner tick) and feed results back.
+	um := deepDrain(t, m, cmd)
 
 	if um.State.CommitState.Executing {
 		t.Error("Executing should be false after completion")
@@ -470,9 +468,7 @@ func TestCommitExecution_errorShowsStderr(t *testing.T) {
 	m.height = 30
 
 	m, cmd := sendKey(m, "enter")
-	msg := cmd()
-	result, _ := m.Update(msg)
-	um := result.(Model)
+	um := deepDrain(t, m, cmd)
 
 	if um.State.CommitState.CommitErr == nil {
 		t.Fatal("CommitErr should be set on failure")
@@ -495,9 +491,7 @@ func TestCommitExecution_enterRetryAfterError(t *testing.T) {
 
 	// Execute → fail.
 	m, cmd := sendKey(m, "enter")
-	msg := cmd()
-	result, _ := m.Update(msg)
-	m = result.(Model)
+	m = deepDrain(t, m, cmd)
 
 	if m.State.CommitState.CommitErr == nil {
 		t.Fatal("CommitErr should be set after first failure")
@@ -516,9 +510,7 @@ func TestCommitExecution_enterRetryAfterError(t *testing.T) {
 		t.Fatal("expected command for retry execution")
 	}
 
-	msg = cmd()
-	result, _ = m.Update(msg)
-	m = result.(Model)
+	m = deepDrain(t, m, cmd)
 
 	if m.State.CommitState.CommitSHA != "retry1" {
 		t.Errorf("CommitSHA = %q, want %q after retry", m.State.CommitState.CommitSHA, "retry1")
@@ -546,24 +538,12 @@ func TestCommitExecution_autoCommitSkipsConfirmation(t *testing.T) {
 	}
 
 	// Complete generation — with CommitAuto, should auto-fire execution.
-	genMsg := cmd()
-	result, execCmd := m.Update(genMsg)
-	um := result.(Model)
+	// The cmd may be batched with spinner tick. Use deepDrain to follow
+	// the full chain: generation → CommitGeneratedMsg → execution → CommitExecutedMsg.
+	um := deepDrain(t, m, cmd)
 
-	if !um.State.CommitState.Executing {
-		t.Error("CommitAuto: Executing should be true after generation completes")
-	}
-	if execCmd == nil {
-		t.Fatal("CommitAuto: expected execution command after generation")
-	}
-
-	// Complete execution.
-	execMsg := execCmd()
-	result2, _ := um.Update(execMsg)
-	um2 := result2.(Model)
-
-	if um2.State.CommitState.CommitSHA != "auto123" {
-		t.Errorf("CommitAuto: CommitSHA = %q, want %q", um2.State.CommitState.CommitSHA, "auto123")
+	if um.State.CommitState.CommitSHA != "auto123" {
+		t.Errorf("CommitAuto: CommitSHA = %q, want %q", um.State.CommitState.CommitSHA, "auto123")
 	}
 }
 
@@ -580,17 +560,12 @@ func TestCommitExecution_postCommitRefresh(t *testing.T) {
 
 	genBefore := m.State.CacheGeneration
 
-	// Enter → execute → complete
+	// Enter → execute → complete (handles BatchMsg from spinner).
 	m, cmd := sendKey(m, "enter")
-	msg := cmd()
-	result, refreshCmd := m.Update(msg)
-	um := result.(Model)
+	um := deepDrain(t, m, cmd)
 
 	if um.State.CacheGeneration <= genBefore {
 		t.Error("CacheGeneration should bump after successful commit (refresh)")
-	}
-	if refreshCmd == nil {
-		t.Error("expected refresh command after successful commit")
 	}
 }
 
@@ -672,8 +647,9 @@ func TestCommitUI_EscCancelsContext(t *testing.T) {
 		t.Fatal("expected a command from commit generation")
 	}
 
-	// Execute the command to capture the context.
-	cmd()
+	// Execute the command (may be batched with spinner tick) to capture the context.
+	msgs := execAndCollect(cmd)
+	_ = msgs
 
 	if generateCtx == nil {
 		t.Fatal("generateCtx should have been set by the provider")

@@ -26,7 +26,8 @@ type Config struct {
 	CommitModel    string // from config file; default: ""
 	CommitAuto     bool   // --commit-auto (requires --commit)
 
-	NoDashboard bool // --no-dashboard; forces diff mode even with multiple worktrees
+	NoDashboard      bool // --no-dashboard; forces diff mode even with multiple worktrees
+	GroupByDirectory bool // from config file; default: false
 }
 
 // supportedProviders is the set of valid commit provider values.
@@ -129,6 +130,7 @@ func Parse(args []string, opts ...ParseOption) (Config, error) {
 		CommitModel:      derefStr(fileConfig.Commit.Model, ""),
 		CommitAuto:       commitAuto,
 		NoDashboard:      noDashboard,
+		GroupByDirectory: derefBool(fileConfig.FileList.GroupByDirectory, false),
 	}, nil
 }
 

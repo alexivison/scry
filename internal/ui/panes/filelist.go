@@ -2,11 +2,14 @@ package panes
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
@@ -20,18 +23,57 @@ var (
 	statusModifiedStyle = lipgloss.NewStyle().Foreground(theme.Dirty)
 	statusRenamedStyle  = lipgloss.NewStyle().Foreground(theme.HunkHeader)
 	statusDefaultStyle  = lipgloss.NewStyle().Foreground(theme.Muted)
+
+	// Freshness markers.
+	freshnessHotStyle  = lipgloss.NewStyle().Foreground(theme.Added).Bold(true)
+	freshnessWarmStyle = lipgloss.NewStyle().Foreground(theme.Muted)
+
+	// Flag marker.
+	flagStyle = lipgloss.NewStyle().Foreground(theme.Dirty).Bold(true)
+
+	// Directory header style.
+	dirHeaderStyle = lipgloss.NewStyle().Foreground(theme.Muted).Faint(true)
 )
+
+// FileListOpts holds optional parameters for file list rendering.
+type FileListOpts struct {
+	ChangeGen        map[string]int  // per-file last-change generation (nil to disable)
+	CurrentGen       int             // current CacheGeneration for freshness calculation
+	FlaggedFiles     map[string]bool // session-scoped bookmarks
+	GroupByDirectory bool            // when true, group files by directory with dim headers
+}
 
 // RenderFileList renders a scrollable file list constrained to the given dimensions.
 // It adjusts scrollOffset to keep selectedIdx visible and returns the rendered
 // string along with the new scroll offset.
-func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width, height int, active bool) (string, int) {
+func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width, height int, active bool, opts ...FileListOpts) (string, int) {
 	if len(files) == 0 {
 		return "No files changed.", 0
 	}
 
+	var o FileListOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+
+	// When grouping, sort files by directory for proper grouping.
+	if o.GroupByDirectory {
+		files = sortByDirectory(files)
+	}
+
 	// Ensure selected item is visible.
-	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, height, len(files))
+	// When grouping, reduce effective height to account for directory headers.
+	effectiveHeight := height
+	if o.GroupByDirectory {
+		headerCount := countHeadersInRange(files, scrollOffset, scrollOffset+height)
+		if headerCount > 0 {
+			effectiveHeight = height - headerCount
+			if effectiveHeight < 1 {
+				effectiveHeight = 1
+			}
+		}
+	}
+	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, effectiveHeight, len(files))
 
 	// Determine visible window.
 	end := scrollOffset + height
@@ -39,9 +81,35 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 		end = len(files)
 	}
 
+	// Initialize lastDir from the file before scrollOffset for consistent header logic.
+	lastDir := ""
+	if o.GroupByDirectory && scrollOffset > 0 {
+		lastDir = fileDir(files[scrollOffset-1].Path)
+	}
+
 	lines := make([]string, 0, end-scrollOffset)
 	for i := scrollOffset; i < end; i++ {
-		line := renderFileEntry(files[i], i, selectedIdx, width)
+		// Insert directory header when grouping is enabled and directory changes.
+		if o.GroupByDirectory {
+			dir := fileDir(files[i].Path)
+			if dir != lastDir {
+				lastDir = dir
+				if dir != "" && len(lines) < height {
+					lines = append(lines, dirHeaderStyle.Render("  "+dir))
+				}
+			}
+		}
+		if len(lines) >= height {
+			break
+		}
+		tier := review.FreshnessCold
+		if o.ChangeGen != nil {
+			if gen, ok := o.ChangeGen[files[i].Path]; ok {
+				tier = review.ComputeFreshness(gen, o.CurrentGen)
+			}
+		}
+		flagged := o.FlaggedFiles[files[i].Path]
+		line := renderFileEntry(files[i], i, selectedIdx, width, tier, flagged)
 		if !active {
 			line = fileDimStyle.Render(line)
 		}
@@ -64,21 +132,23 @@ func EnsureVisible(selectedIdx, scrollOffset, height, total int) int {
 	return scrollOffset
 }
 
-func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int) string {
+func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier, flagged bool) string {
 	selected := idx == selectedIdx
 	path := f.Path
 	if f.OldPath != "" {
 		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
 	}
 
+	marker := prefixMarker(tier, flagged, selected)
+
 	prefix := "  "
 	if selected {
 		prefix = "> "
 	}
 
-	// Reserve space: prefix(2) + gap(2) + status(1) + gap(2) + counts + gap(1).
+	// Reserve space: prefix(2) + marker(1) + gap(1) + status(1) + gap(2) + counts + gap(1).
 	countsWidth := lipgloss.Width(FormatCounts(f))
-	pathWidth := width - 2 - 2 - 1 - 2 - countsWidth - 1
+	pathWidth := width - 2 - 1 - 1 - 1 - 2 - countsWidth - 1
 	if pathWidth < 5 {
 		pathWidth = 5
 	}
@@ -93,9 +163,39 @@ func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int) string {
 
 	if selected {
 		rev := fileSelectedStyle
-		return rev.Render(prefix+"  ") + icon + rev.Render("  "+paddedPath+" ") + counts
+		return rev.Render(prefix) + marker + rev.Render(" ") + icon + rev.Render("  "+paddedPath+" ") + counts
 	}
-	return fmt.Sprintf("%s  %s  %s %s", prefix, icon, paddedPath, counts)
+	return prefix + marker + " " + icon + "  " + paddedPath + " " + counts
+}
+
+// prefixMarker returns a styled single-character prefix: flag takes priority over freshness.
+func prefixMarker(tier review.FreshnessTier, flagged, selected bool) string {
+	if flagged {
+		s := flagStyle
+		if selected {
+			s = s.Reverse(true)
+		}
+		return s.Render("⚑")
+	}
+	switch tier {
+	case review.FreshnessHot:
+		s := freshnessHotStyle
+		if selected {
+			s = s.Reverse(true)
+		}
+		return s.Render("●")
+	case review.FreshnessWarm:
+		s := freshnessWarmStyle
+		if selected {
+			s = s.Reverse(true)
+		}
+		return s.Render("○")
+	default:
+		if selected {
+			return fileSelectedStyle.Render(" ")
+		}
+		return " "
+	}
 }
 
 // truncatePath trims a path to fit within maxWidth, adding "…" as ellipsis.
@@ -186,6 +286,62 @@ func StatusIcon(s model.FileStatus) string {
 	default:
 		return "?"
 	}
+}
+
+// sortByDirectory returns a copy of files sorted by directory, preserving
+// order within each directory. Root-level files come last.
+func sortByDirectory(files []model.FileSummary) []model.FileSummary {
+	sorted := make([]model.FileSummary, len(files))
+	copy(sorted, files)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		di := fileDir(sorted[i].Path)
+		dj := fileDir(sorted[j].Path)
+		// Root files (empty dir) sort after directories.
+		if di == "" && dj != "" {
+			return false
+		}
+		if di != "" && dj == "" {
+			return true
+		}
+		return di < dj
+	})
+	return sorted
+}
+
+// countHeadersInRange counts how many directory headers would be inserted
+// between file indices start and end.
+func countHeadersInRange(files []model.FileSummary, start, end int) int {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(files) {
+		end = len(files)
+	}
+	count := 0
+	lastDir := ""
+	if start > 0 {
+		lastDir = fileDir(files[start-1].Path)
+	}
+	for i := start; i < end; i++ {
+		dir := fileDir(files[i].Path)
+		if dir != lastDir && dir != "" {
+			count++
+			lastDir = dir
+		} else if dir != lastDir {
+			lastDir = dir
+		}
+	}
+	return count
+}
+
+// fileDir returns the directory portion of a file path, with trailing slash.
+// Returns "" for root-level files.
+func fileDir(path string) string {
+	dir := filepath.Dir(path)
+	if dir == "." {
+		return ""
+	}
+	return dir + "/"
 }
 
 // FormatCounts formats addition/deletion counts for display.

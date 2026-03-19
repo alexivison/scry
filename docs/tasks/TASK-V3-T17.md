@@ -15,11 +15,11 @@ V3-T1, V3-T2, V3-T11.
 - `internal/app/bootstrap.go`
 
 ## Deliverables
-- [ ] Preview pane shows top 5 changed files with `+/-` counts for selected worktree.
-- [ ] Preview loads lazily on selection change, not on every tick.
-- [ ] Preview cached per worktree; invalidated on snapshot change.
-- [ ] Preview adapts to available width (hidden in narrow layouts).
-- [ ] Drill-down behavior remains intact.
+- [x] Preview pane shows top 5 changed files with `+/-` counts for selected worktree.
+- [x] Preview loads lazily on selection change, not on every tick.
+- [x] Preview cached per worktree; invalidated on snapshot change.
+- [x] Preview adapts to available width (hidden in narrow layouts).
+- [x] Drill-down behavior remains intact.
 
 ## Test Strategy
 - Test lazy-load trigger on selection change.

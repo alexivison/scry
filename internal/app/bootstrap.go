@@ -95,6 +95,7 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		WatchInterval:    cfg.WatchInterval,
 		CommitEnabled:    cfg.Commit,
 		CommitAuto:       cfg.CommitAuto,
+		GroupByDirectory: cfg.GroupByDirectory,
 	}
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
@@ -194,9 +195,10 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 
 	state := model.AppState{
 		FocusPane:    model.PaneDashboard,
-		WorktreeMode: true,
-		WatchEnabled: cfg.Watch,
-		WatchInterval: interval,
+		WorktreeMode:     true,
+		WatchEnabled:     cfg.Watch,
+		WatchInterval:    interval,
+		GroupByDirectory: cfg.GroupByDirectory,
 		DashboardState: model.DashboardState{
 			Worktrees: worktrees,
 		},
@@ -205,7 +207,8 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 
 	drillDown := &drillDownProviderImpl{}
 	remover := &worktreeRemoverImpl{runner: stableRunner}
-	m := ui.NewModel(state, ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover))
+	preview := &previewLoaderImpl{}
+	m := ui.NewModel(state, ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover), ui.WithPreviewLoader(preview))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -297,4 +300,22 @@ func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath 
 		Files:       files,
 		PatchLoader: patchSvc,
 	}, nil
+}
+
+type previewLoaderImpl struct{}
+
+func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string) ([]model.FileSummary, error) {
+	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
+	resolver := &source.CompareResolver{Runner: runner}
+	req := model.CompareRequest{
+		BaseRef: "",
+		HeadRef: "",
+		Mode:    model.CompareThreeDot,
+	}
+	cmp, err := resolver.Resolve(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	metaSvc := &diff.MetadataService{Runner: runner}
+	return metaSvc.ListFiles(ctx, cmp)
 }

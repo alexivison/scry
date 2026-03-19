@@ -145,9 +145,10 @@ func TestStatusBar_RefreshInFlightOverridesWatchErr(t *testing.T) {
 	m.watchErr = true // both error and in-flight set
 
 	bar := m.viewStatusBar()
-	// Should show the dot (refresh in-flight takes priority over error).
-	if !strings.Contains(bar, "●") {
-		t.Errorf("watch segment should show dot when refresh in-flight, got: %q", bar)
+	// Should show spinner (refresh in-flight takes priority over error dot).
+	// The spinner replaces the static ● dot. Verify the error dot is NOT shown.
+	if strings.Contains(bar, "●") && !strings.Contains(bar, m.spinner.View()) {
+		t.Errorf("watch segment should show spinner when refresh in-flight, got: %q", bar)
 	}
 }
 

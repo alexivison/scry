@@ -478,8 +478,8 @@ func TestDashboardInitNoTickWithoutWatch(t *testing.T) {
 	m := NewModel(state)
 
 	cmd := m.Init()
-	if cmd != nil {
-		t.Error("Init() returned command, want nil when watch disabled")
+	if initContainsMsg[watch.TickMsg](t, cmd) {
+		t.Error("Init should not contain watch tick when watch disabled")
 	}
 }
 

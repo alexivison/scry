@@ -15,11 +15,11 @@ V3-T5, V3-T15.
 - `internal/config/config.go`
 
 ## Deliverables
-- [ ] Directory grouping renders grouped headers when enabled.
-- [ ] Selection skips directory header rows.
-- [ ] Freshness markers (V3-T8) and flag markers (V3-T10) work correctly in grouped mode.
-- [ ] Feature disabled by default.
-- [ ] Ungrouped rendering identical to V3-T5 when disabled.
+- [x] Directory grouping renders grouped headers when enabled.
+- [x] Selection skips directory header rows.
+- [x] Freshness markers (V3-T8) and flag markers (V3-T10) work correctly in grouped mode.
+- [x] Feature disabled by default.
+- [x] Ungrouped rendering identical to V3-T5 when disabled.
 
 ## Test Strategy
 - Render tests for grouped and ungrouped modes.
