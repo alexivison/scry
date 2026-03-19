@@ -15,12 +15,12 @@ V3-T0, V3-T1.
 - `internal/ui/model.go`
 
 ## Deliverables
-- [ ] Status bar renders segmented layout with dim separators.
-- [ ] Mode indicators (`W` for whitespace, `C` for commit) styled as badges.
-- [ ] Watch indicator shows colored dot + interval + last check time.
-- [ ] Breadcrumb appears during worktree drill-down.
-- [ ] Refresh/error/search-not-found messages still occupy full bar width.
-- [ ] Graceful truncation at narrow widths.
+- [x] Status bar renders segmented layout with dim separators.
+- [x] Mode indicators (`W` for whitespace, `C` for commit) styled as badges.
+- [x] Watch indicator shows colored dot + interval + last check time.
+- [x] Breadcrumb appears during worktree drill-down.
+- [x] Refresh/error/search-not-found messages still occupy full bar width.
+- [x] Graceful truncation at narrow widths.
 
 ## Test Strategy
 - Unit tests for status bar rendering in various states (watch on/off, drill-down, error).

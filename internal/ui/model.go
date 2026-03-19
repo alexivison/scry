@@ -84,13 +84,14 @@ type Model struct {
 	savedCurrentHunk  int
 	savedSearchQuery  string
 
-	commitProvider CommitProvider      // optional provider for AI commit messages
-	commitExecutor CommitExecutor      // optional executor for git commit
+	commitProvider CommitProvider     // optional provider for AI commit messages
+	commitExecutor CommitExecutor     // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
 	fingerprinter WatchFingerprinter // optional watch mode fingerprinter
 	watchBaseRef  string             // symbolic base ref for fingerprint checks
 	lastCheckAt   time.Time          // when the last fingerprint check completed
+	watchErr      bool               // true when last fingerprint check failed
 
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
@@ -570,8 +571,10 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 	}
 
 	if msg.Err != nil {
+		m.watchErr = true
 		return m, tickCmd()
 	}
+	m.watchErr = false
 
 	// First fingerprint: seed without refresh (bootstrap already loaded data).
 	// Exception: in idle mode, bootstrap had no files — refresh to catch any
@@ -1042,107 +1045,27 @@ func (m Model) View() string {
 }
 
 func (m Model) viewFileList() string {
-	contentHeight := m.height - 1 // reserve status bar
-	if contentHeight <= 0 {
-		contentHeight = 1
+	outerHeight := m.height - 1 // reserve status bar
+	if outerHeight < 3 {
+		outerHeight = 3
 	}
+	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
 	content, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, 0,
-		m.width, contentHeight, true,
+		innerW, innerH, true,
 	)
-	return content
-}
-
-func (m Model) renderErrorBar(msg string) string {
-	bar := " " + msg
-	gap := m.width - lipgloss.Width(bar)
-	if gap > 0 {
-		bar += strings.Repeat(" ", gap)
-	}
-	return searchNotFoundStyle.Width(m.width).Render(bar)
-}
-
-func (m Model) viewStatusBar() string {
-	// Dashboard delete messages.
-	if m.State.FocusPane == model.PaneDashboard {
-		ds := m.State.DashboardState
-		if ds.DeleteIsMain {
-			return m.renderErrorBar("Cannot delete main worktree")
-		}
-		if ds.DeleteErr != "" {
-			return m.renderErrorBar(ds.DeleteErr)
-		}
-	}
-	if m.refreshErr != "" {
-		return m.renderErrorBar(m.refreshErr)
-	}
-	if m.searchNotFound != "" {
-		return m.renderErrorBar(m.searchNotFound)
-	}
-	var left, right string
-	minimal := m.widthTierNow() <= terminal.WidthMinimal
-	if m.State.FocusPane == model.PaneDashboard {
-		left = " Worktree Dashboard "
-		right = fmt.Sprintf(" %d worktrees ", len(m.State.DashboardState.Worktrees))
-	} else {
-		if minimal {
-			// Abbreviated status bar for 40–59 column terminals.
-			right = fmt.Sprintf(" %d ", len(m.State.Files))
-			if m.State.Compare.WorkingTree {
-				left = fmt.Sprintf(" %s ", m.State.Compare.BaseRef)
-			} else {
-				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
-			}
-		} else {
-			if m.State.Compare.WorkingTree {
-				left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
-			} else {
-				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
-			}
-			if m.State.IgnoreWhitespace {
-				left += "[W] "
-			}
-			if m.State.CommitEnabled {
-				left += "[C] "
-			}
-			right = fmt.Sprintf(" %d files ", len(m.State.Files))
-		}
-	}
-	if m.State.WatchEnabled && m.State.FocusPane != model.PaneDashboard {
-		if minimal {
-			left += "[W] "
-		} else {
-			watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
-			if !m.lastCheckAt.IsZero() {
-				watchTag += " " + m.lastCheckAt.Format("15:04:05")
-			}
-			left += watchTag + "] "
-		}
-	}
-	// Truncate left segment if it overflows available space.
-	maxLeft := m.width - lipgloss.Width(right)
-	if maxLeft > 0 && lipgloss.Width(left) > maxLeft {
-		left = truncateToWidth(left, maxLeft)
-	}
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 0 {
-		gap = 0
-	}
-	bar := left + strings.Repeat(" ", gap) + right
-	return statusBarStyle.Width(m.width).Render(bar)
-}
-
-func (m Model) viewSearchInput() string {
-	prompt := "/" + m.searchInput
-	gap := m.width - lipgloss.Width(prompt)
-	if gap > 0 {
-		prompt += strings.Repeat(" ", gap)
-	}
-	return statusBarStyle.Width(m.width).Render(prompt)
+	footer := fmt.Sprintf("%d files", len(m.State.Files))
+	return panes.BorderedPane(content, "Files", footer, m.width, outerHeight, true, m.showFooter())
 }
 
 func (m Model) viewPatch() string {
-	return m.renderPatch(m.width, m.height-1)
+	outerHeight := m.height - 1
+	if outerHeight < 3 {
+		outerHeight = 3
+	}
+	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+	content := m.renderPatch(innerW, innerH)
+	return panes.BorderedPane(content, m.patchTitle(), m.patchFooter(), m.width, outerHeight, true, m.showFooter())
 }
 
 // renderPatch renders the patch pane content at the given dimensions.
@@ -1247,15 +1170,47 @@ func (m Model) widthTierNow() terminal.WidthTier {
 	return wt
 }
 
+// showFooter reports whether pane footers should be visible based on the height tier.
+func (m Model) showFooter() bool {
+	_, ht := terminal.LayoutTier(m.width, m.height)
+	return ht >= terminal.HeightFooterVisible
+}
+
+// patchTitle returns the title for the patch pane (current filename).
+func (m Model) patchTitle() string {
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		return m.State.Files[m.State.SelectedFile].Path
+	}
+	return "Patch"
+}
+
+// patchFooter returns the footer for the patch pane (hunk position + scroll %).
+func (m Model) patchFooter() string {
+	if m.patchViewport == nil || len(m.patchViewport.Patch.Hunks) == 0 {
+		return ""
+	}
+	hunkInfo := fmt.Sprintf("Hunk %d/%d", m.patchViewport.CurrentHunk+1, len(m.patchViewport.Patch.Hunks))
+	pct := 100
+	total := m.patchViewport.TotalLines()
+	if maxScroll := total - m.patchViewport.Height; maxScroll > 0 {
+		pct = m.patchViewport.ScrollOffset * 100 / maxScroll
+		if pct > 100 {
+			pct = 100
+		}
+	}
+	return fmt.Sprintf("%s · %d%%", hunkInfo, pct)
+}
+
 // syncFileListScroll adjusts fileListScroll so the selected file stays visible
 // in split mode. Must be called from Update paths (not View) to persist state.
 func (m *Model) syncFileListScroll() {
 	if m.State.Layout != model.LayoutSplit || m.height == 0 {
 		return
 	}
-	contentHeight := m.height - 1 // reserve status bar
+	outerHeight := m.height - 1 // reserve status bar
+	_, innerH := panes.ContentDimensions(m.width, outerHeight)
 	m.fileListScroll = panes.EnsureVisible(
-		m.State.SelectedFile, m.fileListScroll, contentHeight, len(m.State.Files),
+		m.State.SelectedFile, m.fileListScroll, innerH, len(m.State.Files),
 	)
 }
 
@@ -1286,51 +1241,44 @@ func fileListWidth(termWidth int) int {
 	return w
 }
 
-// viewSplit renders the split-pane layout with file list on left, divider, and patch on right.
+// viewSplit renders the split-pane layout with bordered file list on left and bordered patch on right.
 func (m Model) viewSplit() string {
-	contentHeight := m.height - 1 // reserve status bar
-	if contentHeight <= 0 {
+	outerHeight := m.height - 1 // reserve status bar
+	if outerHeight < 3 {
 		return ""
 	}
 
-	flWidth := fileListWidth(m.width)
-	patchWidth := m.width - flWidth - 1 // -1 for divider column
+	flOuterWidth := fileListWidth(m.width)
+	patchOuterWidth := m.width - flOuterWidth
 
-	// Render left pane (file list). Scroll offset is pre-adjusted in Update().
+	flInnerW, flInnerH := panes.ContentDimensions(flOuterWidth, outerHeight)
+	patchInnerW, patchInnerH := panes.ContentDimensions(patchOuterWidth, outerHeight)
+
 	filesActive := m.State.FocusPane == model.PaneFiles
+
 	leftContent, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, m.fileListScroll,
-		flWidth, contentHeight, filesActive,
+		flInnerW, flInnerH, filesActive,
 	)
+	rightContent := m.renderPatch(patchInnerW, patchInnerH)
 
-	// Render right pane (patch).
-	rightContent := m.renderPatch(patchWidth, contentHeight)
+	showFoot := m.showFooter()
+	fileFooter := fmt.Sprintf("%d files", len(m.State.Files))
+	left := panes.BorderedPane(leftContent, "Files", fileFooter, flOuterWidth, outerHeight, filesActive, showFoot)
+	right := panes.BorderedPane(rightContent, m.patchTitle(), m.patchFooter(), patchOuterWidth, outerHeight, !filesActive, showFoot)
 
-	// Split into lines and compose with divider.
-	leftLines := splitIntoLines(leftContent, contentHeight)
-	rightLines := splitIntoLines(rightContent, contentHeight)
-
-	divider := dividerStyle.Render("│")
-
-	rows := make([]string, contentHeight)
-	for i := 0; i < contentHeight; i++ {
-		left := padToWidth(leftLines[i], flWidth)
-		right := rightLines[i]
-		rows[i] = left + divider + right
+	// Join bordered panes side by side, line by line.
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	rows := make([]string, len(leftLines))
+	for i := range leftLines {
+		r := ""
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		rows[i] = leftLines[i] + r
 	}
 	return strings.Join(rows, "\n")
-}
-
-// splitIntoLines splits content into exactly n lines, padding or truncating as needed.
-func splitIntoLines(content string, n int) []string {
-	raw := strings.Split(content, "\n")
-	lines := make([]string, n)
-	for i := 0; i < n; i++ {
-		if i < len(raw) {
-			lines[i] = raw[i]
-		}
-	}
-	return lines
 }
 
 // truncateToWidth trims a string to fit within a terminal-cell width budget.
@@ -1346,16 +1294,6 @@ func truncateToWidth(s string, maxWidth int) string {
 	return s
 }
 
-// padToWidth pads a string with spaces to reach the target visual width.
-func padToWidth(s string, width int) string {
-	w := lipgloss.Width(s)
-	if w >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-w)
-}
-
-
 // Styles — kept minimal; will degrade gracefully when color is unavailable.
 var (
 	statusBarStyle = lipgloss.NewStyle().
@@ -1364,6 +1302,4 @@ var (
 	searchNotFoundStyle = lipgloss.NewStyle().
 				Background(theme.Error).
 				Foreground(theme.BrightText)
-	dividerStyle = lipgloss.NewStyle().
-			Foreground(theme.DividerFg)
 )

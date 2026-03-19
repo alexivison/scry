@@ -293,8 +293,9 @@ func TestWatchStatusBarShowsIndicator(t *testing.T) {
 	m.height = 30
 
 	view := m.View()
-	if !strings.Contains(view, "[watch 2s]") {
-		t.Errorf("status bar should show [watch 2s] indicator, got:\n%s", view)
+	// New segmented status bar shows watch dot + interval.
+	if !strings.Contains(view, "●") || !strings.Contains(view, "2s") {
+		t.Errorf("status bar should show watch dot and interval, got:\n%s", view)
 	}
 }
 
@@ -313,9 +314,13 @@ func TestWatchStatusBarShowsCheckTime(t *testing.T) {
 	um := updated.(Model)
 
 	view := um.View()
-	// After a check, the status bar should include a timestamp (HH:MM:SS format).
-	if !strings.Contains(view, "[watch 2s ") {
-		t.Errorf("status bar should include check timestamp after fingerprint, got:\n%s", view)
+	// After a check, the status bar should include watch dot, interval, and a timestamp.
+	if !strings.Contains(view, "●") || !strings.Contains(view, "2s") {
+		t.Errorf("status bar should include watch dot and interval after fingerprint, got:\n%s", view)
+	}
+	// Timestamp should contain a colon (HH:MM:SS format).
+	if !strings.Contains(view, ":") {
+		t.Errorf("status bar should include check timestamp (HH:MM:SS) after fingerprint, got:\n%s", view)
 	}
 }
 
@@ -329,8 +334,8 @@ func TestWatchStatusBarHiddenWhenDisabled(t *testing.T) {
 	m.height = 30
 
 	view := m.View()
-	if strings.Contains(view, "[watch") {
-		t.Errorf("status bar should not show watch indicator when disabled, got:\n%s", view)
+	if strings.Contains(view, "●") {
+		t.Errorf("status bar should not show watch dot when disabled, got:\n%s", view)
 	}
 }
 

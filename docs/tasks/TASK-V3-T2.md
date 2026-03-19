@@ -17,11 +17,11 @@ V3-T0, V3-T1.
 - `internal/ui/panes/dashboard.go`
 
 ## Deliverables
-- [ ] Split and modal views render clear pane boundaries with `lipgloss.RoundedBorder()`.
-- [ ] Focused pane border is visually distinct from inactive panes.
-- [ ] File list footer shows file count; patch footer shows hunk N/M and scroll %.
-- [ ] Footers hidden when height < 30 rows (compact tier).
-- [ ] Dashboard pane also has consistent border styling.
+- [x] Split and modal views render clear pane boundaries with `lipgloss.RoundedBorder()`.
+- [x] Focused pane border is visually distinct from inactive panes.
+- [x] File list footer shows file count; patch footer shows hunk N/M and scroll %.
+- [x] Footers hidden when height < 30 rows (compact tier).
+- [x] Dashboard pane also has consistent border styling.
 
 ## Test Strategy
 - Render tests for bordered output at various dimensions.

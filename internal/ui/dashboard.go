@@ -325,9 +325,10 @@ func (m *Model) syncDashboardScroll() {
 	if m.height == 0 {
 		return
 	}
-	contentHeight := m.height - 1 // reserve status bar
+	outerHeight := m.height - 1 // reserve status bar
+	_, innerH := panes.ContentDimensions(m.width, outerHeight)
 	ds := &m.State.DashboardState
-	ds.ScrollOffset = panes.EnsureVisible(ds.SelectedIdx, ds.ScrollOffset, contentHeight, len(ds.Worktrees))
+	ds.ScrollOffset = panes.EnsureVisible(ds.SelectedIdx, ds.ScrollOffset, innerH, len(ds.Worktrees))
 }
 
 // returnToDashboard resets drill-down state and returns focus to the dashboard pane.
@@ -381,7 +382,10 @@ func reconcileActivity(old, new []model.WorktreeInfo) {
 }
 
 func (m Model) viewDashboard() string {
-	contentHeight := m.height - 1 // reserve status bar
+	outerHeight := m.height - 1 // reserve status bar
+	if outerHeight < 3 {
+		outerHeight = 3
+	}
 	ds := m.State.DashboardState
 
 	if ds.ConfirmDelete {
@@ -393,5 +397,8 @@ func (m Model) viewDashboard() string {
 		return prompt
 	}
 
-	return panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, m.width, contentHeight)
+	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+	content := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, innerW, innerH)
+	footer := fmt.Sprintf("%d worktrees", len(ds.Worktrees))
+	return panes.BorderedPane(content, "Worktrees", footer, m.width, outerHeight, true, m.showFooter())
 }

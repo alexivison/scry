@@ -271,13 +271,17 @@ func TestSplitView_TwoColumns(t *testing.T) {
 
 	output := m.View()
 	lines := strings.Split(output, "\n")
-	// Content lines (before status bar) should each contain the divider.
-	for i, line := range lines {
+	// Top border line should contain two adjacent rounded corners (left pane right + right pane left).
+	if len(lines) > 0 && !strings.Contains(lines[0], "╮╭") {
+		t.Errorf("line 0 missing adjacent pane borders ╮╭: %q", lines[0])
+	}
+	// Content lines (between borders) should contain side borders │.
+	for i := 1; i < len(lines)-2; i++ {
 		if i >= m.height-1 {
 			break // status bar
 		}
-		if !strings.Contains(line, "│") {
-			t.Errorf("line %d missing divider: %q", i, line)
+		if !strings.Contains(lines[i], "│") {
+			t.Errorf("line %d missing side border: %q", i, lines[i])
 		}
 	}
 }
@@ -292,16 +296,9 @@ func TestSplitGracefulDegradation(t *testing.T) {
 		m.height = 30
 		// Even though Layout is split, narrow width should render as modal.
 		output := m.View()
-		// In modal file-list view, there's no divider.
-		lines := strings.Split(output, "\n")
-		dividerCount := 0
-		for _, line := range lines {
-			if strings.Contains(line, "│") {
-				dividerCount++
-			}
-		}
-		if dividerCount > 0 {
-			t.Error("narrow terminal should fall back to modal (no divider)")
+		// In modal file-list view, there's a single bordered pane (no adjacent ╮╭).
+		if strings.Contains(output, "╮╭") {
+			t.Error("narrow terminal should fall back to modal (no split border adjacency)")
 		}
 	})
 
