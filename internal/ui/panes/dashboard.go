@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -43,7 +44,7 @@ func RenderDashboard(worktrees []model.WorktreeInfo, selectedIdx, scrollOffset, 
 }
 
 func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle lipgloss.Style) string {
-	// Status indicator: green dot for clean, yellow dot for dirty.
+	// Status indicator.
 	var status string
 	if wt.Bare {
 		status = hashStyle.Render("B")
@@ -51,6 +52,16 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle
 		status = dirtyStyle.Render("●")
 	} else {
 		status = cleanStyle.Render("●")
+	}
+
+	// File count for dirty worktrees.
+	countStr := ""
+	if wt.ChangedFiles > 0 {
+		label := "files"
+		if wt.ChangedFiles == 1 {
+			label = "file"
+		}
+		countStr = dirtyStyle.Render(fmt.Sprintf(" %d %s", wt.ChangedFiles, label))
 	}
 
 	prefix := "  "
@@ -61,7 +72,13 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle
 	basename := filepath.Base(wt.Path)
 	commitInfo := fmt.Sprintf("%s %s", hashStyle.Render(wt.CommitHash), wt.Subject)
 
-	// Layout: [prefix][status] [branch]  [basename]  [hash subject]
+	// Activity timestamp.
+	activity := RelativeTime(wt.LastActivityAt)
+	if activity != "" {
+		activity = " " + hashStyle.Render(activity)
+	}
+
+	// Layout: [prefix][status][count] [branch]  [basename] [activity]  [hash subject]
 	branchWidth := 20
 	basenameWidth := 20
 	branch := wt.Branch
@@ -69,10 +86,27 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle
 		branch = truncatePath(branch, branchWidth)
 	}
 
-	line := fmt.Sprintf("%s%s %-*s  %-*s  %s", prefix, status, branchWidth, branch, basenameWidth, basename, commitInfo)
+	line := fmt.Sprintf("%s%s%s %-*s  %-*s%s  %s", prefix, status, countStr, branchWidth, branch, basenameWidth, basename, activity, commitInfo)
 
 	if idx == selectedIdx {
 		return dashSelectedStyle.Inherit(truncStyle).Render(line)
 	}
 	return truncStyle.Render(line)
+}
+
+// RelativeTime formats a timestamp as a relative duration string (e.g. "3s ago", "2m ago").
+// Returns empty string for zero time.
+func RelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
 }

@@ -3,6 +3,7 @@ package panes
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexivison/scry/internal/model"
 )
@@ -127,6 +128,84 @@ func TestRenderDashboard(t *testing.T) {
 			t.Parallel()
 			output := RenderDashboard(tc.worktrees, tc.selected, tc.scroll, tc.width, tc.height)
 			tc.checks(t, output)
+		})
+	}
+}
+
+func TestRenderDashboardShowsChangedFileCount(t *testing.T) {
+	t.Parallel()
+
+	wts := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Subject: "init", Dirty: true, ChangedFiles: 12},
+	}
+	output := RenderDashboard(wts, 0, 0, 120, 10)
+
+	if !strings.Contains(output, "12") {
+		t.Errorf("expected changed file count '12' in output:\n%s", output)
+	}
+}
+
+func TestRenderDashboardShowsSingularFile(t *testing.T) {
+	t.Parallel()
+
+	wts := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Subject: "init", Dirty: true, ChangedFiles: 1},
+	}
+	output := RenderDashboard(wts, 0, 0, 120, 10)
+
+	if !strings.Contains(output, "1 file") {
+		t.Errorf("expected '1 file' (singular) in output:\n%s", output)
+	}
+	if strings.Contains(output, "1 files") {
+		t.Error("should use singular 'file' for count=1, got '1 files'")
+	}
+}
+
+func TestRenderDashboardShowsRelativeTime(t *testing.T) {
+	t.Parallel()
+
+	wts := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Subject: "init", Dirty: true,
+			ChangedFiles: 3, LastActivityAt: time.Now().Add(-30 * time.Second)},
+	}
+	output := RenderDashboard(wts, 0, 0, 120, 10)
+
+	// Use loose assertion to avoid clock-drift flakiness.
+	if !strings.Contains(output, "s ago") {
+		t.Errorf("expected relative time with 's ago' in output:\n%s", output)
+	}
+}
+
+func TestRelativeTime(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		d          time.Duration
+		want       string
+		wantSuffix string // loose match for clock-sensitive cases
+	}{
+		"seconds":    {d: 5 * time.Second, wantSuffix: "s ago"},
+		"minutes":    {d: 3 * time.Minute, want: "3m ago"},
+		"hours":      {d: 2 * time.Hour, want: "2h ago"},
+		"mixed":      {d: 90 * time.Second, want: "1m ago"},
+		"zero":       {d: 0, want: ""},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var at time.Time
+			if tc.d > 0 {
+				at = time.Now().Add(-tc.d)
+			}
+			got := RelativeTime(at)
+			if tc.wantSuffix != "" {
+				if !strings.HasSuffix(got, tc.wantSuffix) {
+					t.Errorf("RelativeTime = %q, want suffix %q", got, tc.wantSuffix)
+				}
+			} else if got != tc.want {
+				t.Errorf("RelativeTime = %q, want %q", got, tc.want)
+			}
 		})
 	}
 }

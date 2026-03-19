@@ -218,10 +218,11 @@ func (w *worktreeLoaderImpl) LoadWorktrees(ctx context.Context) ([]model.Worktre
 			continue
 		}
 
-		// Get dirty state.
-		clean, err := gitexec.StatusClean(ctx, w.runner, e.Path)
+		// Get changed file count (also derives dirty state).
+		count, err := gitexec.StatusCount(ctx, w.runner, e.Path)
 		if err == nil {
-			info.Dirty = !clean
+			info.ChangedFiles = count
+			info.Dirty = count > 0
 		}
 
 		// Get commit info.
