@@ -246,3 +246,39 @@ func TestSelectiveInvalidate(t *testing.T) {
 		})
 	}
 }
+
+func TestPatchContentHash(t *testing.T) {
+	t.Parallel()
+
+	patch := samplePatch()
+	hash1 := PatchContentHash(&patch)
+	if hash1 == "" {
+		t.Fatal("PatchContentHash should return a non-empty hash")
+	}
+
+	// Same patch produces same hash.
+	hash2 := PatchContentHash(&patch)
+	if hash1 != hash2 {
+		t.Error("same patch should produce same hash")
+	}
+
+	// Different content produces different hash.
+	patch2 := model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go"},
+		Hunks: []model.Hunk{
+			{OldStart: 1, OldLen: 3, NewStart: 1, NewLen: 4,
+				Lines: []model.DiffLine{
+					{Kind: model.LineAdded, Text: "different content"},
+				}},
+		},
+	}
+	hash3 := PatchContentHash(&patch2)
+	if hash1 == hash3 {
+		t.Error("different patch content should produce different hash")
+	}
+
+	// Nil patch returns empty.
+	if PatchContentHash(nil) != "" {
+		t.Error("nil patch should return empty hash")
+	}
+}

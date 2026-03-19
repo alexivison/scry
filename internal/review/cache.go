@@ -1,7 +1,12 @@
 // Package review manages review state: patch cache and generation guards.
 package review
 
-import "github.com/alexivison/scry/internal/model"
+import (
+	"crypto/sha256"
+	"fmt"
+
+	"github.com/alexivison/scry/internal/model"
+)
 
 // CacheLookup returns a cached PatchLoadState if the path has a Loaded entry
 // in the current generation. Failed entries are not cached so that the user
@@ -26,12 +31,32 @@ func CacheStore(state *model.AppState, path string, patch *model.FilePatch, err 
 	if err != nil {
 		status = model.LoadFailed
 	}
-	state.Patches[path] = model.PatchLoadState{
-		Status:     status,
-		Patch:      patch,
-		Err:        err,
-		Generation: state.CacheGeneration,
+	var hash string
+	if patch != nil {
+		hash = PatchContentHash(patch)
 	}
+	state.Patches[path] = model.PatchLoadState{
+		Status:      status,
+		Patch:       patch,
+		Err:         err,
+		Generation:  state.CacheGeneration,
+		ContentHash: hash,
+	}
+}
+
+// PatchContentHash computes a SHA-256 hash of the patch's diff lines.
+func PatchContentHash(patch *model.FilePatch) string {
+	if patch == nil {
+		return ""
+	}
+	h := sha256.New()
+	for _, hunk := range patch.Hunks {
+		fmt.Fprintf(h, "H:%d,%d,%d,%d:%s\n", hunk.OldStart, hunk.OldLen, hunk.NewStart, hunk.NewLen, hunk.Header)
+		for _, line := range hunk.Lines {
+			fmt.Fprintf(h, "%s:%s\n", line.Kind, line.Text)
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // MarkLoading sets the cache entry for path to Loading in the current generation.

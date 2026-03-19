@@ -77,6 +77,13 @@ type Model struct {
 	refreshErr     string        // shown in status bar when metadata reload fails
 	fileListScroll int           // scroll offset for file list in split mode
 
+	// Scroll preservation state: saved before refresh, restored if content unchanged.
+	savedFilePath     string // path of the file whose scroll was saved
+	savedContentHash  string
+	savedScrollOffset int
+	savedCurrentHunk  int
+	savedSearchQuery  string
+
 	commitProvider CommitProvider      // optional provider for AI commit messages
 	commitExecutor CommitExecutor      // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
@@ -603,7 +610,22 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		selected := m.State.Files[m.State.SelectedFile].Path
 		if selected == msg.Path {
-			m.applyPatchResult(m.State.Patches[msg.Path])
+			ps := m.State.Patches[msg.Path]
+			m.applyPatchResult(ps)
+			// Restore scroll if same file and content hash matches pre-refresh snapshot.
+			if m.savedFilePath == msg.Path && m.savedContentHash != "" &&
+				ps.ContentHash == m.savedContentHash && m.patchViewport != nil {
+				m.patchViewport.ScrollOffset = m.savedScrollOffset
+				m.patchViewport.CurrentHunk = m.savedCurrentHunk
+				m.State.SearchQuery = m.savedSearchQuery
+			} else {
+				// Content changed or file changed — clear search state.
+				m.State.SearchQuery = ""
+			}
+			// Always clear saved state after use (or mismatch) to prevent bleed.
+			m.savedFilePath = ""
+			m.savedContentHash = ""
+			m.savedSearchQuery = ""
 		}
 	}
 
@@ -682,31 +704,43 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		m.State.Compare = *msg.Compare
 	}
 
+	// Save scroll state for the selected file before invalidation.
+	m.savedFilePath = ""
+	m.savedContentHash = ""
+	m.savedScrollOffset = 0
+	m.savedCurrentHunk = 0
+	m.savedSearchQuery = ""
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		path := m.State.Files[m.State.SelectedFile].Path
+		m.savedFilePath = path
+		if ps, ok := m.State.Patches[path]; ok && ps.ContentHash != "" {
+			m.savedContentHash = ps.ContentHash
+		}
+		if m.patchViewport != nil {
+			m.savedScrollOffset = m.patchViewport.ScrollOffset
+			m.savedCurrentHunk = m.patchViewport.CurrentHunk
+		}
+		m.savedSearchQuery = m.State.SearchQuery
+	}
+
 	// Selectively invalidate cache: preserve unchanged files, evict changed/removed.
 	review.SelectiveInvalidate(&m.State, m.State.Files, msg.Files)
 
 	var selectedPath string
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		selectedPath = m.State.Files[m.State.SelectedFile].Path
+		// Force-evict the selected file to get a fresh content-hash comparison.
+		delete(m.State.Patches, selectedPath)
 	}
 	m.State.Files = msg.Files
 	review.ReconcileSelection(&m.State, selectedPath)
 	review.CompleteRefresh(&m.State)
 
-	// Clear viewport if selected file's cache was invalidated or no file selected.
-	clearViewport := true
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		path := m.State.Files[m.State.SelectedFile].Path
-		if _, hit := review.CacheLookup(m.State, path); hit {
-			clearViewport = false
-		}
-	}
-	if clearViewport {
-		m.patchViewport = nil
-		m.patchErr = ""
-		m.searchIndex = nil
-		m.searchNotFound = ""
-	}
+	// Selected file was evicted for reload; clear viewport.
+	m.patchViewport = nil
+	m.patchErr = ""
+	m.searchIndex = nil
+	m.searchNotFound = ""
 
 	// Transition from idle to review when first files arrive.
 	if m.State.FocusPane == model.PaneIdle && len(m.State.Files) > 0 {
