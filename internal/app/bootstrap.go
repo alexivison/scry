@@ -175,7 +175,7 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	state := model.AppState{
 		FocusPane:    model.PaneDashboard,
 		WorktreeMode: true,
-		WatchEnabled: true,
+		WatchEnabled: cfg.Watch,
 		WatchInterval: interval,
 		DashboardState: model.DashboardState{
 			Worktrees: worktrees,

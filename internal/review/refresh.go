@@ -43,8 +43,10 @@ func SelectiveInvalidate(state *model.AppState, oldFiles, newFiles []model.FileS
 				ps.Generation = state.CacheGeneration
 				state.Patches[f.Path] = ps
 			}
+			continue
 		}
-		// Changed: leave at old generation — CacheLookup will miss.
+		// Changed: evict so stale patches can't be re-promoted on future refreshes.
+		delete(state.Patches, f.Path)
 	}
 
 	// Evict removed files.

@@ -173,6 +173,7 @@ func TestSelectiveInvalidate(t *testing.T) {
 			oldFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusModified}},
 			newFiles: []model.FileSummary{{Path: "a.go", Additions: 10, Deletions: 3, Status: model.StatusModified}},
 			wantHit:  map[string]bool{"a.go": false},
+			wantGone: []string{"a.go"},
 		},
 		"removed file evicted": {
 			gen: 2,
@@ -208,7 +209,7 @@ func TestSelectiveInvalidate(t *testing.T) {
 				{Path: "new.go", Additions: 8, Deletions: 0, Status: model.StatusAdded},
 			},
 			wantHit:  map[string]bool{"unchanged.go": true, "changed.go": false, "new.go": false},
-			wantGone: []string{"removed.go"},
+			wantGone: []string{"removed.go", "changed.go"},
 		},
 		"status change evicts": {
 			gen: 2,
@@ -218,6 +219,7 @@ func TestSelectiveInvalidate(t *testing.T) {
 			oldFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusModified}},
 			newFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusAdded}},
 			wantHit:  map[string]bool{"a.go": false},
+			wantGone: []string{"a.go"},
 		},
 	}
 

@@ -1319,8 +1319,6 @@ func TestRefreshInvalidatesChangedFileCache(t *testing.T) {
 	if um.patchViewport == nil {
 		t.Fatal("expected patchViewport after enter")
 	}
-	oldGen := um.State.CacheGeneration
-
 	// Simulate refresh: bump generation (as startRefresh does).
 	um.State.CacheGeneration++
 
@@ -1332,17 +1330,13 @@ func TestRefreshInvalidatesChangedFileCache(t *testing.T) {
 	}
 	review.SelectiveInvalidate(&um.State, sampleFiles(), changedFiles)
 
-	// Changed file should NOT be promoted — CacheLookup misses.
+	// Changed file should be evicted — CacheLookup misses.
 	if _, hit := review.CacheLookup(um.State, "main.go"); hit {
 		t.Error("changed file cache should miss after selective invalidation")
 	}
-	// Cache entry still exists but at old generation.
-	ps, exists := um.State.Patches["main.go"]
-	if !exists {
-		t.Fatal("patch entry should still exist (at old generation)")
-	}
-	if ps.Generation != oldGen {
-		t.Errorf("changed file generation = %d, want %d (old, not promoted)", ps.Generation, oldGen)
+	// Cache entry should be evicted entirely (prevents stale re-promotion on future refreshes).
+	if _, exists := um.State.Patches["main.go"]; exists {
+		t.Error("changed file should be evicted from Patches map")
 	}
 }
 
