@@ -13,13 +13,13 @@ V3-T3.
 - `internal/ui/model.go`
 
 ## Deliverables
-- [ ] `bubbles/spinner` dependency added.
-- [ ] Patch loading shows spinner in patch pane area.
-- [ ] Commit generation/execution shows spinner with descriptive text.
-- [ ] Watch refresh shows subtle spinner in status bar watch segment.
-- [ ] Initial load shows centered spinner.
-- [ ] Spinner state cleaned up on async completion or cancellation.
-- [ ] No spinner leak after quit.
+- [x] `bubbles/spinner` dependency added.
+- [x] Patch loading shows spinner in patch pane area.
+- [x] Commit generation/execution shows spinner with descriptive text.
+- [x] Watch refresh shows subtle spinner in status bar watch segment.
+- [x] Initial load shows centered spinner.
+- [x] Spinner state cleaned up on async completion or cancellation.
+- [x] No spinner leak after quit.
 
 ## Test Strategy
 - Verify spinner init and tick messages flow correctly.

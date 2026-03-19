@@ -134,9 +134,73 @@ func enterAndLoad(t *testing.T, m Model) Model {
 	if cmd == nil {
 		return um
 	}
+	return drainCmd(t, um, cmd)
+}
+
+// execAndCollect runs a Cmd (possibly batched) and returns all produced messages.
+func execAndCollect(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
 	msg := cmd()
-	updated2, _ := um.Update(msg)
-	return updated2.(Model)
+	switch msg := msg.(type) {
+	case tea.BatchMsg:
+		var msgs []tea.Msg
+		for _, c := range msg {
+			msgs = append(msgs, execAndCollect(c)...)
+		}
+		return msgs
+	default:
+		return []tea.Msg{msg}
+	}
+}
+
+// findMsg finds the first message of type T in a list.
+func findMsg[T any](msgs []tea.Msg) (T, bool) {
+	for _, msg := range msgs {
+		if m, ok := msg.(T); ok {
+			return m, true
+		}
+	}
+	var zero T
+	return zero, false
+}
+
+// drainCmd executes a Cmd and feeds results through Update, handling tea.BatchMsg.
+func drainCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		return m
+	}
+	msg := cmd()
+	switch msg := msg.(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			m = drainCmd(t, m, c)
+		}
+		return m
+	default:
+		updated, _ := m.Update(msg)
+		return updated.(Model)
+	}
+}
+
+// deepDrain executes a Cmd, feeds results through Update, and recursively
+// drains any follow-up Cmds returned by Update. Handles tea.BatchMsg.
+func deepDrain(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		return m
+	}
+	msgs := execAndCollect(cmd)
+	for _, msg := range msgs {
+		updated, nextCmd := m.Update(msg)
+		m = updated.(Model)
+		if nextCmd != nil {
+			m = deepDrain(t, m, nextCmd)
+		}
+	}
+	return m
 }
 
 // --- NewModel tests ---
@@ -1127,6 +1191,7 @@ func modelWithRefresh(metaFiles []model.FileSummary) Model {
 }
 
 // refreshAndComplete simulates pressing r and completing the async metadata + patch cycle.
+// It handles tea.BatchMsg wrapping from spinner ticks.
 func refreshAndComplete(t *testing.T, m Model) Model {
 	t.Helper()
 	updated, cmd := m.Update(keyMsg('r'))
@@ -1134,17 +1199,22 @@ func refreshAndComplete(t *testing.T, m Model) Model {
 	if cmd == nil {
 		return um
 	}
-	// Execute metadata load Cmd.
-	msg := cmd()
-	updated2, cmd2 := um.Update(msg)
-	um2 := updated2.(Model)
-	if cmd2 == nil {
-		return um2
+	// Execute metadata load Cmd (may be wrapped in a batch with spinner tick).
+	msgs := execAndCollect(cmd)
+	for _, msg := range msgs {
+		var cmd2 tea.Cmd
+		updated2, cmd2 := um.Update(msg)
+		um = updated2.(Model)
+		if cmd2 != nil {
+			// Execute any follow-up cmds (e.g. patch load triggered by MetadataLoadedMsg).
+			msgs2 := execAndCollect(cmd2)
+			for _, msg2 := range msgs2 {
+				updated3, _ := um.Update(msg2)
+				um = updated3.(Model)
+			}
+		}
 	}
-	// Execute patch load Cmd triggered by MetadataLoadedMsg handler.
-	msg2 := cmd2()
-	updated3, _ := um2.Update(msg2)
-	return updated3.(Model)
+	return um
 }
 
 func TestManualRefreshBumpsGeneration(t *testing.T) {
@@ -1256,15 +1326,17 @@ func TestManualRefreshStaleMetadataDiscarded(t *testing.T) {
 
 	// Now deliver the stale metadata msg.
 	if cmd != nil {
-		msg := cmd()
-		updated2, _ := um.Update(msg)
-		um2 := updated2.(Model)
+		msgs := execAndCollect(cmd)
+		for _, msg := range msgs {
+			updated2, _ := um.Update(msg)
+			um = updated2.(Model)
+		}
 
 		// The stale MetadataLoadedMsg should be discarded — Files unchanged.
 		// The model was constructed with sampleFiles() originally.
-		if len(um2.State.Files) != len(sampleFiles()) {
+		if len(um.State.Files) != len(sampleFiles()) {
 			t.Errorf("stale metadata should be discarded, Files len = %d, want %d",
-				len(um2.State.Files), len(sampleFiles()))
+				len(um.State.Files), len(sampleFiles()))
 		}
 	}
 }
@@ -1417,19 +1489,21 @@ func TestManualRefreshMetadataErrorSurfaced(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("r should return a Cmd")
 	}
-	msg := cmd()
-	updated2, _ := um.Update(msg)
-	um2 := updated2.(Model)
+	msgs := execAndCollect(cmd)
+	for _, msg := range msgs {
+		updated2, _ := um.Update(msg)
+		um = updated2.(Model)
+	}
 
-	if um2.refreshErr == "" {
+	if um.refreshErr == "" {
 		t.Error("refreshErr should be set when metadata reload fails")
 	}
-	if !strings.Contains(um2.refreshErr, "refresh failed") {
-		t.Errorf("refreshErr = %q, want it to contain 'refresh failed'", um2.refreshErr)
+	if !strings.Contains(um.refreshErr, "refresh failed") {
+		t.Errorf("refreshErr = %q, want it to contain 'refresh failed'", um.refreshErr)
 	}
 
 	// Error should be visible in status bar from file list pane.
-	view := um2.View()
+	view := um.View()
 	if !strings.Contains(view, "refresh failed") {
 		t.Errorf("View() from file list should show refresh error, got:\n%s", view)
 	}
@@ -1532,11 +1606,13 @@ func TestWhitespaceToggleDoesNotReloadMetadata(t *testing.T) {
 	um := updated.(Model)
 
 	// W should NOT fire a metadata reload Cmd (unlike r).
-	// The cmd may be a patch load cmd, but never a metadata reload.
+	// The cmd may be a patch load cmd (possibly batched with spinner tick), but never a metadata reload.
 	if cmd != nil {
-		msg := cmd()
-		if _, isMetadata := msg.(MetadataLoadedMsg); isMetadata {
-			t.Error("W should not trigger metadata reload")
+		msgs := execAndCollect(cmd)
+		for _, msg := range msgs {
+			if _, isMetadata := msg.(MetadataLoadedMsg); isMetadata {
+				t.Error("W should not trigger metadata reload")
+			}
 		}
 	}
 
@@ -1555,17 +1631,16 @@ func TestWhitespaceToggleReloadsCurrentPatch(t *testing.T) {
 
 	// W should reload the patch for the selected file.
 	updated, cmd := um.Update(keyMsg('W'))
-	um2 := updated.(Model)
-	_ = um2
+	_ = updated.(Model)
 
 	if cmd == nil {
 		t.Fatal("W from patch pane should return a Cmd for patch reload")
 	}
 
-	msg := cmd()
-	plm, ok := msg.(PatchLoadedMsg)
+	msgs := execAndCollect(cmd)
+	plm, ok := findMsg[PatchLoadedMsg](msgs)
 	if !ok {
-		t.Fatalf("expected PatchLoadedMsg, got %T", msg)
+		t.Fatal("expected PatchLoadedMsg in batch")
 	}
 	if plm.Path != "main.go" {
 		t.Errorf("PatchLoadedMsg.Path = %q, want %q", plm.Path, "main.go")
@@ -1589,10 +1664,10 @@ func TestWhitespaceToggleFromFilePaneReloadsSelectedPatch(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("W from file pane should return a Cmd for patch reload")
 	}
-	msg := cmd()
-	plm, ok := msg.(PatchLoadedMsg)
+	msgs := execAndCollect(cmd)
+	plm, ok := findMsg[PatchLoadedMsg](msgs)
 	if !ok {
-		t.Fatalf("expected PatchLoadedMsg, got %T", msg)
+		t.Fatal("expected PatchLoadedMsg in batch")
 	}
 	if plm.Path != "main.go" {
 		t.Errorf("PatchLoadedMsg.Path = %q, want %q", plm.Path, "main.go")
@@ -1629,9 +1704,12 @@ func TestWhitespaceToggleRapidWW(t *testing.T) {
 
 	// First Cmd's response should be stale (gen mismatch).
 	if cmd1 != nil {
-		msg := cmd1()
-		updated3, _ := um2.Update(msg)
-		um3 := updated3.(Model)
+		msgs := execAndCollect(cmd1)
+		um3 := um2
+		for _, msg := range msgs {
+			updated3, _ := um3.Update(msg)
+			um3 = updated3.(Model)
+		}
 		// Stale msg should be discarded — no viewport update.
 		if um3.patchViewport != nil {
 			t.Error("stale patch from first W should be discarded")
@@ -1640,9 +1718,12 @@ func TestWhitespaceToggleRapidWW(t *testing.T) {
 
 	// Second Cmd's response should be accepted.
 	if cmd2 != nil {
-		msg := cmd2()
-		updated4, _ := um2.Update(msg)
-		um4 := updated4.(Model)
+		msgs := execAndCollect(cmd2)
+		um4 := um2
+		for _, msg := range msgs {
+			updated4, _ := um4.Update(msg)
+			um4 = updated4.(Model)
+		}
 		// The second response is current gen; verify it's applied if we're in patch pane.
 		_ = um4
 	}
@@ -1665,9 +1746,12 @@ func TestWhitespaceToggleStaleResponseDiscarded(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("W should return a Cmd")
 	}
-	msg := cmd()
-	updated2, _ := um2.Update(msg)
-	um3 := updated2.(Model)
+	msgs := execAndCollect(cmd)
+	um3 := um2
+	for _, msg := range msgs {
+		updated2, _ := um3.Update(msg)
+		um3 = updated2.(Model)
+	}
 
 	// The response had toggleGen, but state is now toggleGen+1.
 	// Stale response should be discarded — no loaded entry at the old gen.
@@ -1788,9 +1872,11 @@ func TestWhitespaceToggleClearsRefreshErr(t *testing.T) {
 	updated, cmd := m.Update(keyMsg('r'))
 	um := updated.(Model)
 	if cmd != nil {
-		msg := cmd()
-		updated2, _ := um.Update(msg)
-		um = updated2.(Model)
+		msgs := execAndCollect(cmd)
+		for _, msg := range msgs {
+			updated2, _ := um.Update(msg)
+			um = updated2.(Model)
+		}
 	}
 	if um.refreshErr == "" {
 		t.Fatal("refreshErr should be set after failed refresh")
@@ -1908,15 +1994,17 @@ func TestRefreshWithCompareReResolutionError(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("r should return a Cmd")
 	}
-	msg := cmd()
-	updated2, _ := um.Update(msg)
-	um2 := updated2.(Model)
+	msgs := execAndCollect(cmd)
+	for _, msg := range msgs {
+		updated2, _ := um.Update(msg)
+		um = updated2.(Model)
+	}
 
 	// Compare should remain unchanged when resolver fails.
-	if um2.refreshErr == "" {
+	if um.refreshErr == "" {
 		t.Error("refreshErr should be set when resolver fails")
 	}
-	if um2.State.RefreshInFlight {
+	if um.State.RefreshInFlight {
 		t.Error("RefreshInFlight should be false after resolver error")
 	}
 }
@@ -1932,11 +2020,13 @@ func TestRefreshInFlightClearedOnError(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("r should return a Cmd")
 	}
-	msg := cmd()
-	updated2, _ := um.Update(msg)
-	um2 := updated2.(Model)
+	msgs := execAndCollect(cmd)
+	for _, msg := range msgs {
+		updated2, _ := um.Update(msg)
+		um = updated2.(Model)
+	}
 
-	if um2.State.RefreshInFlight {
+	if um.State.RefreshInFlight {
 		t.Error("RefreshInFlight should be false after error")
 	}
 }
@@ -1963,18 +2053,32 @@ func TestDoubleRefreshInFlightClearedByNewerGeneration(t *testing.T) {
 
 	// Cmd A returns (stale gen) — RefreshInFlight must stay true (cmd B pending).
 	if cmdA != nil {
-		msgA := cmdA()
-		updated3, _ := um2.Update(msgA)
-		um3 := updated3.(Model)
+		msgsA := execAndCollect(cmdA)
+		um3 := um2
+		for _, msgA := range msgsA {
+			updated3, _ := um3.Update(msgA)
+			um3 = updated3.(Model)
+		}
 		if !um3.State.RefreshInFlight {
 			t.Error("RefreshInFlight should remain true after stale response (cmd B still pending)")
 		}
 
 		// Cmd B returns (current gen) — RefreshInFlight must clear.
 		if cmdB != nil {
-			msgB := cmdB()
-			updated4, _ := um3.Update(msgB)
-			um4 := updated4.(Model)
+			msgsB := execAndCollect(cmdB)
+			um4 := um3
+			for _, msgB := range msgsB {
+				updated4, cmd4 := um4.Update(msgB)
+				um4 = updated4.(Model)
+				// Drain any follow-up cmds (e.g. patch reload after metadata).
+				if cmd4 != nil {
+					msgs4 := execAndCollect(cmd4)
+					for _, m4 := range msgs4 {
+						updated5, _ := um4.Update(m4)
+						um4 = updated5.(Model)
+					}
+				}
+			}
 			if um4.State.RefreshInFlight {
 				t.Error("RefreshInFlight should be false after current-gen response completes")
 			}

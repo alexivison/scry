@@ -334,11 +334,11 @@ func TestLazyLoadRetryAfterFailure(t *testing.T) {
 		t.Errorf("LoadPatch should not be called synchronously, got %d calls", loader.calls.Load())
 	}
 
-	// Execute the Cmd to simulate async completion.
-	msg := cmd()
-	loadedMsg, ok := msg.(PatchLoadedMsg)
+	// Execute the Cmd to simulate async completion (may be batched with spinner tick).
+	msgs := execAndCollect(cmd)
+	loadedMsg, ok := findMsg[PatchLoadedMsg](msgs)
 	if !ok {
-		t.Fatalf("Cmd returned %T, want PatchLoadedMsg", msg)
+		t.Fatal("expected PatchLoadedMsg in batch")
 	}
 	if loadedMsg.Err != nil {
 		t.Fatalf("retry should succeed, got err: %v", loadedMsg.Err)

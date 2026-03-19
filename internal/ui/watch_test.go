@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/watch"
 )
@@ -53,10 +55,9 @@ func TestWatchInitReturnsCmd(t *testing.T) {
 		t.Fatal("Init should return a non-nil Cmd when watch is enabled")
 	}
 
-	// Execute the cmd — should produce a FingerprintMsg (initial seed).
-	msg := cmd()
-	if _, ok := msg.(watch.FingerprintMsg); !ok {
-		t.Fatalf("Init Cmd returned %T, want watch.FingerprintMsg", msg)
+	// Init returns a batch (spinner tick + watch cmd). Find the fingerprint.
+	if !initContainsMsg[watch.FingerprintMsg](t, cmd) {
+		t.Fatal("Init should contain a watch.FingerprintMsg cmd")
 	}
 }
 
@@ -68,8 +69,8 @@ func TestWatchInitNilWhenDisabled(t *testing.T) {
 	m := NewModel(state)
 
 	cmd := m.Init()
-	if cmd != nil {
-		t.Fatal("Init should return nil when watch is disabled")
+	if initContainsMsg[watch.FingerprintMsg](t, cmd) {
+		t.Fatal("Init should not contain watch cmd when watch is disabled")
 	}
 }
 
@@ -80,9 +81,31 @@ func TestWatchInitNilWithoutFingerprinter(t *testing.T) {
 	m := NewModel(watchState())
 
 	cmd := m.Init()
-	if cmd != nil {
-		t.Fatal("Init should return nil when no fingerprinter is set")
+	if initContainsMsg[watch.FingerprintMsg](t, cmd) {
+		t.Fatal("Init should not contain watch cmd when no fingerprinter is set")
 	}
+}
+
+// initContainsMsg checks if an Init cmd (possibly batched) produces a message of type T.
+func initContainsMsg[T any](t *testing.T, cmd tea.Cmd) bool {
+	t.Helper()
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if _, ok := msg.(T); ok {
+		return true
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				if _, ok := c().(T); ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // --- TickMsg tests ---

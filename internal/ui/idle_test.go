@@ -235,8 +235,7 @@ func TestIdleInitReturnsWatchCmd(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Init should return non-nil cmd when watch is enabled in idle mode")
 	}
-	msg := cmd()
-	if _, ok := msg.(watch.FingerprintMsg); !ok {
-		t.Fatalf("Init Cmd returned %T, want watch.FingerprintMsg", msg)
+	if !initContainsMsg[watch.FingerprintMsg](t, cmd) {
+		t.Fatal("Init should contain a watch.FingerprintMsg cmd")
 	}
 }

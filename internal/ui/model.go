@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -98,6 +99,8 @@ type Model struct {
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
 	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
+
+	spinner spinner.Model // shared spinner for loading states
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -125,7 +128,10 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	if state.FlaggedFiles == nil {
 		state.FlaggedFiles = make(map[string]bool)
 	}
-	m := Model{State: state}
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(theme.Accent)
+	m := Model{State: state, spinner: s}
 	for _, opt := range opts {
 		opt(&m)
 	}
@@ -215,17 +221,24 @@ type pendingKeyTimeoutMsg struct {
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
-		return watch.TickCmd(m.State.WatchInterval)
+		return tea.Batch(m.spinner.Tick, watch.TickCmd(m.State.WatchInterval))
 	}
 	if m.State.WatchEnabled && m.fingerprinter != nil {
-		return m.buildCheckCmd()
+		return tea.Batch(m.spinner.Tick, m.buildCheckCmd())
 	}
-	return nil
+	return m.spinner.Tick
 }
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if m.needsSpinner() {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	case pendingKeyTimeoutMsg:
 		if msg.Seq == m.pendingKeySeq && m.pendingKey != 0 {
 			m.pendingKey = 0
@@ -446,6 +459,23 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// needsSpinner reports whether any loading state requires spinner animation.
+func (m Model) needsSpinner() bool {
+	if m.State.CommitState.InFlight || m.State.CommitState.Executing {
+		return true
+	}
+	if m.State.RefreshInFlight {
+		return true
+	}
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		path := m.State.Files[m.State.SelectedFile].Path
+		if ps, ok := m.State.Patches[path]; ok && ps.Status == model.LoadLoading {
+			return true
+		}
+	}
+	return false
+}
+
 // pendingKeyTimeout returns a Cmd that fires a timeout message after 500ms.
 func (m Model) pendingKeyTimeout() tea.Cmd {
 	seq := m.pendingKeySeq
@@ -564,9 +594,9 @@ func (m Model) startCommitGeneration() (tea.Model, tea.Cmd) {
 	m.State.FocusPane = model.PaneCommit
 	gen := m.State.CommitState.Generation + 1
 	m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
-	cmd, cancel := m.buildCommitCmd(gen)
+	genCmd, cancel := m.buildCommitCmd(gen)
 	m.commitCancel = cancel
-	return m, cmd
+	return m, tea.Batch(genCmd, m.spinner.Tick)
 }
 
 // handleCommitGenerated processes the result of an async commit generation.
@@ -647,9 +677,9 @@ func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancelCommit()
 			gen := m.State.CommitState.Generation + 1
 			m.State.CommitState = model.CommitState{InFlight: true, Generation: gen}
-			cmd, cancel := m.buildCommitCmd(gen)
+			regenCmd, cancel := m.buildCommitCmd(gen)
 			m.commitCancel = cancel
-			return m, cmd
+			return m, tea.Batch(regenCmd, m.spinner.Tick)
 		}
 	case "q":
 		m.cancelCommit()
@@ -669,11 +699,11 @@ func (m Model) startCommitExecution() (tea.Model, tea.Cmd) {
 	executor := m.commitExecutor
 	message := m.State.CommitState.GeneratedMessage
 
-	cmd := func() tea.Msg {
+	execCmd := func() tea.Msg {
 		sha, err := executor.Execute(context.Background(), message)
 		return CommitExecutedMsg{SHA: sha, Err: err, Generation: gen}
 	}
-	return m, cmd
+	return m, tea.Batch(execCmd, m.spinner.Tick)
 }
 
 // startEditor opens $EDITOR with the commit message for user editing.
@@ -819,12 +849,12 @@ func (m Model) selectFile() (tea.Model, tea.Cmd) {
 	status := file.Status
 	loader := m.patchLoader
 
-	cmd := func() tea.Msg {
+	loadCmd := func() tea.Msg {
 		fp, err := loader.LoadPatch(context.Background(), cmp, path, status, ignoreWS)
 		return PatchLoadedMsg{Path: path, Patch: fp, Gen: gen, Err: err}
 	}
 
-	return m, cmd
+	return m, tea.Batch(loadCmd, m.spinner.Tick)
 }
 
 func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
@@ -899,7 +929,7 @@ func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 		files, err := loader.ListFiles(ctx, cmp)
 		return MetadataLoadedMsg{Compare: resolvedCmp, Files: files, Gen: gen, Err: err}
 	}
-	return m, cmd
+	return m, tea.Batch(cmd, m.spinner.Tick)
 }
 
 // toggleWhitespace flips IgnoreWhitespace, resets the patch cache, and reloads
@@ -1238,7 +1268,7 @@ func (m Model) View() string {
 		return ""
 	}
 	if m.width == 0 || m.height == 0 {
-		return "Initializing..."
+		return m.spinner.View() + " Initializing..."
 	}
 	if m.tooSmall {
 		return m.sizeErr + "\nPress q to quit."
@@ -1316,7 +1346,7 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		path := m.State.Files[m.State.SelectedFile].Path
 		if ps, ok := m.State.Patches[path]; ok && ps.Status == model.LoadLoading {
-			return "Loading..."
+			return m.spinner.View() + " Loading..."
 		}
 	}
 
@@ -1334,10 +1364,10 @@ func (m Model) viewCommit() string {
 	cs := m.State.CommitState
 
 	if cs.InFlight {
-		return "Generating commit message..."
+		return m.spinner.View() + " Generating commit message..."
 	}
 	if cs.Executing {
-		return "Committing..."
+		return m.spinner.View() + " Committing..."
 	}
 	if cs.CommitSHA != "" {
 		return fmt.Sprintf("Committed: %s\n\n  Esc  back to files", cs.CommitSHA)
