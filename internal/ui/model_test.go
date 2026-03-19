@@ -1682,24 +1682,30 @@ func TestWhitespaceToggleStatusBarIndicator(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
+	// W badge is always visible (dim when off, bright when on).
 	view := m.View()
-	if strings.Contains(view, "[W]") {
-		t.Error("status bar should not show [W] when IgnoreWhitespace is false")
+	if !strings.Contains(view, "W") {
+		t.Errorf("status bar should always show W badge, got:\n%s", view)
+	}
+	if m.State.IgnoreWhitespace {
+		t.Error("IgnoreWhitespace should be false initially")
 	}
 
 	updated, _ := m.Update(keyMsg('W'))
 	um := updated.(Model)
+	if !um.State.IgnoreWhitespace {
+		t.Error("IgnoreWhitespace should be true after toggle")
+	}
 	view2 := um.View()
-	if !strings.Contains(view2, "[W]") {
-		t.Errorf("status bar should show [W] when IgnoreWhitespace is true, got:\n%s", view2)
+	if !strings.Contains(view2, "W") {
+		t.Errorf("status bar should show W badge when active, got:\n%s", view2)
 	}
 
 	// Toggle off.
 	updated2, _ := um.Update(keyMsg('W'))
 	um2 := updated2.(Model)
-	view3 := um2.View()
-	if strings.Contains(view3, "[W]") {
-		t.Error("status bar should not show [W] after toggling off")
+	if um2.State.IgnoreWhitespace {
+		t.Error("IgnoreWhitespace should be false after toggling off")
 	}
 }
 
@@ -1798,8 +1804,8 @@ func TestWhitespaceToggleClearsRefreshErr(t *testing.T) {
 		t.Errorf("refreshErr = %q, want empty after W toggle", um2.refreshErr)
 	}
 	view := um2.View()
-	if !strings.Contains(view, "[W]") {
-		t.Errorf("status bar should show [W] after toggle, got:\n%s", view)
+	if !strings.Contains(view, "W") {
+		t.Errorf("status bar should show W badge after toggle, got:\n%s", view)
 	}
 }
 

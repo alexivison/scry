@@ -91,6 +91,7 @@ type Model struct {
 	fingerprinter WatchFingerprinter // optional watch mode fingerprinter
 	watchBaseRef  string             // symbolic base ref for fingerprint checks
 	lastCheckAt   time.Time          // when the last fingerprint check completed
+	watchErr      bool               // true when last fingerprint check failed
 
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
@@ -570,8 +571,10 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 	}
 
 	if msg.Err != nil {
+		m.watchErr = true
 		return m, tickCmd()
 	}
+	m.watchErr = false
 
 	// First fingerprint: seed without refresh (bootstrap already loaded data).
 	// Exception: in idle mode, bootstrap had no files — refresh to catch any
@@ -1055,93 +1058,6 @@ func (m Model) viewFileList() string {
 	return panes.BorderedPane(content, "Files", footer, m.width, outerHeight, true, m.showFooter())
 }
 
-func (m Model) renderErrorBar(msg string) string {
-	bar := " " + msg
-	gap := m.width - lipgloss.Width(bar)
-	if gap > 0 {
-		bar += strings.Repeat(" ", gap)
-	}
-	return searchNotFoundStyle.Width(m.width).Render(bar)
-}
-
-func (m Model) viewStatusBar() string {
-	// Dashboard delete messages.
-	if m.State.FocusPane == model.PaneDashboard {
-		ds := m.State.DashboardState
-		if ds.DeleteIsMain {
-			return m.renderErrorBar("Cannot delete main worktree")
-		}
-		if ds.DeleteErr != "" {
-			return m.renderErrorBar(ds.DeleteErr)
-		}
-	}
-	if m.refreshErr != "" {
-		return m.renderErrorBar(m.refreshErr)
-	}
-	if m.searchNotFound != "" {
-		return m.renderErrorBar(m.searchNotFound)
-	}
-	var left, right string
-	minimal := m.widthTierNow() <= terminal.WidthMinimal
-	if m.State.FocusPane == model.PaneDashboard {
-		left = " Worktree Dashboard "
-		right = fmt.Sprintf(" %d worktrees ", len(m.State.DashboardState.Worktrees))
-	} else {
-		if minimal {
-			// Abbreviated status bar for 40–59 column terminals.
-			right = fmt.Sprintf(" %d ", len(m.State.Files))
-			if m.State.Compare.WorkingTree {
-				left = fmt.Sprintf(" %s ", m.State.Compare.BaseRef)
-			} else {
-				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
-			}
-		} else {
-			if m.State.Compare.WorkingTree {
-				left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
-			} else {
-				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
-			}
-			if m.State.IgnoreWhitespace {
-				left += "[W] "
-			}
-			if m.State.CommitEnabled {
-				left += "[C] "
-			}
-			right = fmt.Sprintf(" %d files ", len(m.State.Files))
-		}
-	}
-	if m.State.WatchEnabled && m.State.FocusPane != model.PaneDashboard {
-		if minimal {
-			left += "[W] "
-		} else {
-			watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
-			if !m.lastCheckAt.IsZero() {
-				watchTag += " " + m.lastCheckAt.Format("15:04:05")
-			}
-			left += watchTag + "] "
-		}
-	}
-	// Truncate left segment if it overflows available space.
-	maxLeft := m.width - lipgloss.Width(right)
-	if maxLeft > 0 && lipgloss.Width(left) > maxLeft {
-		left = truncateToWidth(left, maxLeft)
-	}
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 0 {
-		gap = 0
-	}
-	bar := left + strings.Repeat(" ", gap) + right
-	return statusBarStyle.Width(m.width).Render(bar)
-}
-
-func (m Model) viewSearchInput() string {
-	prompt := "/" + m.searchInput
-	gap := m.width - lipgloss.Width(prompt)
-	if gap > 0 {
-		prompt += strings.Repeat(" ", gap)
-	}
-	return statusBarStyle.Width(m.width).Render(prompt)
-}
 
 func (m Model) viewPatch() string {
 	outerHeight := m.height - 1

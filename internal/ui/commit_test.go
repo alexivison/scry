@@ -356,12 +356,12 @@ func TestCommitUI_StatusBarShowsCommitIndicator(t *testing.T) {
 	m.height = 30
 
 	view := m.View()
-	if !strings.Contains(view, "[C]") {
-		t.Errorf("status bar should contain [C] when commit enabled, got:\n%s", view)
+	if !strings.Contains(view, "C") {
+		t.Errorf("status bar should contain C badge when commit enabled, got:\n%s", view)
 	}
 }
 
-func TestCommitUI_StatusBarOmitsCommitIndicatorWhenDisabled(t *testing.T) {
+func TestCommitUI_StatusBarShowsBadgesWhenDisabled(t *testing.T) {
 	t.Parallel()
 
 	m := NewModel(sampleState()) // CommitEnabled = false
@@ -369,8 +369,9 @@ func TestCommitUI_StatusBarOmitsCommitIndicatorWhenDisabled(t *testing.T) {
 	m.height = 30
 
 	view := m.View()
-	if strings.Contains(view, "[C]") {
-		t.Errorf("status bar should not contain [C] when commit disabled, got:\n%s", view)
+	// C badge is always present (dim when disabled, bright when enabled).
+	if !strings.Contains(view, "C") {
+		t.Errorf("status bar should always show C badge (dim when disabled), got:\n%s", view)
 	}
 }
 
