@@ -79,7 +79,8 @@ type AppState struct {
 	CommitState   CommitState
 
 	// Freshness tracking (v0.3).
-	FileChangeGen map[string]int // path → CacheGeneration when file last changed
+	FileChangeGen map[string]int  // path → CacheGeneration when file last changed
+	FlaggedFiles  map[string]bool // session-scoped file bookmarks
 
 	// Worktree dashboard mode (v0.2).
 	WorktreeMode   bool

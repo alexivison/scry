@@ -16,12 +16,12 @@ V3-T5.
 - `internal/ui/panes/filelist.go`
 
 ## Deliverables
-- [ ] `FlaggedFiles map[string]bool` (or `set`) in `AppState`.
-- [ ] `m` toggles flag on selected file.
-- [ ] Flag marker renders in file list.
-- [ ] `M` cycles to next flagged file with wraparound.
-- [ ] Flags pruned on refresh for files no longer in the list.
-- [ ] Flags coexist with freshness markers (V3-T8) without collision.
+- [x] `FlaggedFiles map[string]bool` (or `set`) in `AppState`.
+- [x] `m` toggles flag on selected file.
+- [x] Flag marker renders in file list.
+- [x] `M` cycles to next flagged file with wraparound.
+- [x] Flags pruned on refresh for files no longer in the list.
+- [x] Flags coexist with freshness markers (V3-T8) without collision.
 
 ## Test Strategy
 - Toggle flag on/off.

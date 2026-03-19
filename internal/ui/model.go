@@ -121,6 +121,9 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	if state.FileChangeGen == nil {
 		state.FileChangeGen = make(map[string]int)
 	}
+	if state.FlaggedFiles == nil {
+		state.FlaggedFiles = make(map[string]bool)
+	}
 	m := Model{State: state}
 	for _, opt := range opts {
 		opt(&m)
@@ -373,6 +376,18 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 			m.State.FocusPane = model.PanePatch
 			return m.selectFile()
+		}
+	case "m":
+		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+			review.ToggleFlag(&m.State, m.State.Files[m.State.SelectedFile].Path)
+		}
+	case "M":
+		if idx, ok := review.NextFlaggedFile(m.State.Files, m.State.FlaggedFiles, m.State.SelectedFile); ok {
+			m.State.SelectedFile = idx
+			m.syncFileListScroll()
+			if m.State.Layout == model.LayoutSplit {
+				return m.selectFile()
+			}
 		}
 	case "c":
 		if m.State.CommitEnabled && m.commitProvider != nil {
@@ -814,6 +829,7 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 
 	// Track per-file freshness before updating the file list.
 	review.UpdateFileChangeGen(&m.State, m.State.Files, msg.Files)
+	review.PruneFlags(&m.State, msg.Files)
 
 	// Selectively invalidate cache: preserve unchanged files, evict changed/removed.
 	review.SelectiveInvalidate(&m.State, m.State.Files, msg.Files)
@@ -1226,11 +1242,12 @@ func (m Model) showFooter() bool {
 	return ht >= terminal.HeightFooterVisible
 }
 
-// freshnessOpts returns the FileListOpts for freshness rendering.
+// freshnessOpts returns the FileListOpts for freshness and flag rendering.
 func (m Model) freshnessOpts() panes.FileListOpts {
 	return panes.FileListOpts{
-		ChangeGen:  m.State.FileChangeGen,
-		CurrentGen: m.State.CacheGeneration,
+		ChangeGen:    m.State.FileChangeGen,
+		CurrentGen:   m.State.CacheGeneration,
+		FlaggedFiles: m.State.FlaggedFiles,
 	}
 }
 

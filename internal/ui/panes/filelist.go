@@ -25,12 +25,16 @@ var (
 	// Freshness markers.
 	freshnessHotStyle  = lipgloss.NewStyle().Foreground(theme.Added).Bold(true)
 	freshnessWarmStyle = lipgloss.NewStyle().Foreground(theme.Muted)
+
+	// Flag marker.
+	flagStyle = lipgloss.NewStyle().Foreground(theme.Dirty).Bold(true)
 )
 
 // FileListOpts holds optional parameters for file list rendering.
 type FileListOpts struct {
-	ChangeGen  map[string]int // per-file last-change generation (nil to disable)
-	CurrentGen int            // current CacheGeneration for freshness calculation
+	ChangeGen    map[string]int  // per-file last-change generation (nil to disable)
+	CurrentGen   int             // current CacheGeneration for freshness calculation
+	FlaggedFiles map[string]bool // session-scoped bookmarks
 }
 
 // RenderFileList renders a scrollable file list constrained to the given dimensions.
@@ -63,7 +67,8 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 				tier = review.ComputeFreshness(gen, o.CurrentGen)
 			}
 		}
-		line := renderFileEntry(files[i], i, selectedIdx, width, tier)
+		flagged := o.FlaggedFiles[files[i].Path]
+		line := renderFileEntry(files[i], i, selectedIdx, width, tier, flagged)
 		if !active {
 			line = fileDimStyle.Render(line)
 		}
@@ -86,14 +91,14 @@ func EnsureVisible(selectedIdx, scrollOffset, height, total int) int {
 	return scrollOffset
 }
 
-func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier) string {
+func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier, flagged bool) string {
 	selected := idx == selectedIdx
 	path := f.Path
 	if f.OldPath != "" {
 		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
 	}
 
-	marker := freshnessMarker(tier, selected)
+	marker := prefixMarker(tier, flagged, selected)
 
 	prefix := "  "
 	if selected {
@@ -122,8 +127,15 @@ func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier revi
 	return prefix + marker + " " + icon + "  " + paddedPath + " " + counts
 }
 
-// freshnessMarker returns a styled single-character freshness indicator.
-func freshnessMarker(tier review.FreshnessTier, selected bool) string {
+// prefixMarker returns a styled single-character prefix: flag takes priority over freshness.
+func prefixMarker(tier review.FreshnessTier, flagged, selected bool) string {
+	if flagged {
+		s := flagStyle
+		if selected {
+			s = s.Reverse(true)
+		}
+		return s.Render("⚑")
+	}
 	switch tier {
 	case review.FreshnessHot:
 		s := freshnessHotStyle
