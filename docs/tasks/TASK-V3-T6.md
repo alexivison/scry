@@ -17,11 +17,11 @@ None.
 - `cmd/scry/main.go` (help text)
 
 ## Deliverables
-- [ ] Watch mode defaults to on; `--no-watch` disables it.
-- [ ] Dashboard mode auto-detected from worktree count; `--no-dashboard` forces diff mode.
-- [ ] `--watch` and `--worktrees` still work (no breakage) but are effectively no-ops when defaults already match.
-- [ ] Help text reflects the new defaults.
-- [ ] Tests cover all flag combinations.
+- [x] Watch mode defaults to on; `--no-watch` disables it.
+- [x] Dashboard mode auto-detected from worktree count; `--no-dashboard` forces diff mode.
+- [x] `--watch` and `--worktrees` still work (no breakage) but are effectively no-ops when defaults already match.
+- [x] Help text reflects the new defaults.
+- [x] Tests cover all flag combinations.
 
 ## Test Strategy
 - Config parsing tests for new defaults and opt-out flags.

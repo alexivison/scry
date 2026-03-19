@@ -16,8 +16,8 @@ type Config struct {
 	Mode             model.CompareMode // --mode; default: CompareThreeDot
 	IgnoreWhitespace bool              // --ignore-whitespace; default: false
 
-	// Watch mode (v0.2).
-	Watch         bool          // --watch; default: false
+	// Watch mode (v0.2+).
+	Watch         bool          // default: true; --no-watch disables
 	WatchInterval time.Duration // --watch-interval; default: 2s, min: 500ms
 
 	// Commit generation (v0.2).
@@ -26,8 +26,9 @@ type Config struct {
 	CommitModel    string // --commit-model; default: ""
 	CommitAuto     bool   // --commit-auto; default: false (requires --commit)
 
-	// Worktree dashboard (v0.2).
-	Worktrees bool // --worktrees; default: false
+	// Worktree dashboard (v0.2+).
+	Worktrees   bool // --worktrees; default: false (kept for backward compat)
+	NoDashboard bool // --no-dashboard; forces diff mode even with multiple worktrees
 }
 
 // supportedProviders is the set of valid --commit-provider values.
@@ -46,25 +47,29 @@ func Parse(args []string) (Config, error) {
 		mode           string
 		ignoreWS       bool
 		watch          bool
+		noWatch        bool
 		watchInterval  time.Duration
 		commit         bool
 		commitProvider string
 		commitModel    string
 		commitAuto     bool
 		worktrees      bool
+		noDashboard    bool
 	)
 
 	fs.StringVar(&base, "base", "", "base ref for comparison (default: @{upstream})")
 	fs.StringVar(&head, "head", "", "head ref for comparison (default: working tree; use --head HEAD for committed only)")
 	fs.StringVar(&mode, "mode", "three-dot", "compare mode: three-dot (default) or two-dot")
 	fs.BoolVar(&ignoreWS, "ignore-whitespace", false, "ignore whitespace changes in diffs")
-	fs.BoolVar(&watch, "watch", false, "enable watch mode for auto-refresh on changes")
+	fs.BoolVar(&watch, "watch", false, "enable watch mode (on by default)")
+	fs.BoolVar(&noWatch, "no-watch", false, "disable watch mode")
 	fs.DurationVar(&watchInterval, "watch-interval", 2*time.Second, "polling interval for watch mode (min 500ms)")
 	fs.BoolVar(&commit, "commit", false, "enable AI commit message generation")
 	fs.StringVar(&commitProvider, "commit-provider", "claude", "LLM provider for commit messages (claude)")
 	fs.StringVar(&commitModel, "commit-model", "", "override default model for the commit provider")
 	fs.BoolVar(&commitAuto, "commit-auto", false, "skip confirmation and commit immediately (requires --commit)")
-	fs.BoolVar(&worktrees, "worktrees", false, "show worktree dashboard instead of diff view")
+	fs.BoolVar(&worktrees, "worktrees", false, "show worktree dashboard (auto-detected from worktree count)")
+	fs.BoolVar(&noDashboard, "no-dashboard", false, "force diff mode even with multiple worktrees")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -91,19 +96,35 @@ func Parse(args []string) (Config, error) {
 		return Config{}, fmt.Errorf("unsupported commit provider %q", commitProvider)
 	}
 
+	// Watch defaults to on; --no-watch overrides, --watch is a compat no-op.
+	resolvedWatch := !noWatch
+
 	return Config{
 		BaseRef:          base,
 		HeadRef:          head,
 		Mode:             cm,
 		IgnoreWhitespace: ignoreWS,
-		Watch:            watch,
+		Watch:            resolvedWatch,
 		WatchInterval:    watchInterval,
 		Commit:           commit,
 		CommitProvider:   commitProvider,
 		CommitModel:      commitModel,
 		CommitAuto:       commitAuto,
 		Worktrees:        worktrees,
+		NoDashboard:      noDashboard,
 	}, nil
+}
+
+// ShouldUseDashboard decides whether to enter dashboard mode based on
+// worktree count and flag state.
+func (c Config) ShouldUseDashboard(worktreeCount int) bool {
+	if c.NoDashboard {
+		return false
+	}
+	if c.Worktrees {
+		return true
+	}
+	return worktreeCount > 1
 }
 
 func parseCompareMode(s string) (model.CompareMode, error) {

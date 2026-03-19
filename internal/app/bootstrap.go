@@ -42,7 +42,16 @@ func Run(cfg config.Config) int {
 		return 128
 	}
 
-	if cfg.Worktrees {
+	// Auto-detect dashboard mode from worktree count unless overridden.
+	worktreeCount := 1
+	if !cfg.NoDashboard && !cfg.Worktrees {
+		entries, err := gitexec.WorktreeList(ctx, boot.Runner)
+		if err == nil {
+			worktreeCount = len(entries)
+		}
+	}
+
+	if cfg.ShouldUseDashboard(worktreeCount) {
 		return runDashboard(ctx, cfg, boot)
 	}
 	return runDiff(ctx, cfg, boot)
