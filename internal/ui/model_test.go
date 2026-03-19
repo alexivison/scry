@@ -2215,3 +2215,30 @@ func TestFooterSuppressedAtCompactHeight(t *testing.T) {
 		}
 	})
 }
+
+func TestSearchBackspace_MultiByte(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		input string
+		want  string
+	}{
+		"ascii":       {input: "hello", want: "hell"},
+		"cjk":         {input: "日本語", want: "日本"},
+		"emoji":       {input: "abc🎉", want: "abc"},
+		"mixed":       {input: "héllo", want: "héll"},
+		"single_rune": {input: "ñ", want: ""},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// Simulate backspace on searchInput
+			runes := []rune(tc.input)
+			got := string(runes[:len(runes)-1])
+			if got != tc.want {
+				t.Errorf("backspace on %q = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}

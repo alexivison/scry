@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/commit"
 	"github.com/alexivison/scry/internal/diff"
@@ -1291,7 +1292,8 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.executeSearch(search.SearchNext)
 	case tea.KeyBackspace:
 		if len(m.searchInput) > 0 {
-			m.searchInput = m.searchInput[:len(m.searchInput)-1]
+			runes := []rune(m.searchInput)
+			m.searchInput = string(runes[:len(runes)-1])
 		}
 	case tea.KeyRunes:
 		m.searchInput += string(msg.Runes)
@@ -1745,16 +1747,9 @@ func (m Model) viewSplit() string {
 }
 
 // truncateToWidth trims a string to fit within a terminal-cell width budget.
+// Uses ANSI-aware truncation to preserve escape sequences.
 func truncateToWidth(s string, maxWidth int) string {
-	w := 0
-	for i, r := range s {
-		rw := lipgloss.Width(string(r))
-		if w+rw > maxWidth {
-			return s[:i]
-		}
-		w += rw
-	}
-	return s
+	return ansi.Truncate(s, maxWidth, "")
 }
 
 // Styles — kept minimal; will degrade gracefully when color is unavailable.

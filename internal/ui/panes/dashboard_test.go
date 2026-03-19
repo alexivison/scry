@@ -184,6 +184,7 @@ func TestRelativeTime(t *testing.T) {
 		want       string
 		wantSuffix string // loose match for clock-sensitive cases
 	}{
+		"sub-second": {d: 500 * time.Millisecond, want: "just now"},
 		"seconds":    {d: 5 * time.Second, wantSuffix: "s ago"},
 		"minutes":    {d: 3 * time.Minute, want: "3m ago"},
 		"hours":      {d: 2 * time.Hour, want: "2h ago"},

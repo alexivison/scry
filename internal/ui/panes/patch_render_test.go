@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/alexivison/scry/internal/model"
 )
 
 func TestGutterFormat_SeparatorColumn(t *testing.T) {
@@ -154,5 +156,70 @@ func TestNarrowWidth_NoOverflow(t *testing.T) {
 				t.Errorf("width=%d line %d too wide (%d cells): %q", w, i, visualW, line)
 			}
 		}
+	}
+}
+
+func TestTruncateToWidth_PreservesANSI(t *testing.T) {
+	t.Parallel()
+
+	// String with ANSI color codes — truncation must not break sequences.
+	styled := "\x1b[31mhello world\x1b[0m"
+	got := truncateToWidth(styled, 5)
+	// Should contain 5 visible chars and valid ANSI (no partial sequences).
+	visW := lipgloss.Width(got)
+	if visW > 5 {
+		t.Errorf("truncateToWidth with ANSI: visual width = %d, want <= 5", visW)
+	}
+	if !strings.Contains(got, "hello") {
+		t.Errorf("truncateToWidth should keep 'hello', got %q", got)
+	}
+}
+
+func TestFormatGutter_LargeLineNumbers(t *testing.T) {
+	t.Parallel()
+
+	// With 5-digit line numbers, gutter must accommodate them.
+	old := 12345
+	new := 67890
+	result := formatGutter(&old, &new, 5)
+
+	if !strings.Contains(result, "12345") {
+		t.Errorf("formatGutter should show full 5-digit old number, got %q", result)
+	}
+	if !strings.Contains(result, "67890") {
+		t.Errorf("formatGutter should show full 5-digit new number, got %q", result)
+	}
+}
+
+func TestComputeGutterDigits(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		maxLine    int
+		wantDigits int
+	}{
+		"small file":    {maxLine: 100, wantDigits: 4},
+		"boundary 9999": {maxLine: 9999, wantDigits: 4},
+		"10000":         {maxLine: 10000, wantDigits: 5},
+		"large file":    {maxLine: 123456, wantDigits: 6},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lineNo := tc.maxLine
+			patch := model.FilePatch{
+				Hunks: []model.Hunk{{
+					OldStart: tc.maxLine, OldLen: 1, NewStart: 1, NewLen: 1,
+					Lines: []model.DiffLine{
+						{Kind: model.LineContext, OldNo: &lineNo, NewNo: &lineNo, Text: "x"},
+					},
+				}},
+			}
+			vp := NewPatchViewport(patch)
+			if vp.gutterDigits != tc.wantDigits {
+				t.Errorf("gutterDigits = %d, want %d (maxLine=%d)", vp.gutterDigits, tc.wantDigits, tc.maxLine)
+			}
+		})
 	}
 }
