@@ -2242,3 +2242,26 @@ func TestSearchBackspace_MultiByte(t *testing.T) {
 		})
 	}
 }
+
+func TestBracketChordTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []rune{']', '['} {
+		t.Run(string(key), func(t *testing.T) {
+			t.Parallel()
+			m := NewModel(sampleState())
+			m.width = 100
+			m.height = 30
+
+			updated, cmd := m.Update(keyMsg(key))
+			um := updated.(Model)
+
+			if um.pendingKey != key {
+				t.Errorf("after %c: pendingKey = %c, want %c", key, um.pendingKey, key)
+			}
+			if cmd == nil {
+				t.Errorf("after %c: expected timeout cmd, got nil", key)
+			}
+		})
+	}
+}

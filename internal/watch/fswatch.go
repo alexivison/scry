@@ -1,7 +1,10 @@
 package watch
 
 import (
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,8 +68,9 @@ func NewFSWatcher(repoRoot, gitDir string, onRefresh func()) *FSWatcher {
 		return nil
 	}
 
-	// Watch repo root (best-effort acceleration for top-level changes).
-	if err := watcher.Add(repoRoot); err != nil {
+	// Recursively watch all directories under repo root.
+	// fsnotify doesn't recurse, so we walk the tree ourselves.
+	if err := addDirsRecursive(watcher, repoRoot); err != nil {
 		watcher.Close()
 		return nil
 	}
@@ -90,6 +94,37 @@ func NewFSWatcher(repoRoot, gitDir string, onRefresh func()) *FSWatcher {
 	return fw
 }
 
+// skipDir returns true for directories that should not be watched.
+func skipDir(name string) bool {
+	switch name {
+	case ".git", "node_modules", "vendor", ".next", "__pycache__", ".gradle":
+		return true
+	}
+	return strings.HasPrefix(name, ".")
+}
+
+// addDirsRecursive walks root and adds every directory to the watcher,
+// skipping hidden dirs and common heavy directories.
+func addDirsRecursive(w *fsnotify.Watcher, root string) error {
+	// Root must succeed — caller falls back to polling on error.
+	if err := w.Add(root); err != nil {
+		return err
+	}
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // best-effort: skip unreadable entries
+		}
+		if !d.IsDir() || path == root {
+			return nil
+		}
+		if skipDir(d.Name()) {
+			return filepath.SkipDir
+		}
+		w.Add(path) // best-effort, ignore per-dir errors
+		return nil
+	})
+}
+
 func (fw *FSWatcher) loop() {
 	defer close(fw.done)
 	for {
@@ -98,7 +133,12 @@ func (fw *FSWatcher) loop() {
 			if !ok {
 				return
 			}
-			// Trigger on any write/create/remove/rename event.
+			// Auto-watch newly created directories so we pick up future changes.
+			if event.Has(fsnotify.Create) {
+				if info, err := os.Lstat(event.Name); err == nil && info.IsDir() && !skipDir(filepath.Base(event.Name)) {
+					addDirsRecursive(fw.watcher, event.Name)
+				}
+			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) ||
 				event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
 				fw.debouncer.Trigger()

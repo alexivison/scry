@@ -414,9 +414,9 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "]", "[":
 		if len(msg.Runes) > 0 {
 			m.pendingKey = msg.Runes[0]
-			m.pendingKeySeq++ // invalidate any stale g timeout
+			m.pendingKeySeq++
 		}
-		return m, nil
+		return m, m.pendingKeyTimeout()
 	case "g":
 		m.pendingKey = 'g'
 		m.pendingKeySeq++
