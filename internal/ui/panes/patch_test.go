@@ -521,6 +521,40 @@ func TestDiffLineToViewportLine(t *testing.T) {
 	}
 }
 
+func TestRenderGutterSuppression(t *testing.T) {
+	t.Parallel()
+
+	patch := threeHunkPatch()
+	// With gutter visible (default), output should contain line numbers.
+	vpWith := NewPatchViewport(patch)
+	vpWith.Width = 80
+	vpWith.Height = 20
+	vpWith.GutterVisible = true
+	outWith := vpWith.Render()
+
+	// Line numbers like "   1" should appear in the gutter.
+	if !strings.Contains(outWith, "   1") {
+		t.Errorf("gutter visible: expected line numbers in output, got:\n%s", outWith)
+	}
+
+	// With gutter hidden, line numbers should NOT appear.
+	vpWithout := NewPatchViewport(patch)
+	vpWithout.Width = 80
+	vpWithout.Height = 20
+	vpWithout.GutterVisible = false
+	outWithout := vpWithout.Render()
+
+	// Should NOT contain the "   1    1 " gutter pattern.
+	if strings.Contains(outWithout, "   1") {
+		t.Errorf("gutter hidden: line numbers should not appear, got:\n%s", outWithout)
+	}
+
+	// The actual diff content should still be present.
+	if !strings.Contains(outWithout, "package main") {
+		t.Errorf("gutter hidden: diff content missing, got:\n%s", outWithout)
+	}
+}
+
 func TestViewportLineToDiffLine(t *testing.T) {
 	t.Parallel()
 

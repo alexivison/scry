@@ -24,4 +24,11 @@ type DashboardState struct {
 	ScrollOffset    int
 	DrillDown       bool // true when viewing a worktree's diff
 	DrillGeneration int  // monotonic counter to discard stale drill-down results
+
+	// Deletion confirmation state.
+	ConfirmDelete bool   // true when awaiting deletion confirmation
+	DeletePath    string // path of worktree to delete
+	DeleteDirty   bool   // true if the worktree is dirty (requires force)
+	DeleteErr     string // error message from failed deletion
+	DeleteIsMain  bool   // true if user tried to delete main worktree
 }

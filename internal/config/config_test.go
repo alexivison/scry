@@ -7,10 +7,15 @@ import (
 	"github.com/alexivison/scry/internal/model"
 )
 
+// noConfigFiles returns a ParseOption that prevents loading ambient config files.
+func noConfigFiles() ParseOption {
+	return WithConfigPaths("/tmp/scry-test-nonexistent-user-config.toml", "/tmp/scry-test-nonexistent-repo-config.toml")
+}
+
 func TestParseDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Parse([]string{})
+	cfg, err := Parse([]string{}, noConfigFiles())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -26,120 +31,11 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.IgnoreWhitespace {
 		t.Error("IgnoreWhitespace = true, want false")
 	}
-}
-
-func TestParseAllFlags(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{
-		"--base", "origin/main",
-		"--head", "feature",
-		"--mode", "two-dot",
-		"--ignore-whitespace",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.BaseRef != "origin/main" {
-		t.Errorf("BaseRef = %q, want %q", cfg.BaseRef, "origin/main")
-	}
-	if cfg.HeadRef != "feature" {
-		t.Errorf("HeadRef = %q, want %q", cfg.HeadRef, "feature")
-	}
-	if cfg.Mode != model.CompareTwoDot {
-		t.Errorf("Mode = %q, want %q", cfg.Mode, model.CompareTwoDot)
-	}
-	if !cfg.IgnoreWhitespace {
-		t.Error("IgnoreWhitespace = false, want true")
-	}
-}
-
-func TestParseInvalidMode(t *testing.T) {
-	t.Parallel()
-
-	_, err := Parse([]string{"--mode", "invalid"})
-	if err == nil {
-		t.Fatal("expected error for invalid mode, got nil")
-	}
-}
-
-func TestParseInvalidFlag(t *testing.T) {
-	t.Parallel()
-
-	_, err := Parse([]string{"--nonexistent"})
-	if err == nil {
-		t.Fatal("expected error for unknown flag, got nil")
-	}
-}
-
-func TestParseRejectsPositionalArgs(t *testing.T) {
-	t.Parallel()
-
-	_, err := Parse([]string{"unexpected-arg"})
-	if err == nil {
-		t.Fatal("expected error for positional argument, got nil")
-	}
-}
-
-// --- v0.2 flag tests ---
-
-func TestParseWatchDefaults(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	if !cfg.Watch {
-		t.Error("Watch = false, want true (v0.3 default)")
+		t.Error("Watch = false, want true (default)")
 	}
 	if cfg.WatchInterval != 2*time.Second {
 		t.Errorf("WatchInterval = %v, want 2s", cfg.WatchInterval)
-	}
-}
-
-func TestParseWatchFlags(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{"--watch", "--watch-interval", "5s"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Watch {
-		t.Error("Watch = false, want true")
-	}
-	if cfg.WatchInterval != 5*time.Second {
-		t.Errorf("WatchInterval = %v, want 5s", cfg.WatchInterval)
-	}
-}
-
-func TestParseWatchIntervalMinimum(t *testing.T) {
-	t.Parallel()
-
-	_, err := Parse([]string{"--watch-interval", "100ms"})
-	if err == nil {
-		t.Fatal("expected error for watch-interval < 500ms, got nil")
-	}
-}
-
-func TestParseWatchIntervalExactMinimum(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{"--watch-interval", "500ms"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.WatchInterval != 500*time.Millisecond {
-		t.Errorf("WatchInterval = %v, want 500ms", cfg.WatchInterval)
-	}
-}
-
-func TestParseCommitDefaults(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Commit {
 		t.Error("Commit = true, want false")
@@ -155,103 +51,37 @@ func TestParseCommitDefaults(t *testing.T) {
 	}
 }
 
-func TestParseCommitFlags(t *testing.T) {
+func TestParseInvalidFlag(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Parse([]string{
-		"--commit",
-		"--commit-provider", "claude",
-		"--commit-model", "claude-sonnet-4-20250514",
-		"--commit-auto",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := Parse([]string{"--nonexistent"}, noConfigFiles())
+	if err == nil {
+		t.Fatal("expected error for unknown flag, got nil")
 	}
-	if !cfg.Commit {
-		t.Error("Commit = false, want true")
-	}
-	if cfg.CommitProvider != "claude" {
-		t.Errorf("CommitProvider = %q, want %q", cfg.CommitProvider, "claude")
-	}
-	if cfg.CommitModel != "claude-sonnet-4-20250514" {
-		t.Errorf("CommitModel = %q, want %q", cfg.CommitModel, "claude-sonnet-4-20250514")
-	}
-	if !cfg.CommitAuto {
-		t.Error("CommitAuto = false, want true")
+}
+
+func TestParseRejectsPositionalArgs(t *testing.T) {
+	t.Parallel()
+
+	_, err := Parse([]string{"unexpected-arg"}, noConfigFiles())
+	if err == nil {
+		t.Fatal("expected error for positional argument, got nil")
 	}
 }
 
 func TestParseCommitAutoRequiresCommit(t *testing.T) {
 	t.Parallel()
 
-	_, err := Parse([]string{"--commit-auto"})
+	_, err := Parse([]string{"--commit-auto"}, noConfigFiles())
 	if err == nil {
 		t.Fatal("expected error for --commit-auto without --commit, got nil")
-	}
-}
-
-func TestParseCommitProviderInvalid(t *testing.T) {
-	t.Parallel()
-
-	_, err := Parse([]string{"--commit", "--commit-provider", "unsupported"})
-	if err == nil {
-		t.Fatal("expected error for unsupported commit provider, got nil")
-	}
-}
-
-func TestParseCommitProviderInvalidWithoutCommit(t *testing.T) {
-	t.Parallel()
-
-	_, err := Parse([]string{"--commit-provider", "unsupported"})
-	if err == nil {
-		t.Fatal("expected error for unsupported commit provider without --commit, got nil")
-	}
-}
-
-// --- worktree dashboard flag tests ---
-
-func TestParseWorktreesDefault(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Worktrees {
-		t.Error("Worktrees = true, want false")
-	}
-}
-
-func TestParseWorktreesFlag(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{"--worktrees"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Worktrees {
-		t.Error("Worktrees = false, want true")
-	}
-}
-
-// --- v0.3 zero-config defaults tests ---
-
-func TestParseWatchDefaultTrue(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Watch {
-		t.Error("Watch = false, want true (v0.3 default)")
 	}
 }
 
 func TestParseNoWatchFlag(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Parse([]string{"--no-watch"})
+	cfg, err := Parse([]string{"--no-watch"}, noConfigFiles())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -260,22 +90,10 @@ func TestParseNoWatchFlag(t *testing.T) {
 	}
 }
 
-func TestParseWatchFlagStillAccepted(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{"--watch"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Watch {
-		t.Error("Watch = false, want true with explicit --watch")
-	}
-}
-
 func TestParseNoDashboardFlag(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Parse([]string{"--no-dashboard"})
+	cfg, err := Parse([]string{"--no-dashboard"}, noConfigFiles())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -284,18 +102,106 @@ func TestParseNoDashboardFlag(t *testing.T) {
 	}
 }
 
-func TestParseNoDashboardWithWorktrees(t *testing.T) {
+// --- V3-T15: deprecated flags rejected ---
+
+func TestParseDeprecatedFlagsRejected(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Parse([]string{"--worktrees", "--no-dashboard"})
+	deprecated := []string{
+		"--watch",
+		"--worktrees",
+		"--mode=three-dot",
+		"--watch-interval=2s",
+		"--ignore-whitespace",
+		"--commit-provider=claude",
+		"--commit-model=test",
+	}
+	for _, flag := range deprecated {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse([]string{flag}, noConfigFiles())
+			if err == nil {
+				t.Errorf("expected error for deprecated flag %s, got nil", flag)
+			}
+		})
+	}
+}
+
+// --- V3-T15: final CLI surface ---
+
+func TestParseFinalCLISurface(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]string{
+		"--base", "origin/main",
+		"--head", "HEAD",
+		"--commit",
+		"--commit-auto",
+		"--no-watch",
+		"--no-dashboard",
+	}, noConfigFiles())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !cfg.Worktrees {
-		t.Error("Worktrees = false, want true")
+	if cfg.BaseRef != "origin/main" {
+		t.Errorf("BaseRef = %q, want %q", cfg.BaseRef, "origin/main")
+	}
+	if cfg.HeadRef != "HEAD" {
+		t.Errorf("HeadRef = %q, want %q", cfg.HeadRef, "HEAD")
+	}
+	if !cfg.Commit {
+		t.Error("Commit = false, want true")
+	}
+	if !cfg.CommitAuto {
+		t.Error("CommitAuto = false, want true")
+	}
+	if cfg.Watch {
+		t.Error("Watch = true, want false after --no-watch")
 	}
 	if !cfg.NoDashboard {
 		t.Error("NoDashboard = false, want true")
+	}
+}
+
+// --- V3-T15: config file merge precedence ---
+
+func TestMergeFileConfigs(t *testing.T) {
+	t.Parallel()
+
+	user := FileConfig{}
+	user.Diff.Mode = strPtr("two-dot")
+	user.Watch.Interval = strPtr("5s")
+
+	repo := FileConfig{}
+	repo.Diff.Mode = strPtr("three-dot") // overrides user
+	repo.Commit.Provider = strPtr("claude")
+
+	merged := MergeFileConfigs(user, repo)
+	if merged.Diff.Mode == nil || *merged.Diff.Mode != "three-dot" {
+		t.Errorf("Diff.Mode = %v, want %q (repo overrides user)", merged.Diff.Mode, "three-dot")
+	}
+	if merged.Watch.Interval == nil || *merged.Watch.Interval != "5s" {
+		t.Errorf("Watch.Interval = %v, want %q (from user, repo empty)", merged.Watch.Interval, "5s")
+	}
+	if merged.Commit.Provider == nil || *merged.Commit.Provider != "claude" {
+		t.Errorf("Commit.Provider = %v, want %q (from repo)", merged.Commit.Provider, "claude")
+	}
+}
+
+func TestMergeFileConfigs_RepoOverridesToFalse(t *testing.T) {
+	t.Parallel()
+
+	tr := true
+	fa := false
+	user := FileConfig{}
+	user.Diff.IgnoreWhitespace = &tr
+
+	repo := FileConfig{}
+	repo.Diff.IgnoreWhitespace = &fa // repo explicitly resets to false
+
+	merged := MergeFileConfigs(user, repo)
+	if merged.Diff.IgnoreWhitespace == nil || *merged.Diff.IgnoreWhitespace != false {
+		t.Error("repo config should override user IgnoreWhitespace=true to false")
 	}
 }
 
@@ -303,23 +209,20 @@ func TestShouldUseDashboard(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		worktreeCount  int
-		worktrees      bool
-		noDashboard    bool
-		want           bool
+		name          string
+		worktreeCount int
+		noDashboard   bool
+		want          bool
 	}{
-		{"single worktree, no flags", 1, false, false, false},
-		{"multiple worktrees, auto-detect", 2, false, false, true},
-		{"multiple worktrees, no-dashboard", 2, false, true, false},
-		{"explicit worktrees flag", 1, true, false, true},
-		{"worktrees + no-dashboard, no-dashboard wins", 2, true, true, false},
+		{"single worktree", 1, false, false},
+		{"multiple worktrees, auto-detect", 2, false, true},
+		{"multiple worktrees, no-dashboard", 2, true, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cfg := Config{Worktrees: tt.worktrees, NoDashboard: tt.noDashboard}
+			cfg := Config{NoDashboard: tt.noDashboard}
 			got := cfg.ShouldUseDashboard(tt.worktreeCount)
 			if got != tt.want {
 				t.Errorf("ShouldUseDashboard(%d) = %v, want %v", tt.worktreeCount, got, tt.want)

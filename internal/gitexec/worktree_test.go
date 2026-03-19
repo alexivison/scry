@@ -223,6 +223,43 @@ func TestStatusCount(t *testing.T) {
 	}
 }
 
+func TestWorktreeRemove(t *testing.T) {
+	t.Parallel()
+
+	t.Run("normal remove", func(t *testing.T) {
+		t.Parallel()
+		runner := &mockRunner{fn: routeGit(map[string]string{
+			"worktree remove /path/to/wt": "",
+		})}
+		err := WorktreeRemove(t.Context(), runner, "/path/to/wt", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("force remove", func(t *testing.T) {
+		t.Parallel()
+		runner := &mockRunner{fn: routeGit(map[string]string{
+			"worktree remove --force /path/to/wt": "",
+		})}
+		err := WorktreeRemove(t.Context(), runner, "/path/to/wt", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("git error propagated", func(t *testing.T) {
+		t.Parallel()
+		runner := &mockRunner{fn: func(_ context.Context, _ ...string) (string, error) {
+			return "", &GitError{ExitCode: 128, Stderr: "fatal: is the main worktree"}
+		}}
+		err := WorktreeRemove(t.Context(), runner, "/path/to/main", false)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
 func TestShortBranch(t *testing.T) {
 	t.Parallel()
 

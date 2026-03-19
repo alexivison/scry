@@ -17,6 +17,8 @@ func PrepareRefresh(state *model.AppState) {
 // SelectiveInvalidate compares old and new file lists and preserves cached
 // patches for unchanged files by promoting them to the current generation.
 // Changed and removed files are evicted or left at the old generation.
+// For the currently selected file, an additional content-hash check catches
+// same-count edits that summary-level comparison would miss.
 func SelectiveInvalidate(state *model.AppState, oldFiles, newFiles []model.FileSummary) {
 	type sig struct {
 		Additions int
@@ -38,7 +40,7 @@ func SelectiveInvalidate(state *model.AppState, oldFiles, newFiles []model.FileS
 			continue // new file — no cache entry to preserve
 		}
 		if prev.Additions == f.Additions && prev.Deletions == f.Deletions && prev.Status == f.Status {
-			// Unchanged — promote cache entry to current generation.
+			// Summary unchanged — promote cache entry to current generation.
 			if ps, ok := state.Patches[f.Path]; ok && ps.Status == model.LoadLoaded {
 				ps.Generation = state.CacheGeneration
 				state.Patches[f.Path] = ps

@@ -19,8 +19,9 @@ type PatchViewport struct {
 	Width        int
 	Height       int
 
-	SearchQuery string // current search query for highlighting
-	MatchLine   int    // viewport line of the current match (-1 = none)
+	SearchQuery   string // current search query for highlighting
+	MatchLine     int    // viewport line of the current match (-1 = none)
+	GutterVisible bool   // when false, suppress line number gutter (minimal mode)
 
 	// Pre-computed flat line list for rendering.
 	lines []patchLine
@@ -41,7 +42,7 @@ type patchLine struct {
 
 // NewPatchViewport creates a viewport positioned at the first hunk.
 func NewPatchViewport(patch model.FilePatch) *PatchViewport {
-	vp := &PatchViewport{Patch: patch}
+	vp := &PatchViewport{Patch: patch, GutterVisible: true}
 	vp.lines = vp.buildLines()
 	return vp
 }
@@ -155,20 +156,24 @@ func (vp *PatchViewport) Render() string {
 			rendered = append(rendered, hunkHeaderStyle.Render(header))
 		case lineTypeDiff:
 			isMatch := vp.SearchQuery != "" && absLine == vp.MatchLine
-			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch))
+			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch, vp.GutterVisible))
 		}
 	}
 	return strings.Join(rendered, "\n")
 }
 
-func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool) string {
+func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool, gutterVisible bool) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
 
 	prefix, style := diffLineStyle(dl.Kind)
-	gutter := formatGutter(dl.OldNo, dl.NewNo)
-	line := gutter + prefix + dl.Text
+	var line string
+	if gutterVisible {
+		line = formatGutter(dl.OldNo, dl.NewNo) + prefix + dl.Text
+	} else {
+		line = prefix + dl.Text
+	}
 
 	if width > 0 && lipgloss.Width(line) > width {
 		line = truncateToWidth(line, width)

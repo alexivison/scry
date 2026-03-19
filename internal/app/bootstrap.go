@@ -44,7 +44,7 @@ func Run(cfg config.Config) int {
 
 	// Auto-detect dashboard mode from worktree count unless overridden.
 	worktreeCount := 1
-	if !cfg.NoDashboard && !cfg.Worktrees {
+	if !cfg.NoDashboard {
 		entries, err := gitexec.WorktreeList(ctx, boot.Runner)
 		if err == nil {
 			worktreeCount = len(entries)
@@ -132,6 +132,20 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 	m := ui.NewModel(state, opts...)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
+	// Start fsnotify watcher for accelerated refresh (polling remains as fallback).
+	if cfg.Watch {
+		repoRoot := boot.Repo.WorktreeRoot
+		if repoRoot == "" {
+			repoRoot = boot.Repo.GitDir
+		}
+		fsw := watch.NewFSWatcher(repoRoot, boot.Repo.GitDir, func() {
+			p.Send(watch.FSEventMsg{})
+		})
+		if fsw != nil {
+			defer fsw.Close()
+		}
+	}
+
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
 		return 1
@@ -160,7 +174,13 @@ func (a *commitProviderAdapter) Generate(ctx context.Context) (string, error) {
 
 // runDashboard is the worktree dashboard pipeline.
 func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapResult) int {
-	loader := &worktreeLoaderImpl{runner: boot.Runner}
+	// Use a runner rooted at the common git dir (stable across worktree deletions).
+	stableRoot := boot.Repo.GitCommonDir
+	if stableRoot == "" {
+		stableRoot = boot.Repo.WorktreeRoot
+	}
+	stableRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot})
+	loader := &worktreeLoaderImpl{runner: stableRunner}
 	worktrees, err := loader.LoadWorktrees(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
@@ -184,7 +204,8 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	}
 
 	drillDown := &drillDownProviderImpl{}
-	m := ui.NewModel(state, ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown))
+	remover := &worktreeRemoverImpl{runner: stableRunner}
+	m := ui.NewModel(state, ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -236,6 +257,15 @@ func (w *worktreeLoaderImpl) LoadWorktrees(ctx context.Context) ([]model.Worktre
 	}
 
 	return infos, nil
+}
+
+// worktreeRemoverImpl removes worktrees using git commands.
+type worktreeRemoverImpl struct {
+	runner gitexec.GitRunner
+}
+
+func (w *worktreeRemoverImpl) Remove(ctx context.Context, path string, force bool) error {
+	return gitexec.WorktreeRemove(ctx, w.runner, path, force)
 }
 
 // drillDownProviderImpl creates a diff context for a specific worktree.

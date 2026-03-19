@@ -33,10 +33,11 @@ const (
 
 // PatchLoadState holds the result of loading a single file's patch.
 type PatchLoadState struct {
-	Status     LoadStatus
-	Patch      *FilePatch
-	Err        error
-	Generation int
+	Status      LoadStatus
+	Patch       *FilePatch
+	Err         error
+	Generation  int
+	ContentHash string // SHA-256 of patch content for scroll preservation
 }
 
 // CommitState holds the state of AI commit message generation and execution.

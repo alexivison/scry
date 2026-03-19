@@ -77,6 +77,13 @@ type Model struct {
 	refreshErr     string        // shown in status bar when metadata reload fails
 	fileListScroll int           // scroll offset for file list in split mode
 
+	// Scroll preservation state: saved before refresh, restored if content unchanged.
+	savedFilePath     string // path of the file whose scroll was saved
+	savedContentHash  string
+	savedScrollOffset int
+	savedCurrentHunk  int
+	savedSearchQuery  string
+
 	commitProvider CommitProvider      // optional provider for AI commit messages
 	commitExecutor CommitExecutor      // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
@@ -87,6 +94,7 @@ type Model struct {
 
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
+	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -208,15 +216,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		if err := terminal.CheckDimensions(msg.Width, msg.Height); err != nil {
-			// In split mode, degrade to modal for terminals that are usable
-			// but too narrow for split (40-79 cols). Only block on truly tiny terminals.
-			if m.State.Layout == model.LayoutSplit && msg.Width >= splitFallbackMinWidth && msg.Height >= splitFallbackMinHeight {
-				m.tooSmall = false
-				m.sizeErr = ""
-			} else {
-				m.tooSmall = true
-				m.sizeErr = err.Error()
-			}
+			m.tooSmall = true
+			m.sizeErr = err.Error()
 		} else {
 			m.tooSmall = false
 			m.sizeErr = ""
@@ -238,6 +239,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CommitEditedMsg:
 		return m.handleCommitEdited(msg)
 
+	case watch.FSEventMsg:
+		// fsnotify detected a file change — trigger immediate fingerprint check
+		// without rescheduling the polling timer (to avoid timer multiplication).
+		if m.State.WatchEnabled && m.fingerprinter != nil && !m.State.WorktreeMode {
+			return m, m.buildFSCheckCmd()
+		}
+		if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
+			return m.handleDashboardTick()
+		}
+		return m, nil
+
 	case watch.TickMsg:
 		if m.State.WorktreeMode {
 			return m.handleDashboardTick()
@@ -252,6 +264,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DrillDownLoadedMsg:
 		return m.handleDrillDownLoaded(msg)
+
+	case WorktreeRemovedMsg:
+		return m.handleWorktreeRemoved(msg)
 
 	case tea.KeyMsg:
 		if m.tooSmall {
@@ -507,7 +522,7 @@ func (m Model) buildCommitCmd(gen int) (tea.Cmd, context.CancelFunc) {
 
 // --- Watch mode handlers ---
 
-// buildCheckCmd creates an async Cmd that computes the repo fingerprint.
+// buildCheckCmd creates an async Cmd that computes the repo fingerprint (polling path).
 func (m Model) buildCheckCmd() tea.Cmd {
 	fp := m.fingerprinter
 	baseRef := m.watchBaseRef
@@ -515,6 +530,18 @@ func (m Model) buildCheckCmd() tea.Cmd {
 	return func() tea.Msg {
 		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
 		return watch.FingerprintMsg{Fingerprint: result, Err: err}
+	}
+}
+
+// buildFSCheckCmd creates an async Cmd that computes the repo fingerprint (fsnotify path).
+// The result has FromFS=true so handleWatchFingerprint won't reschedule the polling timer.
+func (m Model) buildFSCheckCmd() tea.Cmd {
+	fp := m.fingerprinter
+	baseRef := m.watchBaseRef
+	wt := m.State.Compare.WorkingTree
+	return func() tea.Msg {
+		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
+		return watch.FingerprintMsg{Fingerprint: result, Err: err, FromFS: true}
 	}
 }
 
@@ -533,8 +560,17 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 	}
 	m.lastCheckAt = time.Now()
 
+	// tickCmd returns the polling tick command, or nil for FS-triggered checks
+	// (to avoid multiplying polling timers).
+	tickCmd := func() tea.Cmd {
+		if msg.FromFS {
+			return nil
+		}
+		return watch.TickCmd(m.State.WatchInterval)
+	}
+
 	if msg.Err != nil {
-		return m, watch.TickCmd(m.State.WatchInterval)
+		return m, tickCmd()
 	}
 
 	// First fingerprint: seed without refresh (bootstrap already loaded data).
@@ -544,20 +580,26 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 		m.State.LastFingerprint = msg.Fingerprint
 		if m.State.FocusPane == model.PaneIdle {
 			refreshed, refreshCmd := m.startRefresh()
-			return refreshed, tea.Batch(refreshCmd, watch.TickCmd(m.State.WatchInterval))
+			if tc := tickCmd(); tc != nil {
+				return refreshed, tea.Batch(refreshCmd, tc)
+			}
+			return refreshed, refreshCmd
 		}
-		return m, watch.TickCmd(m.State.WatchInterval)
+		return m, tickCmd()
 	}
 
 	if watch.ShouldRefresh(&m.State, msg.Fingerprint) {
 		m.State.LastFingerprint = msg.Fingerprint
 		refreshed, refreshCmd := m.startRefresh()
-		return refreshed, tea.Batch(refreshCmd, watch.TickCmd(m.State.WatchInterval))
+		if tc := tickCmd(); tc != nil {
+			return refreshed, tea.Batch(refreshCmd, tc)
+		}
+		return refreshed, refreshCmd
 	}
 
 	// When RefreshInFlight is true, LastFingerprint is intentionally NOT updated
 	// so the mismatch triggers a refresh once the in-flight one completes.
-	return m, watch.TickCmd(m.State.WatchInterval)
+	return m, tickCmd()
 }
 
 // selectFile checks the cache and either uses a cached result or fires an async load.
@@ -610,7 +652,22 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		selected := m.State.Files[m.State.SelectedFile].Path
 		if selected == msg.Path {
-			m.applyPatchResult(m.State.Patches[msg.Path])
+			ps := m.State.Patches[msg.Path]
+			m.applyPatchResult(ps)
+			// Restore scroll if same file and content hash matches pre-refresh snapshot.
+			if m.savedFilePath == msg.Path && m.savedContentHash != "" &&
+				ps.ContentHash == m.savedContentHash && m.patchViewport != nil {
+				m.patchViewport.ScrollOffset = m.savedScrollOffset
+				m.patchViewport.CurrentHunk = m.savedCurrentHunk
+				m.State.SearchQuery = m.savedSearchQuery
+			} else {
+				// Content changed or file changed — clear search state.
+				m.State.SearchQuery = ""
+			}
+			// Always clear saved state after use (or mismatch) to prevent bleed.
+			m.savedFilePath = ""
+			m.savedContentHash = ""
+			m.savedSearchQuery = ""
 		}
 	}
 
@@ -689,31 +746,43 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		m.State.Compare = *msg.Compare
 	}
 
+	// Save scroll state for the selected file before invalidation.
+	m.savedFilePath = ""
+	m.savedContentHash = ""
+	m.savedScrollOffset = 0
+	m.savedCurrentHunk = 0
+	m.savedSearchQuery = ""
+	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+		path := m.State.Files[m.State.SelectedFile].Path
+		m.savedFilePath = path
+		if ps, ok := m.State.Patches[path]; ok && ps.ContentHash != "" {
+			m.savedContentHash = ps.ContentHash
+		}
+		if m.patchViewport != nil {
+			m.savedScrollOffset = m.patchViewport.ScrollOffset
+			m.savedCurrentHunk = m.patchViewport.CurrentHunk
+		}
+		m.savedSearchQuery = m.State.SearchQuery
+	}
+
 	// Selectively invalidate cache: preserve unchanged files, evict changed/removed.
 	review.SelectiveInvalidate(&m.State, m.State.Files, msg.Files)
 
 	var selectedPath string
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		selectedPath = m.State.Files[m.State.SelectedFile].Path
+		// Force-evict the selected file to get a fresh content-hash comparison.
+		delete(m.State.Patches, selectedPath)
 	}
 	m.State.Files = msg.Files
 	review.ReconcileSelection(&m.State, selectedPath)
 	review.CompleteRefresh(&m.State)
 
-	// Clear viewport if selected file's cache was invalidated or no file selected.
-	clearViewport := true
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		path := m.State.Files[m.State.SelectedFile].Path
-		if _, hit := review.CacheLookup(m.State, path); hit {
-			clearViewport = false
-		}
-	}
-	if clearViewport {
-		m.patchViewport = nil
-		m.patchErr = ""
-		m.searchIndex = nil
-		m.searchNotFound = ""
-	}
+	// Selected file was evicted for reload; clear viewport.
+	m.patchViewport = nil
+	m.patchErr = ""
+	m.searchIndex = nil
+	m.searchNotFound = ""
 
 	// Transition from idle to review when first files arrive.
 	if m.State.FocusPane == model.PaneIdle && len(m.State.Files) > 0 {
@@ -767,6 +836,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp := panes.NewPatchViewport(*ps.Patch)
 	vp.Width = m.width
 	vp.Height = m.height - 1
+	vp.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
@@ -953,7 +1023,7 @@ func (m Model) View() string {
 		b.WriteString(m.viewDashboard())
 	} else if m.State.FocusPane == model.PaneCommit {
 		b.WriteString(m.viewCommit())
-	} else if m.State.Layout == model.LayoutSplit && m.width >= terminal.MinWidth {
+	} else if m.State.Layout == model.LayoutSplit && m.widthTierNow() >= terminal.WidthCompactSplit {
 		b.WriteString(m.viewSplit())
 	} else if m.State.FocusPane == model.PaneSearch || m.State.FocusPane == model.PanePatch {
 		b.WriteString(m.viewPatch())
@@ -972,79 +1042,87 @@ func (m Model) View() string {
 }
 
 func (m Model) viewFileList() string {
-	if len(m.State.Files) == 0 {
-		return "No files changed."
+	contentHeight := m.height - 1 // reserve status bar
+	if contentHeight <= 0 {
+		contentHeight = 1
 	}
-
-	var lines []string
-	for i, f := range m.State.Files {
-		line := m.renderFileLine(i, f)
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n")
+	content, _ := panes.RenderFileList(
+		m.State.Files, m.State.SelectedFile, 0,
+		m.width, contentHeight, true,
+	)
+	return content
 }
 
-func (m Model) renderFileLine(idx int, f model.FileSummary) string {
-	status := panes.StatusIcon(f.Status)
-	path := f.Path
-	if f.OldPath != "" {
-		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
+func (m Model) renderErrorBar(msg string) string {
+	bar := " " + msg
+	gap := m.width - lipgloss.Width(bar)
+	if gap > 0 {
+		bar += strings.Repeat(" ", gap)
 	}
-
-	counts := panes.FormatCounts(f)
-	prefix := "  "
-	if idx == m.State.SelectedFile {
-		prefix = "> "
-	}
-	line := fmt.Sprintf("%s%s  %-40s %s", prefix, status, path, counts)
-
-	if idx == m.State.SelectedFile {
-		return selectedStyle.Render(line)
-	}
-	return line
+	return searchNotFoundStyle.Width(m.width).Render(bar)
 }
 
 func (m Model) viewStatusBar() string {
-	if m.refreshErr != "" {
-		bar := " " + m.refreshErr
-		gap := m.width - lipgloss.Width(bar)
-		if gap > 0 {
-			bar += strings.Repeat(" ", gap)
+	// Dashboard delete messages.
+	if m.State.FocusPane == model.PaneDashboard {
+		ds := m.State.DashboardState
+		if ds.DeleteIsMain {
+			return m.renderErrorBar("Cannot delete main worktree")
 		}
-		return searchNotFoundStyle.Width(m.width).Render(bar)
+		if ds.DeleteErr != "" {
+			return m.renderErrorBar(ds.DeleteErr)
+		}
+	}
+	if m.refreshErr != "" {
+		return m.renderErrorBar(m.refreshErr)
 	}
 	if m.searchNotFound != "" {
-		bar := " " + m.searchNotFound
-		gap := m.width - lipgloss.Width(bar)
-		if gap > 0 {
-			bar += strings.Repeat(" ", gap)
-		}
-		return searchNotFoundStyle.Width(m.width).Render(bar)
+		return m.renderErrorBar(m.searchNotFound)
 	}
 	var left, right string
+	minimal := m.widthTierNow() <= terminal.WidthMinimal
 	if m.State.FocusPane == model.PaneDashboard {
 		left = " Worktree Dashboard "
 		right = fmt.Sprintf(" %d worktrees ", len(m.State.DashboardState.Worktrees))
 	} else {
-		if m.State.Compare.WorkingTree {
-			left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
+		if minimal {
+			// Abbreviated status bar for 40–59 column terminals.
+			right = fmt.Sprintf(" %d ", len(m.State.Files))
+			if m.State.Compare.WorkingTree {
+				left = fmt.Sprintf(" %s ", m.State.Compare.BaseRef)
+			} else {
+				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+			}
 		} else {
-			left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+			if m.State.Compare.WorkingTree {
+				left = fmt.Sprintf(" %s (working tree) ", m.State.Compare.BaseRef)
+			} else {
+				left = fmt.Sprintf(" %s ", m.State.Compare.DiffRange)
+			}
+			if m.State.IgnoreWhitespace {
+				left += "[W] "
+			}
+			if m.State.CommitEnabled {
+				left += "[C] "
+			}
+			right = fmt.Sprintf(" %d files ", len(m.State.Files))
 		}
-		if m.State.IgnoreWhitespace {
-			left += "[W] "
-		}
-		if m.State.CommitEnabled {
-			left += "[C] "
-		}
-		right = fmt.Sprintf(" %d files ", len(m.State.Files))
 	}
 	if m.State.WatchEnabled && m.State.FocusPane != model.PaneDashboard {
-		watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
-		if !m.lastCheckAt.IsZero() {
-			watchTag += " " + m.lastCheckAt.Format("15:04:05")
+		if minimal {
+			left += "[W] "
+		} else {
+			watchTag := fmt.Sprintf("[watch %s", m.State.WatchInterval)
+			if !m.lastCheckAt.IsZero() {
+				watchTag += " " + m.lastCheckAt.Format("15:04:05")
+			}
+			left += watchTag + "] "
 		}
-		left += watchTag + "] "
+	}
+	// Truncate left segment if it overflows available space.
+	maxLeft := m.width - lipgloss.Width(right)
+	if maxLeft > 0 && lipgloss.Width(left) > maxLeft {
+		left = truncateToWidth(left, maxLeft)
 	}
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
@@ -1088,6 +1166,7 @@ func (m Model) renderPatch(width, height int) string {
 	}
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
+	m.patchViewport.GutterVisible = m.widthTierNow() >= terminal.WidthModalOnly
 	return m.patchViewport.Render()
 }
 
@@ -1160,6 +1239,12 @@ func (m Model) viewHelp() string {
 		help = append(help, "  c       generate commit message")
 	}
 	return strings.Join(help, "\n")
+}
+
+// widthTierNow returns the current width tier computed from the model dimensions.
+func (m Model) widthTierNow() terminal.WidthTier {
+	wt, _ := terminal.LayoutTier(m.width, m.height)
+	return wt
 }
 
 // syncFileListScroll adjusts fileListScroll so the selected file stays visible
@@ -1248,6 +1333,19 @@ func splitIntoLines(content string, n int) []string {
 	return lines
 }
 
+// truncateToWidth trims a string to fit within a terminal-cell width budget.
+func truncateToWidth(s string, maxWidth int) string {
+	w := 0
+	for i, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > maxWidth {
+			return s[:i]
+		}
+		w += rw
+	}
+	return s
+}
+
 // padToWidth pads a string with spaces to reach the target visual width.
 func padToWidth(s string, width int) string {
 	w := lipgloss.Width(s)
@@ -1257,15 +1355,9 @@ func padToWidth(s string, width int) string {
 	return s + strings.Repeat(" ", width-w)
 }
 
-// Minimum dimensions for modal fallback when split mode degrades on narrow terminals.
-const (
-	splitFallbackMinWidth  = 40
-	splitFallbackMinHeight = 10
-)
 
 // Styles — kept minimal; will degrade gracefully when color is unavailable.
 var (
-	selectedStyle  = lipgloss.NewStyle().Bold(true).Reverse(true)
 	statusBarStyle = lipgloss.NewStyle().
 			Background(theme.StatusBg).
 			Foreground(theme.StatusFg)

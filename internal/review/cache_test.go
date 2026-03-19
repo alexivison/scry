@@ -133,6 +133,42 @@ func TestCacheStore(t *testing.T) {
 	}
 }
 
+func TestCacheStoreContentHash(t *testing.T) {
+	t.Parallel()
+
+	state := model.AppState{
+		Patches:         make(map[string]model.PatchLoadState),
+		CacheGeneration: 1,
+	}
+	patch := samplePatch()
+
+	CacheStore(&state, "main.go", &patch, nil)
+
+	got := state.Patches["main.go"]
+	if got.ContentHash == "" {
+		t.Error("ContentHash should be populated after CacheStore")
+	}
+
+	// Different patch content → different hash.
+	patch2 := model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{
+			{OldStart: 1, OldLen: 3, NewStart: 1, NewLen: 4,
+				Lines: []model.DiffLine{
+					{Kind: model.LineAdded, Text: "different content"},
+				}},
+		},
+	}
+	CacheStore(&state, "other.go", &patch2, nil)
+	got2 := state.Patches["other.go"]
+	if got2.ContentHash == "" {
+		t.Error("ContentHash should be populated for second store")
+	}
+	if got.ContentHash == got2.ContentHash {
+		t.Error("different patch content should produce different hashes")
+	}
+}
+
 func TestCacheStoreError(t *testing.T) {
 	t.Parallel()
 

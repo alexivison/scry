@@ -1993,3 +1993,84 @@ func TestRefreshNoResolverStillWorks(t *testing.T) {
 		t.Error("RefreshInFlight should be false after completion")
 	}
 }
+
+func TestRefreshPreservesScrollForUnchangedPatch(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithRefresh(sampleFiles())
+	// Enter patch pane, load patch, scroll down.
+	um := enterAndLoad(t, m)
+	if um.patchViewport == nil {
+		t.Fatal("expected patchViewport after enter")
+	}
+	// Scroll down 3 lines.
+	for i := 0; i < 3; i++ {
+		um.patchViewport.ScrollDown()
+	}
+	savedOffset := um.patchViewport.ScrollOffset
+	savedHunk := um.patchViewport.CurrentHunk
+	if savedOffset == 0 {
+		t.Fatal("scroll offset should be non-zero after scrolling")
+	}
+
+	// Refresh with same files — scroll should be preserved.
+	um.metadataLoader = &mockMetadataLoader{files: sampleFiles()}
+	result := refreshAndComplete(t, um)
+
+	if result.patchViewport == nil {
+		t.Fatal("patchViewport should survive refresh of unchanged file")
+	}
+	if result.patchViewport.ScrollOffset != savedOffset {
+		t.Errorf("ScrollOffset = %d, want %d (preserved)", result.patchViewport.ScrollOffset, savedOffset)
+	}
+	if result.patchViewport.CurrentHunk != savedHunk {
+		t.Errorf("CurrentHunk = %d, want %d (preserved)", result.patchViewport.CurrentHunk, savedHunk)
+	}
+}
+
+func TestRefreshResetsScrollForChangedPatchContent(t *testing.T) {
+	t.Parallel()
+
+	// Use a loader that returns different content on second load.
+	patch1 := samplePatch()
+	patch2 := model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{
+			{
+				Header: "func init()", OldStart: 1, OldLen: 3, NewStart: 1, NewLen: 4,
+				Lines: []model.DiffLine{
+					{Kind: model.LineContext, OldNo: intP(1), NewNo: intP(1), Text: "package main"},
+					{Kind: model.LineAdded, NewNo: intP(2), Text: `import "fmt"`},
+					{Kind: model.LineAdded, NewNo: intP(3), Text: `import "os"`},
+				},
+			},
+		},
+	}
+
+	// First: use patch1 loader.
+	loader1 := &mockPatchLoader{patches: map[string]model.FilePatch{"main.go": patch1}}
+	metaLoader := &mockMetadataLoader{files: sampleFiles()}
+	m := NewModel(sampleState(), WithPatchLoader(loader1), WithMetadataLoader(metaLoader))
+	m.width = 100
+	m.height = 30
+
+	// Enter, load, scroll.
+	um := enterAndLoad(t, m)
+	if um.patchViewport == nil {
+		t.Fatal("expected patchViewport after enter")
+	}
+	um.patchViewport.ScrollDown()
+	um.patchViewport.ScrollDown()
+
+	// Refresh returns same summary but loader returns different patch content.
+	loader2 := &mockPatchLoader{patches: map[string]model.FilePatch{"main.go": patch2}}
+	um.patchLoader = loader2
+	um.metadataLoader = &mockMetadataLoader{files: sampleFiles()}
+
+	result := refreshAndComplete(t, um)
+
+	// Viewport should reset because content changed (even though summary is same).
+	if result.patchViewport != nil && result.patchViewport.ScrollOffset != 0 {
+		t.Errorf("ScrollOffset = %d, want 0 (reset for changed content)", result.patchViewport.ScrollOffset)
+	}
+}
