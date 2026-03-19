@@ -24,8 +24,9 @@ func TestPrepareRefresh(t *testing.T) {
 	if state.CacheGeneration != 4 {
 		t.Errorf("CacheGeneration = %d, want 4", state.CacheGeneration)
 	}
-	if len(state.Patches) != 0 {
-		t.Errorf("Patches length = %d, want 0", len(state.Patches))
+	// Patches are preserved for selective invalidation (no blanket clear).
+	if len(state.Patches) != 2 {
+		t.Errorf("Patches length = %d, want 2 (preserved for selective invalidation)", len(state.Patches))
 	}
 	if !state.RefreshInFlight {
 		t.Error("RefreshInFlight should be true after PrepareRefresh")
@@ -141,5 +142,105 @@ func TestPrepareRefresh_PreservesOtherState(t *testing.T) {
 	}
 	if state.SelectedFile != 0 {
 		t.Error("SelectedFile should be preserved")
+	}
+}
+
+func TestSelectiveInvalidate(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		gen      int
+		patches  map[string]model.PatchLoadState
+		oldFiles []model.FileSummary
+		newFiles []model.FileSummary
+		wantHit  map[string]bool // path → should CacheLookup hit at gen?
+		wantGone []string        // paths that should be evicted entirely
+	}{
+		"unchanged file preserved": {
+			gen: 2,
+			patches: map[string]model.PatchLoadState{
+				"a.go": {Status: model.LoadLoaded, Generation: 1, Patch: ptrPatch(samplePatch())},
+			},
+			oldFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusModified}},
+			newFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusModified}},
+			wantHit:  map[string]bool{"a.go": true},
+		},
+		"changed file evicted": {
+			gen: 2,
+			patches: map[string]model.PatchLoadState{
+				"a.go": {Status: model.LoadLoaded, Generation: 1, Patch: ptrPatch(samplePatch())},
+			},
+			oldFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusModified}},
+			newFiles: []model.FileSummary{{Path: "a.go", Additions: 10, Deletions: 3, Status: model.StatusModified}},
+			wantHit:  map[string]bool{"a.go": false},
+		},
+		"removed file evicted": {
+			gen: 2,
+			patches: map[string]model.PatchLoadState{
+				"gone.go": {Status: model.LoadLoaded, Generation: 1, Patch: ptrPatch(samplePatch())},
+			},
+			oldFiles: []model.FileSummary{{Path: "gone.go", Additions: 1, Deletions: 0, Status: model.StatusAdded}},
+			newFiles: []model.FileSummary{},
+			wantGone: []string{"gone.go"},
+		},
+		"new file no cache entry": {
+			gen:      2,
+			patches:  map[string]model.PatchLoadState{},
+			oldFiles: []model.FileSummary{},
+			newFiles: []model.FileSummary{{Path: "new.go", Additions: 8, Status: model.StatusAdded}},
+			wantHit:  map[string]bool{"new.go": false},
+		},
+		"mixed scenario": {
+			gen: 2,
+			patches: map[string]model.PatchLoadState{
+				"unchanged.go": {Status: model.LoadLoaded, Generation: 1, Patch: ptrPatch(samplePatch())},
+				"changed.go":   {Status: model.LoadLoaded, Generation: 1, Patch: ptrPatch(samplePatch())},
+				"removed.go":   {Status: model.LoadLoaded, Generation: 1, Patch: ptrPatch(samplePatch())},
+			},
+			oldFiles: []model.FileSummary{
+				{Path: "unchanged.go", Additions: 5, Deletions: 0, Status: model.StatusModified},
+				{Path: "changed.go", Additions: 3, Deletions: 2, Status: model.StatusModified},
+				{Path: "removed.go", Additions: 1, Deletions: 0, Status: model.StatusAdded},
+			},
+			newFiles: []model.FileSummary{
+				{Path: "unchanged.go", Additions: 5, Deletions: 0, Status: model.StatusModified},
+				{Path: "changed.go", Additions: 10, Deletions: 5, Status: model.StatusModified},
+				{Path: "new.go", Additions: 8, Deletions: 0, Status: model.StatusAdded},
+			},
+			wantHit:  map[string]bool{"unchanged.go": true, "changed.go": false, "new.go": false},
+			wantGone: []string{"removed.go"},
+		},
+		"status change evicts": {
+			gen: 2,
+			patches: map[string]model.PatchLoadState{
+				"a.go": {Status: model.LoadLoaded, Generation: 1, Patch: ptrPatch(samplePatch())},
+			},
+			oldFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusModified}},
+			newFiles: []model.FileSummary{{Path: "a.go", Additions: 5, Deletions: 0, Status: model.StatusAdded}},
+			wantHit:  map[string]bool{"a.go": false},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := model.AppState{
+				CacheGeneration: tc.gen,
+				Patches:         tc.patches,
+			}
+			SelectiveInvalidate(&state, tc.oldFiles, tc.newFiles)
+
+			for path, wantHit := range tc.wantHit {
+				_, got := CacheLookup(state, path)
+				if got != wantHit {
+					t.Errorf("CacheLookup(%q) = %v, want %v", path, got, wantHit)
+				}
+			}
+			for _, path := range tc.wantGone {
+				if _, exists := state.Patches[path]; exists {
+					t.Errorf("Patches[%q] should be evicted", path)
+				}
+			}
+		})
 	}
 }
