@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/ui/theme"
@@ -24,7 +25,8 @@ type PatchViewport struct {
 	GutterVisible bool   // when false, suppress line number gutter (minimal mode)
 
 	// Pre-computed flat line list for rendering.
-	lines []patchLine
+	lines        []patchLine
+	gutterDigits int // width of each line-number column (min 4)
 }
 
 type lineType int
@@ -44,7 +46,29 @@ type patchLine struct {
 func NewPatchViewport(patch model.FilePatch) *PatchViewport {
 	vp := &PatchViewport{Patch: patch, GutterVisible: true}
 	vp.lines = vp.buildLines()
+	vp.gutterDigits = vp.computeGutterDigits()
 	return vp
+}
+
+// computeGutterDigits returns the number of digits needed for the largest
+// line number in the patch (minimum 4 for visual consistency).
+func (vp *PatchViewport) computeGutterDigits() int {
+	maxLine := 0
+	for _, h := range vp.Patch.Hunks {
+		for _, dl := range h.Lines {
+			if dl.OldNo != nil && *dl.OldNo > maxLine {
+				maxLine = *dl.OldNo
+			}
+			if dl.NewNo != nil && *dl.NewNo > maxLine {
+				maxLine = *dl.NewNo
+			}
+		}
+	}
+	digits := 4
+	for n := maxLine; n >= 10000; n /= 10 {
+		digits++
+	}
+	return digits
 }
 
 func (vp *PatchViewport) buildLines() []patchLine {
@@ -210,13 +234,13 @@ func (vp *PatchViewport) Render() string {
 			rendered = append(rendered, renderHunkSeparator(pl.header, vp.Width))
 		case lineTypeDiff:
 			isMatch := vp.SearchQuery != "" && absLine == vp.MatchLine
-			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch, vp.GutterVisible))
+			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch, vp.GutterVisible, vp.gutterDigits))
 		}
 	}
 	return strings.Join(rendered, "\n")
 }
 
-func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool, gutterVisible bool) string {
+func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool, gutterVisible bool, gutterDigits int) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
@@ -225,7 +249,7 @@ func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool
 	body := prefix + dl.Text
 
 	if gutterVisible {
-		gutter := formatGutter(dl.OldNo, dl.NewNo)
+		gutter := formatGutter(dl.OldNo, dl.NewNo, gutterDigits)
 		if width > 0 {
 			bodyBudget := width - lipgloss.Width(gutter)
 			if bodyBudget > 0 && lipgloss.Width(body) > bodyBudget {
@@ -294,14 +318,14 @@ func diffLineStyle(kind model.LineKind) (string, lipgloss.Style) {
 	}
 }
 
-func formatGutter(oldNo, newNo *int) string {
-	old := "    "
+func formatGutter(oldNo, newNo *int, digits int) string {
+	old := strings.Repeat(" ", digits)
 	if oldNo != nil {
-		old = fmt.Sprintf("%4d", *oldNo)
+		old = fmt.Sprintf("%*d", digits, *oldNo)
 	}
-	new := "    "
+	new := strings.Repeat(" ", digits)
 	if newNo != nil {
-		new = fmt.Sprintf("%4d", *newNo)
+		new = fmt.Sprintf("%*d", digits, *newNo)
 	}
 	return gutterStyle.Render(old+" "+new) + gutterStyle.Render(" │") + " "
 }
@@ -345,16 +369,9 @@ func (vp *PatchViewport) ScrollIndicatorPos() float64 {
 }
 
 // truncateToWidth trims a string to fit within a terminal-cell width budget.
+// Uses ANSI-aware truncation to preserve escape sequences.
 func truncateToWidth(s string, maxWidth int) string {
-	w := 0
-	for i, r := range s {
-		rw := lipgloss.Width(string(r))
-		if w+rw > maxWidth {
-			return s[:i]
-		}
-		w += rw
-	}
-	return s
+	return ansi.Truncate(s, maxWidth, "")
 }
 
 // TotalLines returns the total number of rendered lines (headers + diff lines).
