@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -99,6 +100,70 @@ func TestDashboardPreview_RenderInSplitView(t *testing.T) {
 	// Preview should show file names and +/- counts.
 	if !strings.Contains(output, "main.go") {
 		t.Error("preview should show main.go")
+	}
+}
+
+// Bug #8b: handlePreviewLoaded should check snapshot key, not just path.
+func TestDashboardPreview_StaleSnapshotDiscarded(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	m := NewModel(state, WithPreviewLoader(&mockPreviewLoader{files: previewFiles()}))
+	m.width = 120
+	m.height = 30
+
+	// The worktree's current snapshot.
+	wt := state.DashboardState.Worktrees[0]
+	currentSnap := WorktreeSnapshotKey(wt)
+
+	// Simulate a stale PreviewLoadedMsg with an outdated snapshot key
+	// (e.g., worktree state changed between request and response).
+	staleSnap := currentSnap + "|stale"
+	staleMsg := PreviewLoadedMsg{
+		Path:  wt.Path,
+		Snap:  staleSnap,
+		Files: previewFiles(),
+	}
+
+	updated, _ := m.handlePreviewLoaded(staleMsg)
+	um := updated.(Model)
+
+	// Stale snapshot should NOT be applied to the current view.
+	if um.State.DashboardState.PreviewFiles != nil {
+		t.Error("stale snapshot preview should not be applied to current view")
+	}
+}
+
+// Bug #10: PreviewCache should evict entries when exceeding max size.
+func TestDashboardPreview_CacheEviction(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	m := NewModel(state, WithPreviewLoader(&mockPreviewLoader{files: previewFiles()}))
+	m.width = 120
+	m.height = 30
+
+	// Fill cache beyond the max cap (50).
+	cache := make(map[string]model.PreviewEntry)
+	for i := 0; i < 60; i++ {
+		key := fmt.Sprintf("evict-test-%d", i)
+		cache[key] = model.PreviewEntry{Files: previewFiles()}
+	}
+	m.State.DashboardState.PreviewCache = cache
+
+	// Add one more entry via handlePreviewLoaded.
+	wt := state.DashboardState.Worktrees[0]
+	snap := WorktreeSnapshotKey(wt)
+	msg := PreviewLoadedMsg{Path: wt.Path, Snap: snap, Files: previewFiles()}
+	updated, _ := m.handlePreviewLoaded(msg)
+	um := updated.(Model)
+
+	if len(um.State.DashboardState.PreviewCache) > maxPreviewCacheSize {
+		t.Errorf("PreviewCache size = %d, want <= %d", len(um.State.DashboardState.PreviewCache), maxPreviewCacheSize)
+	}
+	// Verify the new entry survived eviction.
+	if _, ok := um.State.DashboardState.PreviewCache[snap]; !ok {
+		t.Error("new entry should be present in cache after eviction")
 	}
 }
 

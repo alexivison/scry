@@ -85,6 +85,7 @@ type FingerprintMsg struct {
 	Fingerprint string
 	Err         error
 	FromFS      bool // true when triggered by fsnotify (don't reschedule polling tick)
+	Gen         int  // monotonic generation; stale results (Gen != current) are discarded
 }
 
 // --- Bubble Tea commands -------------------------------------------------

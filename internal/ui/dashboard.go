@@ -14,6 +14,9 @@ import (
 	"github.com/alexivison/scry/internal/watch"
 )
 
+// maxPreviewCacheSize caps the number of entries in the preview cache.
+const maxPreviewCacheSize = 50
+
 // WorktreeLoader loads the worktree list with dirty state and commit info.
 type WorktreeLoader interface {
 	LoadWorktrees(ctx context.Context) ([]model.WorktreeInfo, error)
@@ -301,6 +304,9 @@ func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneFiles
 		m.State.Files = nil
 		m.State.SelectedFile = -1
+		// Clear freshness state so stale generations from a previous worktree don't leak.
+		// FlaggedFiles are session-scoped bookmarks — intentionally preserved across drill-downs.
+		m.State.FileChangeGen = make(map[string]int)
 	}
 
 	if m.drillDownProvider == nil {
@@ -444,11 +450,18 @@ func (m Model) handlePreviewLoaded(msg PreviewLoadedMsg) (tea.Model, tea.Cmd) {
 	if ds.PreviewCache == nil {
 		ds.PreviewCache = make(map[string]model.PreviewEntry)
 	}
+	// Evict excess entries when cache exceeds cap.
+	if len(ds.PreviewCache) >= maxPreviewCacheSize {
+		// Simple eviction: clear the entire cache. A full LRU is overkill
+		// for a preview cache — the working set rebuilds quickly.
+		ds.PreviewCache = make(map[string]model.PreviewEntry)
+	}
 	ds.PreviewCache[msg.Snap] = model.PreviewEntry{Files: files}
 
-	// Apply to current view if the selected worktree still matches.
+	// Apply to current view only if the selected worktree's snapshot still matches.
 	if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
-		if ds.Worktrees[ds.SelectedIdx].Path == msg.Path {
+		currentSnap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx])
+		if msg.Snap == currentSnap {
 			ds.PreviewFiles = files
 		}
 	}

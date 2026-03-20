@@ -380,6 +380,102 @@ func TestWatchBootstrapWiresDependencies(t *testing.T) {
 	}
 }
 
+// TestWatchStaleFingerprintDiscarded verifies that a FingerprintMsg from an
+// older generation (superseded by a newer check) is discarded, preventing
+// LastFingerprint from being rewound to a stale value.
+func TestWatchStaleFingerprintDiscarded(t *testing.T) {
+	t.Parallel()
+
+	fp := &mockFingerprinter{}
+	state := watchState()
+	state.LastFingerprint = "old:fp"
+	metaLoader := &mockMetadataLoader{files: sampleFiles()}
+	m := NewModel(state, WithWatch(fp, "origin/main"), WithMetadataLoader(metaLoader))
+	m.width = 100
+	m.height = 30
+
+	// Dispatch first check via tick — this bumps fingerprintGen and captures
+	// the current gen in the returned FingerprintMsg.
+	updated1, _ := m.Update(watch.TickMsg{At: time.Now()})
+	m1 := updated1.(Model)
+
+	// Dispatch second check via fsnotify — bumps gen again, superseding the first.
+	updated2, _ := m1.Update(watch.FSEventMsg{})
+	m2 := updated2.(Model)
+
+	// Simulate the stale result from the FIRST check arriving after the second
+	// was dispatched. Use Gen=1 (the first check's generation) while m2 expects Gen=2.
+	staleMsg := watch.FingerprintMsg{Fingerprint: "stale:fp", Gen: m1.fingerprintGen}
+	updated3, _ := m2.Update(staleMsg)
+	um := updated3.(Model)
+
+	// The stale result should be discarded — LastFingerprint unchanged.
+	if um.State.LastFingerprint != "old:fp" {
+		t.Errorf("LastFingerprint = %q, want %q (stale result should be discarded)", um.State.LastFingerprint, "old:fp")
+	}
+	if um.State.RefreshInFlight {
+		t.Error("stale fingerprint should not trigger refresh")
+	}
+}
+
+// TestWatchFingerprintGenMatchAccepted verifies that a FingerprintMsg with
+// the current generation is accepted normally.
+func TestWatchFingerprintGenMatchAccepted(t *testing.T) {
+	t.Parallel()
+
+	fp := &mockFingerprinter{}
+	state := watchState()
+	state.LastFingerprint = "old:fp"
+	metaLoader := &mockMetadataLoader{files: sampleFiles()}
+	m := NewModel(state, WithWatch(fp, "origin/main"), WithMetadataLoader(metaLoader))
+	m.width = 100
+	m.height = 30
+
+	// Dispatch a single check.
+	updated1, _ := m.Update(watch.TickMsg{At: time.Now()})
+	m1 := updated1.(Model)
+
+	// Result arrives with matching gen and a changed fingerprint.
+	freshMsg := watch.FingerprintMsg{Fingerprint: "new:fp", Gen: m1.fingerprintGen}
+	updated2, _ := m1.Update(freshMsg)
+	um := updated2.(Model)
+
+	if um.State.LastFingerprint != "new:fp" {
+		t.Errorf("LastFingerprint = %q, want %q", um.State.LastFingerprint, "new:fp")
+	}
+	if !um.State.RefreshInFlight {
+		t.Error("fresh changed fingerprint should trigger refresh")
+	}
+}
+
+// TestWatchStalePollReschedulestick verifies that discarding a stale polling
+// result still reschedules the tick so the polling chain doesn't die.
+func TestWatchStalePollReschedulestick(t *testing.T) {
+	t.Parallel()
+
+	fp := &mockFingerprinter{}
+	state := watchState()
+	state.LastFingerprint = "old:fp"
+	m := NewModel(state, WithWatch(fp, "origin/main"))
+	m.width = 100
+	m.height = 30
+
+	// Dispatch first check (gen=1), then second (gen=2).
+	updated1, _ := m.Update(watch.TickMsg{At: time.Now()})
+	m1 := updated1.(Model)
+	updated2, _ := m1.Update(watch.FSEventMsg{})
+	m2 := updated2.(Model)
+
+	// Stale polling result (gen=1, FromFS=false) arrives.
+	staleMsg := watch.FingerprintMsg{Fingerprint: "stale:fp", Gen: m1.fingerprintGen, FromFS: false}
+	_, cmd := m2.Update(staleMsg)
+
+	// Must still reschedule tick to keep polling alive.
+	if cmd == nil {
+		t.Error("stale polling result should still reschedule tick")
+	}
+}
+
 func TestWatchBootstrapNotWiredWhenDisabled(t *testing.T) {
 	t.Parallel()
 
