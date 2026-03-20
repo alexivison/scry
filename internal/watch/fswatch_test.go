@@ -1,6 +1,8 @@
 package watch
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -80,6 +82,81 @@ func TestDebouncer_StopPreventsCallback(t *testing.T) {
 		t.Error("callback should not fire after Stop")
 	case <-time.After(250 * time.Millisecond):
 		// good
+	}
+}
+
+func TestFSWatcher_SubdirectoryChanges(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sub := filepath.Join(root, "pkg", "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(chan struct{}, 1)
+	w := NewFSWatcher(root, "", func() { got <- struct{}{} })
+	if w == nil {
+		t.Fatal("expected non-nil watcher for valid temp dir")
+	}
+	defer w.Close()
+
+	// Small delay to let fsnotify fully register watches.
+	time.Sleep(50 * time.Millisecond)
+
+	// Write a file in a subdirectory — should trigger the callback.
+	if err := os.WriteFile(filepath.Join(sub, "change.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-got:
+		// success — subdirectory change detected
+	case <-time.After(2 * time.Second):
+		t.Fatal("FSWatcher did not detect file change in subdirectory")
+	}
+}
+
+func TestFSWatcher_NewDirAfterStart(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	got := make(chan struct{}, 1)
+	w := NewFSWatcher(root, "", func() { got <- struct{}{} })
+	if w == nil {
+		t.Fatal("expected non-nil watcher for valid temp dir")
+	}
+	defer w.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create a new subdirectory after the watcher started.
+	sub := filepath.Join(root, "newpkg")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain the create-dir event so we test the file write separately.
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("FSWatcher did not detect new directory creation")
+	}
+
+	// Small delay to let the auto-watch register the new directory.
+	time.Sleep(50 * time.Millisecond)
+
+	// Write a file inside the dynamically created directory.
+	if err := os.WriteFile(filepath.Join(sub, "file.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-got:
+		// success — change in dynamically created directory detected
+	case <-time.After(2 * time.Second):
+		t.Fatal("FSWatcher did not detect file change in dynamically created directory")
 	}
 }
 
