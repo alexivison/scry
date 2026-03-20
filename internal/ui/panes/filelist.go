@@ -56,9 +56,22 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 		o = opts[0]
 	}
 
-	// When grouping, sort files by directory for proper grouping.
+	// When grouping, sort files by directory and remap selectedIdx
+	// so the cursor follows the originally-selected file.
 	if o.GroupByDirectory {
+		var selectedPath string
+		if selectedIdx >= 0 && selectedIdx < len(files) {
+			selectedPath = files[selectedIdx].Path
+		}
 		files = sortByDirectory(files)
+		if selectedPath != "" {
+			for i, f := range files {
+				if f.Path == selectedPath {
+					selectedIdx = i
+					break
+				}
+			}
+		}
 	}
 
 	// Ensure selected item is visible.

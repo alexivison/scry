@@ -105,5 +105,45 @@ func TestGroupedFileList_SelectionIndexMapsCorrectly(t *testing.T) {
 	}
 }
 
+func TestRenderFileListGrouped_SelectedIdxMatchesFile(t *testing.T) {
+	t.Parallel()
+
+	// Files deliberately in unsorted order: root file first, then nested dirs.
+	// After sortByDirectory, order becomes: cmd/main.go, internal/app.go, README.md.
+	// If selectedIdx=2 targets README.md (original idx 2=internal/app.go),
+	// the cursor must land on the file at sorted position 2 (README.md),
+	// not the original position 2 (internal/app.go).
+	files := []model.FileSummary{
+		{Path: "README.md", Status: model.StatusModified, Additions: 1, Deletions: 0},
+		{Path: "cmd/main.go", Status: model.StatusModified, Additions: 5, Deletions: 2},
+		{Path: "internal/app.go", Status: model.StatusModified, Additions: 3, Deletions: 1},
+	}
+	// Select index 0 — in the original slice that's README.md.
+	// After sorting: [cmd/main.go, internal/app.go, README.md].
+	// The cursor on index 0 should highlight cmd/main.go (sorted[0]),
+	// BUT the caller selected files[0] = README.md.
+	// This mismatch is the bug: rendered cursor is on cmd/main.go
+	// while the caller intended README.md.
+	opts := FileListOpts{GroupByDirectory: true}
+	output, _ := RenderFileList(files, 0, 0, 60, 20, true, opts)
+
+	// The cursor line (containing ">") should show README.md (what index 0 IS),
+	// not cmd/main.go (what sorted position 0 happens to be).
+	lines := strings.Split(output, "\n")
+	cursorFound := false
+	for _, line := range lines {
+		if strings.Contains(line, ">") {
+			cursorFound = true
+			if !strings.Contains(line, "README.md") {
+				t.Errorf("cursor should be on README.md (files[0]), got: %q", line)
+			}
+			break
+		}
+	}
+	if !cursorFound {
+		t.Error("no cursor (>) found in output")
+	}
+}
+
 // Ensure we can use FreshnessTier values in tests.
 var _ = review.FreshnessHot
