@@ -101,8 +101,8 @@ func TestFSWatcher_SubdirectoryChanges(t *testing.T) {
 	}
 	defer w.Close()
 
-	// Small delay to let fsnotify fully register watches.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for async directory walk to complete before writing.
+	<-w.ready
 
 	// Write a file in a subdirectory — should trigger the callback.
 	if err := os.WriteFile(filepath.Join(sub, "change.txt"), []byte("hello"), 0o644); err != nil {
@@ -129,7 +129,7 @@ func TestFSWatcher_NewDirAfterStart(t *testing.T) {
 	}
 	defer w.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	<-w.ready
 
 	// Create a new subdirectory after the watcher started.
 	sub := filepath.Join(root, "newpkg")

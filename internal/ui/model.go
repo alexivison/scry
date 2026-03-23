@@ -1558,6 +1558,8 @@ func (m Model) overlayHelp(base string) string {
 	helpBoxLines := strings.Split(helpBox, "\n")
 
 	// Dim the base content and overlay help centered.
+	// Strip ANSI from base lines so dimStyle actually applies (inner escape codes
+	// would override the outer Faint style otherwise).
 	baseLines := strings.Split(base, "\n")
 	dimStyle := lipgloss.NewStyle().Faint(true)
 	startRow := (contentH - overlayH) / 2
@@ -1571,38 +1573,29 @@ func (m Model) overlayHelp(base string) string {
 
 	result := make([]string, contentH)
 	for i := 0; i < contentH; i++ {
-		baseLine := ""
+		plain := ""
 		if i < len(baseLines) {
-			baseLine = baseLines[i]
+			plain = ansi.Strip(baseLines[i])
 		}
 		helpIdx := i - startRow
 		if helpIdx >= 0 && helpIdx < len(helpBoxLines) {
 			// Overlay row: dimmed left + help box + dimmed right.
-			left := dimStyle.Render(padOrTruncateStr(baseLine, startCol))
+			left := dimStyle.Render(padOrTruncateStr(plain, startCol))
 			rightStart := startCol + overlayW
 			rightBg := ""
 			if rightStart < m.width {
-				rightBg = dimStyle.Render(padOrTruncateStr(suffixFrom(baseLine, rightStart), m.width-rightStart))
+				rightPart := ""
+				if lipgloss.Width(plain) > rightStart {
+					rightPart = ansi.TruncateLeft(plain, rightStart, "")
+				}
+				rightBg = dimStyle.Render(padOrTruncateStr(rightPart, m.width-rightStart))
 			}
 			result[i] = left + helpBoxLines[helpIdx] + rightBg
 		} else {
-			result[i] = dimStyle.Render(padOrTruncateStr(baseLine, m.width))
+			result[i] = dimStyle.Render(padOrTruncateStr(plain, m.width))
 		}
 	}
 	return strings.Join(result, "\n")
-}
-
-// suffixFrom extracts the visual portion of a string starting at column startCol.
-func suffixFrom(s string, startCol int) string {
-	w := 0
-	for i, r := range s {
-		rw := lipgloss.Width(string(r))
-		if w >= startCol {
-			return s[i:]
-		}
-		w += rw
-	}
-	return ""
 }
 
 // padOrTruncateStr pads or truncates a string to exactly the given width.
@@ -1770,7 +1763,6 @@ func truncateToWidth(s string, maxWidth int) string {
 // Styles — kept minimal; will degrade gracefully when color is unavailable.
 var (
 	statusBarStyle = lipgloss.NewStyle().
-			Background(theme.StatusBg).
 			Foreground(theme.StatusFg)
 	searchNotFoundStyle = lipgloss.NewStyle().
 				Background(theme.Error).

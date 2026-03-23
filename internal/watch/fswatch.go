@@ -57,29 +57,29 @@ type FSWatcher struct {
 	watcher   *fsnotify.Watcher
 	debouncer *Debouncer
 	done      chan struct{}
+	ready     chan struct{} // closed when the async directory walk completes
 }
 
 // NewFSWatcher creates an fsnotify watcher on the repo root and git directory.
 // gitDir should be the resolved per-worktree git dir (from RepoContext.GitDir).
 // Returns nil if the watcher cannot be initialized (caller falls back to polling).
+// The recursive directory walk runs asynchronously to avoid blocking startup.
 func NewFSWatcher(repoRoot, gitDir string, onRefresh func()) *FSWatcher {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil
 	}
 
-	// Recursively watch all directories under repo root.
-	// fsnotify doesn't recurse, so we walk the tree ourselves.
-	if err := addDirsRecursive(watcher, repoRoot); err != nil {
+	// Watch root immediately so top-level changes are caught right away.
+	if err := watcher.Add(repoRoot); err != nil {
 		watcher.Close()
 		return nil
 	}
 
 	// Watch the resolved git directory for ref changes (commits, checkouts, fetches).
-	// For linked worktrees this differs from repoRoot/.git.
 	if gitDir != "" {
 		if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
-			watcher.Add(gitDir) // best-effort, ignore error
+			watcher.Add(gitDir) // best-effort
 		}
 	}
 
@@ -88,7 +88,16 @@ func NewFSWatcher(repoRoot, gitDir string, onRefresh func()) *FSWatcher {
 		watcher:   watcher,
 		debouncer: debouncer,
 		done:      make(chan struct{}),
+		ready:     make(chan struct{}),
 	}
+
+	// Walk subdirectories in the background so the TUI starts instantly.
+	// After the walk, trigger a refresh to catch any events missed during the window.
+	go func() {
+		addSubdirsRecursive(watcher, repoRoot)
+		close(fw.ready)
+		fw.debouncer.Trigger()
+	}()
 
 	go fw.loop()
 	return fw
@@ -103,14 +112,11 @@ func skipDir(name string) bool {
 	return strings.HasPrefix(name, ".")
 }
 
-// addDirsRecursive walks root and adds every directory to the watcher,
-// skipping hidden dirs and common heavy directories.
-func addDirsRecursive(w *fsnotify.Watcher, root string) error {
-	// Root must succeed — caller falls back to polling on error.
-	if err := w.Add(root); err != nil {
-		return err
-	}
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// addSubdirsRecursive walks root and adds every subdirectory to the watcher,
+// skipping hidden dirs and common heavy directories. Root itself is assumed
+// to be already watched.
+func addSubdirsRecursive(w *fsnotify.Watcher, root string) {
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // best-effort: skip unreadable entries
 		}
@@ -136,7 +142,8 @@ func (fw *FSWatcher) loop() {
 			// Auto-watch newly created directories so we pick up future changes.
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Lstat(event.Name); err == nil && info.IsDir() && !skipDir(filepath.Base(event.Name)) {
-					addDirsRecursive(fw.watcher, event.Name)
+					fw.watcher.Add(event.Name)
+					addSubdirsRecursive(fw.watcher, event.Name)
 				}
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) ||
@@ -153,8 +160,10 @@ func (fw *FSWatcher) loop() {
 }
 
 // Close shuts down the watcher and debouncer. Safe to call multiple times.
+// Waits for both the background walk and event loop goroutines to finish.
 func (fw *FSWatcher) Close() {
 	fw.debouncer.Stop()
 	fw.watcher.Close()
+	<-fw.ready
 	<-fw.done
 }
