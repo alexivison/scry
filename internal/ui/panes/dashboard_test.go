@@ -161,18 +161,17 @@ func TestRenderDashboardShowsSingularFile(t *testing.T) {
 	}
 }
 
-func TestRenderDashboardShowsRelativeTime(t *testing.T) {
+func TestRenderDashboardShowsStaleness(t *testing.T) {
 	t.Parallel()
 
 	wts := []model.WorktreeInfo{
 		{Path: "/p", Branch: "main", CommitHash: "abc", Subject: "init", Dirty: true,
-			ChangedFiles: 3, LastActivityAt: time.Now().Add(-30 * time.Second)},
+			ChangedFiles: 3, HeadCommittedAt: time.Now().Add(-2 * time.Hour)},
 	}
 	output := RenderDashboard(wts, 0, 0, 120, 10)
 
-	// Use loose assertion to avoid clock-drift flakiness.
-	if !strings.Contains(output, "s ago") {
-		t.Errorf("expected relative time with 's ago' in output:\n%s", output)
+	if !strings.Contains(output, "2h") {
+		t.Errorf("expected staleness label '2h' in output:\n%s", output)
 	}
 }
 
@@ -206,6 +205,38 @@ func TestRelativeTime(t *testing.T) {
 				}
 			} else if got != tc.want {
 				t.Errorf("RelativeTime = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStalenessBadge(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		age  time.Duration
+		want string
+	}{
+		"hours":      {age: 6 * time.Hour, want: "6h"},
+		"days":       {age: 3 * 24 * time.Hour, want: "3d"},
+		"one week":   {age: 7 * 24 * time.Hour, want: "1w"},
+		"two weeks":  {age: 14 * 24 * time.Hour, want: "2w"},
+		"months":     {age: 90 * 24 * time.Hour, want: "3mo"},
+		"sub-hour":   {age: 30 * time.Minute, want: "30m"},
+		"future":     {age: -5 * time.Minute, want: "0m"},
+		"zero":       {age: 0, want: "--"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var at time.Time
+			if tc.age != 0 {
+				at = time.Now().Add(-tc.age)
+			}
+			got, _ := StalenessBadge(at)
+			if got != tc.want {
+				t.Errorf("StalenessBadge label = %q, want %q", got, tc.want)
 			}
 		})
 	}

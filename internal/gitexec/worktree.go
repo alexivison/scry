@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // WorktreeEntry represents a single worktree from `git worktree list --porcelain`.
@@ -76,17 +77,35 @@ func WorktreeRemove(ctx context.Context, r GitRunner, path string, force bool) e
 	return nil
 }
 
-// CommitSubject returns the short hash and subject of a commit.
-func CommitSubject(ctx context.Context, r GitRunner, worktreePath string) (hash, subject string, err error) {
-	out, err := r.RunGit(ctx, "-C", worktreePath, "log", "-1", "--format=%h %s")
+// CommitMetaResult holds parsed commit metadata from a single git log call.
+type CommitMetaResult struct {
+	Hash       string
+	Subject    string
+	CommitDate time.Time
+}
+
+// CommitMeta returns the short hash, committer date, and subject of HEAD in a worktree.
+// Uses committer date (%cI) rather than author date (%aI) so rebased/cherry-picked
+// branches reflect when they were last updated, not when the code was originally authored.
+func CommitMeta(ctx context.Context, r GitRunner, worktreePath string) (CommitMetaResult, error) {
+	out, err := r.RunGit(ctx, "-C", worktreePath, "log", "-1", "--format=%h%x00%cI%x00%s")
 	if err != nil {
-		return "", "", fmt.Errorf("commit subject for %s: %w", worktreePath, err)
+		return CommitMetaResult{}, fmt.Errorf("commit meta for %s: %w", worktreePath, err)
 	}
 	line := strings.TrimSpace(out)
-	if idx := strings.IndexByte(line, ' '); idx >= 0 {
-		return line[:idx], line[idx+1:], nil
+	parts := strings.SplitN(line, "\x00", 3)
+	if len(parts) < 3 {
+		return CommitMetaResult{}, fmt.Errorf("commit meta for %s: unexpected format %q", worktreePath, line)
 	}
-	return line, "", nil
+	commitDate, err := time.Parse(time.RFC3339, parts[1])
+	if err != nil {
+		return CommitMetaResult{}, fmt.Errorf("commit meta for %s: parse date %q: %w", worktreePath, parts[1], err)
+	}
+	return CommitMetaResult{
+		Hash:       parts[0],
+		Subject:    parts[2],
+		CommitDate: commitDate,
+	}, nil
 }
 
 // StatusCount returns the number of changed files in a worktree via `git status --porcelain`.

@@ -17,6 +17,7 @@ var (
 	dirtyStyle        = lipgloss.NewStyle().Foreground(theme.Dirty)
 	dashSelectedStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
 	hashStyle         = lipgloss.NewStyle().Foreground(theme.Muted)
+	staleStyle        = lipgloss.NewStyle().Foreground(theme.Error)
 )
 
 // RenderDashboard renders the worktree dashboard list constrained to the given dimensions.
@@ -72,13 +73,11 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle
 	basename := filepath.Base(wt.Path)
 	commitInfo := fmt.Sprintf("%s %s", hashStyle.Render(wt.CommitHash), wt.Subject)
 
-	// Activity timestamp.
-	activity := RelativeTime(wt.LastActivityAt)
-	if activity != "" {
-		activity = " " + hashStyle.Render(activity)
-	}
+	// Staleness badge from git commit age (always rendered, "--" for bare/unknown).
+	label, style := StalenessBadge(wt.HeadCommittedAt)
+	styledStaleness := " " + style.Render(label)
 
-	// Layout: [prefix][status][count] [branch]  [basename] [activity]  [hash subject]
+	// Layout: [prefix][status][count] [branch]  [basename] [staleness]  [hash subject]
 	branchWidth := 20
 	basenameWidth := 20
 	branch := wt.Branch
@@ -86,7 +85,7 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle
 		branch = truncatePath(branch, branchWidth)
 	}
 
-	line := fmt.Sprintf("%s%s%s %-*s  %-*s%s  %s", prefix, status, countStr, branchWidth, branch, basenameWidth, basename, activity, commitInfo)
+	line := fmt.Sprintf("%s%s%s %-*s  %-*s%s  %s", prefix, status, countStr, branchWidth, branch, basenameWidth, basename, styledStaleness, commitInfo)
 
 	if idx == selectedIdx {
 		return dashSelectedStyle.Inherit(truncStyle).Render(line)
@@ -110,5 +109,40 @@ func RelativeTime(t time.Time) string {
 		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	default:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+}
+
+// StalenessBadge returns both label and style for a commit-age badge.
+// Computes time.Since once to avoid boundary divergence between label and color.
+func StalenessBadge(t time.Time) (string, lipgloss.Style) {
+	if t.IsZero() {
+		return "--", hashStyle
+	}
+	d := time.Since(t)
+	if d < 0 {
+		return "0m", cleanStyle
+	}
+
+	var label string
+	switch {
+	case d < time.Hour:
+		label = fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		label = fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		label = fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 60*24*time.Hour:
+		label = fmt.Sprintf("%dw", int(d.Hours()/(24*7)))
+	default:
+		label = fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
+	}
+
+	switch {
+	case d < 3*24*time.Hour:
+		return label, cleanStyle
+	case d < 7*24*time.Hour:
+		return label, dirtyStyle
+	default:
+		return label, staleStyle
 	}
 }

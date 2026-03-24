@@ -11,7 +11,8 @@ type WorktreeInfo struct {
 	Dirty          bool      // true if worktree has uncommitted changes
 	Bare           bool      // true if bare worktree
 	ChangedFiles   int       // number of changed files from git status
-	LastActivityAt time.Time // updated when snapshot state changes (dirty, count, commit)
+	HeadCommittedAt time.Time // committer date of HEAD commit (git-based staleness)
+	LastActivityAt  time.Time // updated when snapshot state changes (dirty, count, commit)
 }
 
 // PreviewEntry holds cached preview data for a worktree.
