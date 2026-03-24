@@ -11,7 +11,7 @@ import (
 func sampleWorktrees() []model.WorktreeInfo {
 	return []model.WorktreeInfo{
 		{Path: "/home/user/project", Branch: "main", CommitHash: "abc1234", Subject: "initial commit", Dirty: false},
-		{Path: "/home/user/project-feature", Branch: "feature", CommitHash: "def5678", Subject: "add feature", Dirty: true},
+		{Path: "/home/user/project-feature", Branch: "feature", CommitHash: "def5678", Subject: "add feature", Dirty: true, ChangedFiles: 4},
 		{Path: "/home/user/project-bugfix", Branch: "bugfix", CommitHash: "ghi9012", Subject: "fix bug", Dirty: false},
 	}
 }
@@ -54,13 +54,12 @@ func TestRenderDashboard(t *testing.T) {
 			height:    10,
 			checks: func(t *testing.T, output string) {
 				t.Helper()
-				// The dirty worktree (feature, index 1) should contain the dot indicator.
 				if !strings.Contains(output, "●") {
 					t.Error("missing dirty/clean indicator dot")
 				}
 			},
 		},
-		"shows commit info": {
+		"shows commit info on second line": {
 			worktrees: sampleWorktrees(),
 			selected:  0,
 			scroll:    0,
@@ -76,7 +75,22 @@ func TestRenderDashboard(t *testing.T) {
 				}
 			},
 		},
-		"highlights selected row": {
+		"two lines per entry": {
+			worktrees: sampleWorktrees(),
+			selected:  0,
+			scroll:    0,
+			width:     80,
+			height:    10,
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				lines := strings.Split(output, "\n")
+				// 3 worktrees × 2 lines = 6 lines
+				if len(lines) != 6 {
+					t.Errorf("expected 6 lines (3 entries × 2), got %d", len(lines))
+				}
+			},
+		},
+		"selected entry uses accent color not reverse video": {
 			worktrees: sampleWorktrees(),
 			selected:  1,
 			scroll:    0,
@@ -85,12 +99,73 @@ func TestRenderDashboard(t *testing.T) {
 			checks: func(t *testing.T, output string) {
 				t.Helper()
 				lines := strings.Split(output, "\n")
-				if len(lines) < 2 {
-					t.Fatal("expected at least 2 lines")
+				// Selected entry at index 1 starts at line 2 (0-indexed)
+				if len(lines) < 4 {
+					t.Fatal("expected at least 4 lines")
 				}
-				// The selected row (index 1) should have a selection indicator
-				if !strings.Contains(lines[1], ">") && !strings.Contains(lines[1], "feature") {
-					t.Error("selected row not highlighted")
+				// Line 2 should have the > prefix and branch name
+				if !strings.Contains(lines[2], ">") {
+					t.Error("selected primary line missing '>' prefix")
+				}
+				if !strings.Contains(lines[2], "feature") {
+					t.Error("selected primary line missing branch name")
+				}
+				// Should NOT contain reverse video escape (ESC[7m)
+				if strings.Contains(lines[2], "\x1b[7m") {
+					t.Error("selected line should not use reverse video")
+				}
+			},
+		},
+		"file count on primary line": {
+			worktrees: sampleWorktrees(),
+			selected:  0,
+			scroll:    0,
+			width:     80,
+			height:    10,
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				lines := strings.Split(output, "\n")
+				// Feature worktree (index 1) primary line is lines[2]
+				if len(lines) < 3 {
+					t.Fatal("expected at least 3 lines")
+				}
+				if !strings.Contains(lines[2], "4 files") {
+					t.Errorf("file count should appear on primary line of dirty worktree, got: %q", lines[2])
+				}
+			},
+		},
+		"height limits visible entries": {
+			worktrees: sampleWorktrees(),
+			selected:  0,
+			scroll:    0,
+			width:     80,
+			height:    4, // room for 2 entries (4 lines / 2 lines per entry)
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				lines := strings.Split(output, "\n")
+				if len(lines) > 4 {
+					t.Errorf("expected at most 4 lines (2 entries), got %d", len(lines))
+				}
+				// Third worktree should not be visible
+				if strings.Contains(output, "bugfix") {
+					t.Error("third worktree should be clipped by height")
+				}
+			},
+		},
+		"scrolled view": {
+			worktrees: sampleWorktrees(),
+			selected:  2,
+			scroll:    1,
+			width:     80,
+			height:    4, // room for 2 entries
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				// With scroll=1 and height=4 (2 entries), should see worktrees[1] and [2]
+				if strings.Contains(output, "main") && !strings.Contains(output, "feature") {
+					t.Error("scroll not applied: main visible but feature not")
+				}
+				if !strings.Contains(output, "bugfix") {
+					t.Error("bugfix should be visible in scrolled view")
 				}
 			},
 		},
@@ -107,17 +182,25 @@ func TestRenderDashboard(t *testing.T) {
 				}
 			},
 		},
-		"scrolled view": {
-			worktrees: sampleWorktrees(),
-			selected:  2,
-			scroll:    1,
-			width:     80,
-			height:    2,
+		"activity time on secondary line": {
+			worktrees: func() []model.WorktreeInfo {
+				wts := sampleWorktrees()
+				wts[0].LastActivityAt = time.Now().Add(-30 * time.Second)
+				return wts
+			}(),
+			selected: 0,
+			scroll:   0,
+			width:    80,
+			height:   10,
 			checks: func(t *testing.T, output string) {
 				t.Helper()
-				// With scroll=1 and height=2, we should see worktrees[1] and [2]
-				if strings.Contains(output, "main") && !strings.Contains(output, "feature") {
-					t.Error("scroll not applied: main visible but feature not")
+				lines := strings.Split(output, "\n")
+				if len(lines) < 2 {
+					t.Fatal("expected at least 2 lines")
+				}
+				// Secondary line (index 1) should have activity time
+				if !strings.Contains(lines[1], "s ago") {
+					t.Errorf("expected relative time on secondary line, got: %q", lines[1])
 				}
 			},
 		},
@@ -161,6 +244,32 @@ func TestRenderDashboardShowsSingularFile(t *testing.T) {
 	}
 }
 
+func TestRenderDashboardBareWorktreeFallsBackToBasename(t *testing.T) {
+	t.Parallel()
+
+	wts := []model.WorktreeInfo{
+		{Path: "/home/user/project", Branch: "", Bare: true, CommitHash: "abc1234", Subject: "init"},
+	}
+	output := RenderDashboard(wts, 0, 0, 80, 10)
+
+	if !strings.Contains(output, "project") {
+		t.Errorf("bare worktree with empty branch should show path basename, got:\n%s", output)
+	}
+}
+
+func TestRenderDashboardDetachedWorktreeFallsBackToBasename(t *testing.T) {
+	t.Parallel()
+
+	wts := []model.WorktreeInfo{
+		{Path: "/home/user/detached-wt", Branch: "", CommitHash: "def5678", Subject: "detached HEAD"},
+	}
+	output := RenderDashboard(wts, 0, 0, 80, 10)
+
+	if !strings.Contains(output, "detached-wt") {
+		t.Errorf("detached worktree with empty branch should show path basename, got:\n%s", output)
+	}
+}
+
 func TestRenderDashboardShowsStaleness(t *testing.T) {
 	t.Parallel()
 
@@ -181,7 +290,7 @@ func TestRelativeTime(t *testing.T) {
 	tests := map[string]struct {
 		d          time.Duration
 		want       string
-		wantSuffix string // loose match for clock-sensitive cases
+		wantSuffix string
 	}{
 		"sub-second": {d: 500 * time.Millisecond, want: "just now"},
 		"seconds":    {d: 5 * time.Second, wantSuffix: "s ago"},
