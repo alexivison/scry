@@ -43,7 +43,8 @@ func Run(cfg config.Config) int {
 		return 128
 	}
 
-	// Auto-detect dashboard mode from worktree count unless overridden.
+	// Auto-detect dashboard mode: a quick worktree list (no per-wt queries)
+	// determines the mode without blocking on expensive status/commit calls.
 	worktreeCount := 1
 	if !cfg.NoDashboard {
 		entries, err := gitexec.WorktreeList(ctx, boot.Runner)
@@ -175,6 +176,7 @@ func (a *commitProviderAdapter) Generate(ctx context.Context) (string, error) {
 }
 
 // runDashboard is the worktree dashboard pipeline.
+// Launches the TUI immediately with an empty list and loads worktree data async.
 func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapResult) int {
 	// Use a runner rooted at the common git dir (stable across worktree deletions).
 	stableRoot := boot.Repo.GitCommonDir
@@ -183,27 +185,21 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	}
 	stableRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot})
 	loader := &worktreeLoaderImpl{runner: stableRunner}
-	worktrees, err := loader.LoadWorktrees(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
-		return 128
-	}
 
 	interval := cfg.WatchInterval
 	if interval == 0 {
 		interval = 2 * time.Second
 	}
 
+	// Start with an empty worktree list — data loads async after TUI launches.
 	state := model.AppState{
-		FocusPane:    model.PaneDashboard,
+		FocusPane:        model.PaneDashboard,
 		WorktreeMode:     true,
 		WatchEnabled:     cfg.Watch,
 		WatchInterval:    interval,
 		GroupByDirectory: cfg.GroupByDirectory,
-		DashboardState: model.DashboardState{
-			Worktrees: worktrees,
-		},
-		Patches: make(map[string]model.PatchLoadState),
+		RefreshInFlight:  true, // signal that initial load is pending
+		Patches:          make(map[string]model.PatchLoadState),
 	}
 
 	drillDown := &drillDownProviderImpl{}

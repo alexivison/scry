@@ -538,8 +538,26 @@ func (m Model) viewDashboard() string {
 	}
 	ds := m.State.DashboardState
 
+	// Render the base dashboard (list or split view).
+	var base string
+	showPreview := m.width >= 100 && len(ds.PreviewFiles) > 0
+	if showPreview {
+		base = m.viewDashboardSplit(outerHeight)
+	} else {
+		innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+		var content string
+		if len(ds.Worktrees) == 0 && m.State.RefreshInFlight {
+			content = "Loading worktrees..."
+		} else {
+			content = panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, innerW, innerH)
+		}
+		footer := m.dashboardFooter()
+		showFoot := m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != ""
+		base = panes.BorderedPane(content, "Worktrees", footer, m.width, outerHeight, true, showFoot)
+	}
+
+	// Overlay the confirmation dialog on top of the dashboard.
 	if ds.ConfirmDelete {
-		// Show branch + full path so user can distinguish worktrees with similar names.
 		var label string
 		if idx := ds.SelectedIdx; idx >= 0 && idx < len(ds.Worktrees) {
 			wt := ds.Worktrees[idx]
@@ -554,19 +572,10 @@ func (m Model) viewDashboard() string {
 		if ds.DeleteDirty {
 			body += "\n\nDIRTY — uncommitted changes will be lost!"
 		}
-		return panes.RenderConfirmDialog("Delete worktree?", body, "y confirm    n/Esc cancel", m.width, outerHeight)
+		return panes.OverlayDialog(base, "Delete worktree?", body, "y confirm    n/Esc cancel", m.width, outerHeight)
 	}
 
-	showPreview := m.width >= 100 && len(ds.PreviewFiles) > 0
-	if showPreview {
-		return m.viewDashboardSplit(outerHeight)
-	}
-
-	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
-	content := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, innerW, innerH)
-	footer := m.dashboardFooter()
-	showFoot := m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != ""
-	return panes.BorderedPane(content, "Worktrees", footer, m.width, outerHeight, true, showFoot)
+	return base
 }
 
 // viewDashboardSplit renders the dashboard with a side preview pane.

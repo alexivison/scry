@@ -216,9 +216,10 @@ func StalenessBadge(t time.Time) (string, lipgloss.Style) {
 	}
 }
 
-// RenderConfirmDialog renders a centered bordered confirmation dialog.
-func RenderConfirmDialog(title, body, hint string, width, height int) string {
-	dialogW := width * 2 / 3
+// buildDialog builds a centered bordered dialog and returns the rendered lines,
+// their width, and the vertical/horizontal offsets for centering.
+func buildDialog(title, body, hint string, width, height int) (dialogLines []string, dialogW, padTop, padLeft int) {
+	dialogW = width * 2 / 3
 	if dialogW < 30 {
 		dialogW = 30
 	}
@@ -229,7 +230,6 @@ func RenderConfirmDialog(title, body, hint string, width, height int) string {
 	innerW, _ := ContentDimensions(dialogW, 0)
 	warnStyle := lipgloss.NewStyle().Foreground(theme.Dirty).Bold(true)
 
-	// Wrap body to fit inner width.
 	var lines []string
 	for _, line := range strings.Split(body, "\n") {
 		if lipgloss.Width(line) > innerW {
@@ -242,26 +242,51 @@ func RenderConfirmDialog(title, body, hint string, width, height int) string {
 	content := strings.Join(lines, "\n")
 
 	dialog := BorderedPane(content, warnStyle.Render(title), "", dialogW, len(lines)+2, true, false)
+	dialogLines = strings.Split(dialog, "\n")
 
-	// Center vertically.
-	dialogLines := strings.Split(dialog, "\n")
-	padTop := (height - len(dialogLines)) / 2
+	padTop = (height - len(dialogLines)) / 2
 	if padTop < 0 {
 		padTop = 0
 	}
-	// Center horizontally.
-	padLeft := (width - dialogW) / 2
+	padLeft = (width - dialogW) / 2
 	if padLeft < 0 {
 		padLeft = 0
 	}
-	leftPad := strings.Repeat(" ", padLeft)
+	return dialogLines, dialogW, padTop, padLeft
+}
 
-	result := make([]string, 0, height)
-	for i := 0; i < padTop; i++ {
-		result = append(result, "")
+// OverlayDialog composites a confirmation dialog on top of existing content.
+func OverlayDialog(base, title, body, hint string, width, height int) string {
+	dialogLines, _, padTop, padLeft := buildDialog(title, body, hint, width, height)
+	baseLines := strings.Split(base, "\n")
+
+	// Ensure baseLines covers the full height.
+	for len(baseLines) < height {
+		baseLines = append(baseLines, "")
 	}
-	for _, line := range dialogLines {
-		result = append(result, leftPad+line)
+
+	// Composite: replace the base lines where the dialog appears.
+	leftPad := strings.Repeat(" ", padLeft)
+	for i, dLine := range dialogLines {
+		row := padTop + i
+		if row >= len(baseLines) {
+			break
+		}
+		bLine := baseLines[row]
+		bw := lipgloss.Width(bLine)
+
+		var out string
+		if padLeft > 0 && bw >= padLeft {
+			out = truncateToWidth(bLine, padLeft)
+		} else {
+			out = leftPad
+		}
+		composed := out + dLine
+		// Pad to full width to avoid stale screen artifacts.
+		if cw := lipgloss.Width(composed); cw < width {
+			composed += strings.Repeat(" ", width-cw)
+		}
+		baseLines[row] = composed
 	}
-	return strings.Join(result, "\n")
+	return strings.Join(baseLines[:height], "\n")
 }

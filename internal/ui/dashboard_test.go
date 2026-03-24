@@ -257,20 +257,19 @@ func TestDashboardDrillDownError(t *testing.T) {
 func TestDashboardRefreshAtTopLevel(t *testing.T) {
 	t.Parallel()
 
-	// r at top-level dashboard should be a no-op (not call startRefresh).
-	m := NewModel(dashboardState())
+	loader := &mockWorktreeLoader{worktrees: dashboardWorktrees()}
+	m := NewModel(dashboardState(), WithWorktreeLoader(loader))
 	m.width = 80
 	m.height = 24
 
 	result, cmd := m.Update(keyMsg('r'))
 	um := result.(Model)
 
-	// Should not set RefreshInFlight (startRefresh not called).
-	if um.State.RefreshInFlight {
-		t.Error("RefreshInFlight = true, want false — r at dashboard should be no-op")
+	if !um.State.RefreshInFlight {
+		t.Error("RefreshInFlight = false, want true — r should trigger refresh")
 	}
-	if cmd != nil {
-		t.Error("expected nil command from r at top-level dashboard")
+	if cmd == nil {
+		t.Error("expected async refresh command from r at top-level dashboard")
 	}
 }
 

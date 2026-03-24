@@ -351,42 +351,28 @@ func TestStalenessBadge(t *testing.T) {
 	}
 }
 
-func TestRenderConfirmDialog(t *testing.T) {
+func TestOverlayDialog(t *testing.T) {
 	t.Parallel()
+
+	// Build a simple base to overlay onto.
+	base := strings.Repeat("base content line\n", 24)
 
 	tests := map[string]struct {
 		title  string
 		body   string
 		hint   string
-		width  int
-		height int
 		checks func(t *testing.T, output string)
 	}{
-		"contains title": {
+		"contains title and body": {
 			title: "Delete worktree?", body: "my-worktree", hint: "y confirm    n/Esc cancel",
-			width: 80, height: 24,
 			checks: func(t *testing.T, output string) {
 				t.Helper()
 				if !strings.Contains(output, "Delete worktree?") {
 					t.Error("missing title")
 				}
-			},
-		},
-		"contains body": {
-			title: "Delete?", body: "project-feature", hint: "y/n",
-			width: 80, height: 24,
-			checks: func(t *testing.T, output string) {
-				t.Helper()
-				if !strings.Contains(output, "project-feature") {
+				if !strings.Contains(output, "my-worktree") {
 					t.Error("missing body text")
 				}
-			},
-		},
-		"contains hint": {
-			title: "Delete?", body: "wt", hint: "y confirm    n/Esc cancel",
-			width: 80, height: 24,
-			checks: func(t *testing.T, output string) {
-				t.Helper()
 				if !strings.Contains(output, "y confirm") {
 					t.Error("missing hint")
 				}
@@ -394,7 +380,6 @@ func TestRenderConfirmDialog(t *testing.T) {
 		},
 		"has border chars": {
 			title: "Delete?", body: "wt", hint: "y/n",
-			width: 80, height: 24,
 			checks: func(t *testing.T, output string) {
 				t.Helper()
 				if !strings.Contains(output, "╭") || !strings.Contains(output, "╯") {
@@ -402,9 +387,19 @@ func TestRenderConfirmDialog(t *testing.T) {
 				}
 			},
 		},
+		"preserves base content outside dialog": {
+			title: "Delete?", body: "wt", hint: "y/n",
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				lines := strings.Split(output, "\n")
+				// First line should still be base content (dialog is centered, not at row 0).
+				if !strings.Contains(lines[0], "base content") {
+					t.Error("base content should be preserved above dialog")
+				}
+			},
+		},
 		"shows dirty warning": {
 			title: "Delete worktree?", body: "my-wt\n\nDIRTY — uncommitted changes will be lost!", hint: "y/n",
-			width: 80, height: 24,
 			checks: func(t *testing.T, output string) {
 				t.Helper()
 				if !strings.Contains(output, "DIRTY") {
@@ -417,7 +412,7 @@ func TestRenderConfirmDialog(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			output := RenderConfirmDialog(tc.title, tc.body, tc.hint, tc.width, tc.height)
+			output := OverlayDialog(base, tc.title, tc.body, tc.hint, 80, 24)
 			tc.checks(t, output)
 		})
 	}
