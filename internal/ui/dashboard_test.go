@@ -875,13 +875,16 @@ func TestDashboardDeleteConfirmFlow(t *testing.T) {
 	if !um.State.DashboardState.DeleteDirty {
 		t.Error("DeleteDirty should be true (feature worktree is dirty)")
 	}
-	// View should show confirmation prompt.
+	// View should show bordered confirmation dialog.
 	view := um.View()
-	if !strings.Contains(view, "Delete worktree") {
-		t.Errorf("expected delete confirmation prompt, got:\n%s", view)
+	if !strings.Contains(view, "Delete worktree?") {
+		t.Errorf("expected delete confirmation dialog, got:\n%s", view)
 	}
 	if !strings.Contains(view, "DIRTY") {
 		t.Errorf("dirty worktree prompt should warn about uncommitted changes, got:\n%s", view)
+	}
+	if !strings.Contains(view, "╭") {
+		t.Error("confirmation dialog should have border")
 	}
 
 	// Press y to confirm.
@@ -890,6 +893,14 @@ func TestDashboardDeleteConfirmFlow(t *testing.T) {
 
 	if um2.State.DashboardState.ConfirmDelete {
 		t.Error("confirm state should be cleared after y")
+	}
+	if !um2.State.DashboardState.DeleteInFlight {
+		t.Error("DeleteInFlight should be true after confirming deletion")
+	}
+	// View should show deleting indicator in footer.
+	view2 := um2.View()
+	if !strings.Contains(view2, "Deleting") {
+		t.Errorf("expected 'Deleting' indicator in view during deletion, got:\n%s", view2)
 	}
 	if cmd == nil {
 		t.Fatal("expected async remove command, got nil")
@@ -962,5 +973,28 @@ func TestDashboardDeleteError(t *testing.T) {
 	view := um3.View()
 	if !strings.Contains(view, "delete failed") {
 		t.Errorf("expected delete error in view, got:\n%s", view)
+	}
+}
+
+func TestDashboardDeleteWithoutRemoverDoesNotStick(t *testing.T) {
+	t.Parallel()
+
+	// No WithWorktreeRemover — remover is nil.
+	m := NewModel(dashboardState())
+	m.width = 80
+	m.height = 30
+	m.State.DashboardState.SelectedIdx = 1
+
+	// d → y with nil remover.
+	updated, _ := m.Update(keyMsg('d'))
+	um := updated.(Model)
+	updated2, cmd := um.Update(keyMsg('y'))
+	um2 := updated2.(Model)
+
+	if um2.State.DashboardState.DeleteInFlight {
+		t.Error("DeleteInFlight should be false when remover is nil")
+	}
+	if cmd != nil {
+		t.Error("expected nil command when remover is nil")
 	}
 }

@@ -25,20 +25,22 @@ const PaneDashboard Pane = "dashboard"
 
 // DashboardState holds the state for the worktree dashboard view.
 type DashboardState struct {
-	Worktrees       []WorktreeInfo
-	SelectedIdx     int
-	ScrollOffset    int
-	DrillDown       bool // true when viewing a worktree's diff
-	DrillGeneration int  // monotonic counter to discard stale drill-down results
+	Worktrees         []WorktreeInfo
+	SelectedIdx       int
+	ScrollOffset      int
+	DrillDown         bool // true when viewing a worktree's diff
+	DrillGeneration   int  // monotonic counter to discard stale drill-down results
+	RefreshGeneration int  // monotonic counter to discard stale worktree refresh results
 
 	// Preview pane state.
 	PreviewCache map[string]PreviewEntry // cache key (snap) → preview data
 	PreviewFiles []FileSummary           // current selection's preview (for rendering)
 
-	// Deletion confirmation state.
-	ConfirmDelete bool   // true when awaiting deletion confirmation
-	DeletePath    string // path of worktree to delete
-	DeleteDirty   bool   // true if the worktree is dirty (requires force)
-	DeleteErr     string // error message from failed deletion
-	DeleteIsMain  bool   // true if user tried to delete main worktree
+	// Deletion state.
+	ConfirmDelete  bool   // true when awaiting deletion confirmation
+	DeletePath     string // path of worktree to delete
+	DeleteDirty    bool   // true if the worktree is dirty (requires force)
+	DeleteErr      string // error message from failed deletion
+	DeleteIsMain   bool   // true if user tried to delete main worktree
+	DeleteInFlight bool   // true while async deletion is running
 }

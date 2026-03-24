@@ -215,3 +215,53 @@ func StalenessBadge(t time.Time) (string, lipgloss.Style) {
 		return label, staleStyle
 	}
 }
+
+// RenderConfirmDialog renders a centered bordered confirmation dialog.
+func RenderConfirmDialog(title, body, hint string, width, height int) string {
+	dialogW := width * 2 / 3
+	if dialogW < 30 {
+		dialogW = 30
+	}
+	if dialogW > 60 {
+		dialogW = 60
+	}
+
+	innerW, _ := ContentDimensions(dialogW, 0)
+	warnStyle := lipgloss.NewStyle().Foreground(theme.Dirty).Bold(true)
+
+	// Wrap body to fit inner width.
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if lipgloss.Width(line) > innerW {
+			line = truncatePath(line, innerW)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "")
+	lines = append(lines, hashStyle.Render(hint))
+	content := strings.Join(lines, "\n")
+
+	dialog := BorderedPane(content, warnStyle.Render(title), "", dialogW, len(lines)+2, true, false)
+
+	// Center vertically.
+	dialogLines := strings.Split(dialog, "\n")
+	padTop := (height - len(dialogLines)) / 2
+	if padTop < 0 {
+		padTop = 0
+	}
+	// Center horizontally.
+	padLeft := (width - dialogW) / 2
+	if padLeft < 0 {
+		padLeft = 0
+	}
+	leftPad := strings.Repeat(" ", padLeft)
+
+	result := make([]string, 0, height)
+	for i := 0; i < padTop; i++ {
+		result = append(result, "")
+	}
+	for _, line := range dialogLines {
+		result = append(result, leftPad+line)
+	}
+	return strings.Join(result, "\n")
+}

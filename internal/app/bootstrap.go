@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -229,36 +230,35 @@ func (w *worktreeLoaderImpl) LoadWorktrees(ctx context.Context) ([]model.Worktre
 		return nil, err
 	}
 
-	infos := make([]model.WorktreeInfo, 0, len(entries))
-	for _, e := range entries {
-		info := model.WorktreeInfo{
+	infos := make([]model.WorktreeInfo, len(entries))
+	var wg sync.WaitGroup
+	for i, e := range entries {
+		infos[i] = model.WorktreeInfo{
 			Path:   e.Path,
 			Branch: gitexec.ShortBranch(e.Branch),
 			Bare:   e.Bare,
 		}
-
 		if e.Bare {
-			infos = append(infos, info)
 			continue
 		}
 
-		// Get changed file count (also derives dirty state).
-		count, err := gitexec.StatusCount(ctx, w.runner, e.Path)
-		if err == nil {
-			info.ChangedFiles = count
-			info.Dirty = count > 0
-		}
-
-		// Get commit info (hash, subject, and committer date for staleness).
-		meta, err := gitexec.CommitMeta(ctx, w.runner, e.Path)
-		if err == nil {
-			info.CommitHash = meta.Hash
-			info.Subject = meta.Subject
-			info.HeadCommittedAt = meta.CommitDate
-		}
-
-		infos = append(infos, info)
+		wg.Add(1)
+		go func(idx int, path string) {
+			defer wg.Done()
+			count, err := gitexec.StatusCount(ctx, w.runner, path)
+			if err == nil {
+				infos[idx].ChangedFiles = count
+				infos[idx].Dirty = count > 0
+			}
+			meta, err := gitexec.CommitMeta(ctx, w.runner, path)
+			if err == nil {
+				infos[idx].CommitHash = meta.Hash
+				infos[idx].Subject = meta.Subject
+				infos[idx].HeadCommittedAt = meta.CommitDate
+			}
+		}(i, e.Path)
 	}
+	wg.Wait()
 
 	return infos, nil
 }
