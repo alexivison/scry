@@ -249,11 +249,12 @@ func (w *worktreeLoaderImpl) LoadWorktrees(ctx context.Context) ([]model.Worktre
 			info.Dirty = count > 0
 		}
 
-		// Get commit info.
-		hash, subject, err := gitexec.CommitSubject(ctx, w.runner, e.Path)
+		// Get commit info (hash, subject, and committer date for staleness).
+		meta, err := gitexec.CommitMeta(ctx, w.runner, e.Path)
 		if err == nil {
-			info.CommitHash = hash
-			info.Subject = subject
+			info.CommitHash = meta.Hash
+			info.Subject = meta.Subject
+			info.HeadCommittedAt = meta.CommitDate
 		}
 
 		infos = append(infos, info)

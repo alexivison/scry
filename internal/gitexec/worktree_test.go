@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 type mockRunner struct {
@@ -136,28 +137,31 @@ func TestWorktreeListGitError(t *testing.T) {
 	}
 }
 
-func TestCommitSubject(t *testing.T) {
+func TestCommitMeta(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
 		output      string
 		wantHash    string
 		wantSubject string
+		wantTime    string // ISO 8601 prefix to match
+		wantErr     bool
 	}{
 		"normal commit": {
-			output:      "abc1234 initial commit\n",
+			output:      "abc1234\x002025-03-20T14:30:00+02:00\x00initial commit\n",
 			wantHash:    "abc1234",
 			wantSubject: "initial commit",
+			wantTime:    "2025-03-20",
 		},
-		"hash only no subject": {
-			output:      "abc1234\n",
-			wantHash:    "abc1234",
-			wantSubject: "",
-		},
-		"subject with spaces": {
-			output:      "def5678 fix: resolve merge conflict in main.go\n",
+		"subject with spaces and colons": {
+			output:      "def5678\x002025-01-15T09:00:00Z\x00fix: resolve merge conflict in main.go\n",
 			wantHash:    "def5678",
 			wantSubject: "fix: resolve merge conflict in main.go",
+			wantTime:    "2025-01-15",
+		},
+		"empty output": {
+			output:  "\n",
+			wantErr: true,
 		},
 	}
 
@@ -166,18 +170,27 @@ func TestCommitSubject(t *testing.T) {
 			t.Parallel()
 
 			runner := &mockRunner{fn: routeGit(map[string]string{
-				"-C /home/user/project log -1 --format=%h %s": tc.output,
+				"-C /home/user/project log -1 --format=%h%x00%cI%x00%s": tc.output,
 			})}
 
-			hash, subject, err := CommitSubject(t.Context(), runner, "/home/user/project")
+			meta, err := CommitMeta(t.Context(), runner, "/home/user/project")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if hash != tc.wantHash {
-				t.Errorf("hash = %q, want %q", hash, tc.wantHash)
+			if meta.Hash != tc.wantHash {
+				t.Errorf("Hash = %q, want %q", meta.Hash, tc.wantHash)
 			}
-			if subject != tc.wantSubject {
-				t.Errorf("subject = %q, want %q", subject, tc.wantSubject)
+			if meta.Subject != tc.wantSubject {
+				t.Errorf("Subject = %q, want %q", meta.Subject, tc.wantSubject)
+			}
+			if !strings.Contains(meta.CommitDate.Format(time.RFC3339), tc.wantTime) {
+				t.Errorf("CommitDate = %v, want prefix %q", meta.CommitDate, tc.wantTime)
 			}
 		})
 	}
