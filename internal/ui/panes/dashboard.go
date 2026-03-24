@@ -12,39 +12,53 @@ import (
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
+// LinesPerEntry is the number of terminal lines each worktree entry occupies.
+const LinesPerEntry = 2
+
 var (
-	cleanStyle        = lipgloss.NewStyle().Foreground(theme.Clean)
-	dirtyStyle        = lipgloss.NewStyle().Foreground(theme.Dirty)
-	dashSelectedStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
-	hashStyle         = lipgloss.NewStyle().Foreground(theme.Muted)
-	staleStyle        = lipgloss.NewStyle().Foreground(theme.Error)
+	cleanStyle    = lipgloss.NewStyle().Foreground(theme.Clean)
+	dirtyStyle    = lipgloss.NewStyle().Foreground(theme.Dirty)
+	hashStyle     = lipgloss.NewStyle().Foreground(theme.Muted)
+	staleStyle    = lipgloss.NewStyle().Foreground(theme.Error)
+	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
 )
 
 // RenderDashboard renders the worktree dashboard list constrained to the given dimensions.
+// Each entry occupies two lines; height is in terminal lines.
 func RenderDashboard(worktrees []model.WorktreeInfo, selectedIdx, scrollOffset, width, height int) string {
 	if len(worktrees) == 0 {
 		return "No worktrees found."
 	}
 
-	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, height, len(worktrees))
+	visibleEntries := height / LinesPerEntry
+	if visibleEntries < 1 {
+		visibleEntries = 1
+	}
 
-	end := scrollOffset + height
+	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, visibleEntries, len(worktrees))
+
+	end := scrollOffset + visibleEntries
 	if end > len(worktrees) {
 		end = len(worktrees)
 	}
 
-	// Hoist ANSI-safe truncation style — same width for all rows.
 	truncStyle := lipgloss.NewStyle().MaxWidth(width)
 
-	lines := make([]string, 0, end-scrollOffset)
+	lines := make([]string, 0, (end-scrollOffset)*LinesPerEntry)
 	for i := scrollOffset; i < end; i++ {
-		line := renderWorktreeEntry(worktrees[i], i, selectedIdx, truncStyle)
-		lines = append(lines, line)
+		primary, secondary := renderWorktreeEntry(worktrees[i], i, selectedIdx, width, truncStyle)
+		lines = append(lines, primary, secondary)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle lipgloss.Style) string {
+// renderWorktreeEntry returns two lines for a worktree entry:
+//
+//	Line 1: [prefix][status] [branch]              [count]
+//	Line 2: [indent][staleness] [hash] [subject]   [activity]
+func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, truncStyle lipgloss.Style) (string, string) {
+	selected := idx == selectedIdx
+
 	// Status indicator.
 	var status string
 	if wt.Bare {
@@ -55,42 +69,97 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx int, truncStyle
 		status = cleanStyle.Render("●")
 	}
 
-	// File count for dirty worktrees.
+	prefix := "  "
+	if selected {
+		prefix = "> "
+	}
+
+	// --- Primary line: [prefix][status] [branch] ... [count] ---
+	// Fall back to path basename for bare/detached worktrees with no branch.
+	branch := wt.Branch
+	if branch == "" {
+		branch = filepath.Base(wt.Path)
+	}
+	branchStyle := hashStyle
+	if selected {
+		branchStyle = selectedStyle
+	}
+
 	countStr := ""
+	countPlain := ""
 	if wt.ChangedFiles > 0 {
 		label := "files"
 		if wt.ChangedFiles == 1 {
 			label = "file"
 		}
-		countStr = dirtyStyle.Render(fmt.Sprintf(" %d %s", wt.ChangedFiles, label))
+		countPlain = fmt.Sprintf("%d %s", wt.ChangedFiles, label)
+		countStr = dirtyStyle.Render(countPlain)
 	}
 
-	prefix := "  "
-	if idx == selectedIdx {
-		prefix = "> "
+	// Budget: prefix(2) + status(1) + space(1) + branch + gap(2) + count
+	countWidth := len(countPlain)
+	branchBudget := width - 2 - 1 - 1 - 2 - countWidth
+	if branchBudget < 5 {
+		branchBudget = 5
+	}
+	if lipgloss.Width(branch) > branchBudget {
+		branch = truncatePath(branch, branchBudget)
 	}
 
-	basename := filepath.Base(wt.Path)
-	commitInfo := fmt.Sprintf("%s %s", hashStyle.Render(wt.CommitHash), wt.Subject)
+	var primary string
+	if countStr != "" {
+		gap := branchBudget - lipgloss.Width(branch)
+		if gap < 2 {
+			gap = 2
+		}
+		primary = prefix + status + " " + branchStyle.Render(branch) + strings.Repeat(" ", gap) + countStr
+	} else {
+		primary = prefix + status + " " + branchStyle.Render(branch)
+	}
+	primary = truncStyle.Render(primary)
 
-	// Staleness badge from git commit age (always rendered, "--" for bare/unknown).
-	label, style := StalenessBadge(wt.HeadCommittedAt)
-	styledStaleness := " " + style.Render(label)
+	// --- Secondary line: [indent][staleness] [hash] [subject] ... [activity] ---
+	indent := "    " // align with branch text (prefix + status + space)
 
-	// Layout: [prefix][status][count] [branch]  [basename] [staleness]  [hash subject]
-	branchWidth := 20
-	basenameWidth := 20
-	branch := wt.Branch
-	if lipgloss.Width(branch) > branchWidth {
-		branch = truncatePath(branch, branchWidth)
+	// Staleness badge from git commit age.
+	stalenessLabel, stalenessStyle := StalenessBadge(wt.HeadCommittedAt)
+	staleness := stalenessStyle.Render(stalenessLabel)
+	stalenessWidth := lipgloss.Width(stalenessLabel)
+
+	activity := RelativeTime(wt.LastActivityAt)
+	activityPlain := activity
+	if activity != "" {
+		activity = hashStyle.Render(activity)
 	}
 
-	line := fmt.Sprintf("%s%s%s %-*s  %-*s%s  %s", prefix, status, countStr, branchWidth, branch, basenameWidth, basename, styledStaleness, commitInfo)
+	commitHash := hashStyle.Render(wt.CommitHash)
+	commitHashWidth := lipgloss.Width(wt.CommitHash)
 
-	if idx == selectedIdx {
-		return dashSelectedStyle.Inherit(truncStyle).Render(line)
+	// Budget: indent(4) + staleness + space(1) + hash + space(1) + subject + gap(2) + activity
+	activityWidth := len(activityPlain)
+	subjectBudget := width - 4 - stalenessWidth - 1 - commitHashWidth - 1 - 2 - activityWidth
+	if subjectBudget < 5 {
+		subjectBudget = 5
 	}
-	return truncStyle.Render(line)
+
+	subject := wt.Subject
+	if lipgloss.Width(subject) > subjectBudget {
+		subject = truncatePath(subject, subjectBudget)
+	}
+
+	var secondary string
+	if activityPlain != "" {
+		gap := subjectBudget - lipgloss.Width(subject)
+		if gap < 2 {
+			gap = 2
+		}
+		secondary = indent + staleness + " " + commitHash + " " + subject + strings.Repeat(" ", gap) + activity
+	} else {
+		secondary = indent + staleness + " " + commitHash + " " + subject
+	}
+	secondary = truncStyle.Render(secondary)
+
+	return primary, secondary
 }
 
 // RelativeTime formats a timestamp as a relative duration string (e.g. "3s ago", "2m ago").

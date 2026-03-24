@@ -367,8 +367,12 @@ func (m *Model) syncDashboardScroll() {
 	}
 	outerHeight := m.height - 1 // reserve status bar
 	_, innerH := panes.ContentDimensions(m.width, outerHeight)
+	visibleEntries := innerH / panes.LinesPerEntry
+	if visibleEntries < 1 {
+		visibleEntries = 1
+	}
 	ds := &m.State.DashboardState
-	ds.ScrollOffset = panes.EnsureVisible(ds.SelectedIdx, ds.ScrollOffset, innerH, len(ds.Worktrees))
+	ds.ScrollOffset = panes.EnsureVisible(ds.SelectedIdx, ds.ScrollOffset, visibleEntries, len(ds.Worktrees))
 }
 
 // returnToDashboard resets drill-down state and returns focus to the dashboard pane.
