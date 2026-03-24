@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -80,8 +81,9 @@ func WithDrillDownProvider(dp DrillDownProvider) ModelOption {
 
 // WorktreeRefreshedMsg is sent when an async worktree list reload completes.
 type WorktreeRefreshedMsg struct {
-	Worktrees []model.WorktreeInfo
-	Err       error
+	Worktrees  []model.WorktreeInfo
+	Err        error
+	Generation int // matches DashboardState.RefreshGeneration to detect stale results
 }
 
 // DrillDownLoadedMsg is sent when a worktree drill-down finishes loading.
@@ -115,9 +117,10 @@ func (m Model) handleDashboardTick() (tea.Model, tea.Cmd) {
 	}
 	m.State.RefreshInFlight = true
 	loader := m.worktreeLoader
+	gen := m.State.DashboardState.RefreshGeneration
 	return m, func() tea.Msg {
 		wts, err := loader.LoadWorktrees(context.Background())
-		return WorktreeRefreshedMsg{Worktrees: wts, Err: err}
+		return WorktreeRefreshedMsg{Worktrees: wts, Err: err, Generation: gen}
 	}
 }
 
@@ -128,6 +131,11 @@ func (m Model) handleWorktreeRefreshed(msg WorktreeRefreshedMsg) (tea.Model, tea
 	var nextTick tea.Cmd
 	if m.State.WatchEnabled && m.State.WatchInterval > 0 {
 		nextTick = watch.TickCmd(m.State.WatchInterval)
+	}
+
+	// Discard stale refresh results from before a deletion.
+	if msg.Generation != m.State.DashboardState.RefreshGeneration {
+		return m, nextTick
 	}
 
 	if msg.Err != nil {
@@ -226,6 +234,9 @@ func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // startDeleteConfirm initiates the worktree deletion confirmation flow.
 func (m Model) startDeleteConfirm() (tea.Model, tea.Cmd) {
 	ds := &m.State.DashboardState
+	if ds.DeleteInFlight {
+		return m, nil
+	}
 	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) {
 		return m, nil
 	}
@@ -266,6 +277,7 @@ func (m Model) executeWorktreeRemove(path string, force bool) (tea.Model, tea.Cm
 	if m.worktreeRemover == nil {
 		return m, nil
 	}
+	m.State.DashboardState.DeleteInFlight = true
 	remover := m.worktreeRemover
 	return m, func() tea.Msg {
 		err := remover.Remove(context.Background(), path, force)
@@ -276,6 +288,7 @@ func (m Model) executeWorktreeRemove(path string, force bool) (tea.Model, tea.Cm
 // handleWorktreeRemoved processes the result of a worktree removal.
 func (m Model) handleWorktreeRemoved(msg WorktreeRemovedMsg) (tea.Model, tea.Cmd) {
 	ds := &m.State.DashboardState
+	ds.DeleteInFlight = false
 	ds.DeletePath = ""
 	ds.DeleteDirty = false
 
@@ -284,7 +297,25 @@ func (m Model) handleWorktreeRemoved(msg WorktreeRemovedMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 
-	// Refresh dashboard to reflect the removal.
+	// Bump refresh generation so any in-flight refresh from before the delete
+	// is discarded when it completes, preventing re-addition of the deleted entry.
+	ds.RefreshGeneration++
+
+	// Optimistically remove the deleted worktree from the list so it disappears
+	// immediately.
+	for i, wt := range ds.Worktrees {
+		if wt.Path == msg.Path {
+			ds.Worktrees = append(ds.Worktrees[:i], ds.Worktrees[i+1:]...)
+			if ds.SelectedIdx >= len(ds.Worktrees) && ds.SelectedIdx > 0 {
+				ds.SelectedIdx--
+			}
+			break
+		}
+	}
+	// Clear stale preview from the deleted worktree.
+	ds.PreviewFiles = nil
+
+	// Schedule a refresh to get authoritative state and reload preview.
 	return m.handleDashboardTick()
 }
 
@@ -508,12 +539,22 @@ func (m Model) viewDashboard() string {
 	ds := m.State.DashboardState
 
 	if ds.ConfirmDelete {
-		prompt := fmt.Sprintf("Delete worktree %s?", ds.DeletePath)
-		if ds.DeleteDirty {
-			prompt += " (DIRTY — uncommitted changes will be lost!)"
+		// Show branch + full path so user can distinguish worktrees with similar names.
+		var label string
+		if idx := ds.SelectedIdx; idx >= 0 && idx < len(ds.Worktrees) {
+			wt := ds.Worktrees[idx]
+			if wt.Branch != "" {
+				label = wt.Branch + "\n"
+			}
+			label += ds.DeletePath
+		} else {
+			label = filepath.Base(ds.DeletePath)
 		}
-		prompt += "\n\n  y  confirm    n/Esc  cancel"
-		return prompt
+		body := label
+		if ds.DeleteDirty {
+			body += "\n\nDIRTY — uncommitted changes will be lost!"
+		}
+		return panes.RenderConfirmDialog("Delete worktree?", body, "y confirm    n/Esc cancel", m.width, outerHeight)
 	}
 
 	showPreview := m.width >= 100 && len(ds.PreviewFiles) > 0
@@ -523,14 +564,15 @@ func (m Model) viewDashboard() string {
 
 	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
 	content := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, innerW, innerH)
-	footer := fmt.Sprintf("%d worktrees", len(ds.Worktrees))
-	return panes.BorderedPane(content, "Worktrees", footer, m.width, outerHeight, true, m.showFooter())
+	footer := m.dashboardFooter()
+	showFoot := m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != ""
+	return panes.BorderedPane(content, "Worktrees", footer, m.width, outerHeight, true, showFoot)
 }
 
 // viewDashboardSplit renders the dashboard with a side preview pane.
 func (m Model) viewDashboardSplit(outerHeight int) string {
 	ds := m.State.DashboardState
-	showFoot := m.showFooter()
+	showFoot := m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != ""
 
 	// Allocate 60% to worktree list, 40% to preview.
 	listW := m.width * 6 / 10
@@ -542,7 +584,7 @@ func (m Model) viewDashboardSplit(outerHeight int) string {
 	listContent := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, listInnerW, listInnerH)
 	previewContent := panes.RenderPreview(ds.PreviewFiles, previewInnerW, previewInnerH)
 
-	listFooter := fmt.Sprintf("%d worktrees", len(ds.Worktrees))
+	listFooter := m.dashboardFooter()
 	left := panes.BorderedPane(listContent, "Worktrees", listFooter, listW, outerHeight, true, showFoot)
 	right := panes.BorderedPane(previewContent, "Preview", "", previewW, outerHeight, false, showFoot)
 
@@ -558,4 +600,16 @@ func (m Model) viewDashboardSplit(outerHeight int) string {
 		rows[i] = leftLines[i] + r
 	}
 	return strings.Join(rows, "\n")
+}
+
+// dashboardFooter returns the footer text for the worktree pane.
+func (m Model) dashboardFooter() string {
+	ds := m.State.DashboardState
+	if ds.DeleteInFlight {
+		return "Deleting..."
+	}
+	if ds.DeleteErr != "" {
+		return ds.DeleteErr
+	}
+	return fmt.Sprintf("%d worktrees", len(ds.Worktrees))
 }

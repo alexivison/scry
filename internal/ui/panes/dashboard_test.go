@@ -350,3 +350,75 @@ func TestStalenessBadge(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderConfirmDialog(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		title  string
+		body   string
+		hint   string
+		width  int
+		height int
+		checks func(t *testing.T, output string)
+	}{
+		"contains title": {
+			title: "Delete worktree?", body: "my-worktree", hint: "y confirm    n/Esc cancel",
+			width: 80, height: 24,
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "Delete worktree?") {
+					t.Error("missing title")
+				}
+			},
+		},
+		"contains body": {
+			title: "Delete?", body: "project-feature", hint: "y/n",
+			width: 80, height: 24,
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "project-feature") {
+					t.Error("missing body text")
+				}
+			},
+		},
+		"contains hint": {
+			title: "Delete?", body: "wt", hint: "y confirm    n/Esc cancel",
+			width: 80, height: 24,
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "y confirm") {
+					t.Error("missing hint")
+				}
+			},
+		},
+		"has border chars": {
+			title: "Delete?", body: "wt", hint: "y/n",
+			width: 80, height: 24,
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "╭") || !strings.Contains(output, "╯") {
+					t.Error("missing border characters")
+				}
+			},
+		},
+		"shows dirty warning": {
+			title: "Delete worktree?", body: "my-wt\n\nDIRTY — uncommitted changes will be lost!", hint: "y/n",
+			width: 80, height: 24,
+			checks: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "DIRTY") {
+					t.Error("missing dirty warning")
+				}
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			output := RenderConfirmDialog(tc.title, tc.body, tc.hint, tc.width, tc.height)
+			tc.checks(t, output)
+		})
+	}
+}
