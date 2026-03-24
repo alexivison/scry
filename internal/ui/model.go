@@ -226,8 +226,19 @@ type pendingKeyTimeoutMsg struct {
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.spinner.Tick}
-	if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
-		cmds = append(cmds, watch.TickCmd(m.State.WatchInterval))
+	if m.State.WorktreeMode && m.worktreeLoader != nil {
+		// Fire initial async worktree load so TUI appears instantly.
+		if m.State.RefreshInFlight && len(m.State.DashboardState.Worktrees) == 0 {
+			loader := m.worktreeLoader
+			gen := m.State.DashboardState.RefreshGeneration
+			cmds = append(cmds, func() tea.Msg {
+				wts, err := loader.LoadWorktrees(context.Background())
+				return WorktreeRefreshedMsg{Worktrees: wts, Err: err, Generation: gen}
+			})
+		}
+		if m.State.WatchEnabled {
+			cmds = append(cmds, watch.TickCmd(m.State.WatchInterval))
+		}
 	} else if m.State.WatchEnabled && m.fingerprinter != nil {
 		cmds = append(cmds, m.buildCheckCmd())
 	}
@@ -344,7 +355,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.startDrillDown(ds.Worktrees[ds.SelectedIdx])
 					}
 				}
-				// Top-level dashboard: no-op (auto-refresh handles updates).
+				// Top-level dashboard: trigger manual refresh (blocked during modal).
+				if !m.State.RefreshInFlight && !m.State.DashboardState.ConfirmDelete {
+					return m.handleDashboardTick()
+				}
 				return m, nil
 			}
 			return m.startRefresh()
