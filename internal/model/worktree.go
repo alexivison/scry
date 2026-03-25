@@ -39,6 +39,7 @@ type DashboardState struct {
 	// Deletion state.
 	ConfirmDelete  bool   // true when awaiting deletion confirmation
 	DeletePath     string // path of worktree to delete
+	DeleteBranch   string // branch name of worktree being deleted
 	DeleteDirty    bool   // true if the worktree is dirty (requires force)
 	DeleteErr      string // error message from failed deletion
 	DeleteIsMain   bool   // true if user tried to delete main worktree

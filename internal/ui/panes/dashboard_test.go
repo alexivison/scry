@@ -84,9 +84,9 @@ func TestRenderDashboard(t *testing.T) {
 			checks: func(t *testing.T, output string) {
 				t.Helper()
 				lines := strings.Split(output, "\n")
-				// 3 worktrees × 2 lines = 6 lines
-				if len(lines) != 6 {
-					t.Errorf("expected 6 lines (3 entries × 2), got %d", len(lines))
+				// 3 worktrees × 2 lines + 1 separator = 7 lines
+				if len(lines) != 7 {
+					t.Errorf("expected 7 lines (3 entries × 2 + separator), got %d", len(lines))
 				}
 			},
 		},
@@ -99,19 +99,19 @@ func TestRenderDashboard(t *testing.T) {
 			checks: func(t *testing.T, output string) {
 				t.Helper()
 				lines := strings.Split(output, "\n")
-				// Selected entry at index 1 starts at line 2 (0-indexed)
-				if len(lines) < 4 {
-					t.Fatal("expected at least 4 lines")
+				// Selected entry at index 1 starts at line 3 (0-indexed; separator at line 2)
+				if len(lines) < 5 {
+					t.Fatal("expected at least 5 lines")
 				}
-				// Line 2 should have the > prefix and branch name
-				if !strings.Contains(lines[2], ">") {
+				// Line 3 should have the > prefix and branch name
+				if !strings.Contains(lines[3], ">") {
 					t.Error("selected primary line missing '>' prefix")
 				}
-				if !strings.Contains(lines[2], "feature") {
+				if !strings.Contains(lines[3], "feature") {
 					t.Error("selected primary line missing branch name")
 				}
 				// Should NOT contain reverse video escape (ESC[7m)
-				if strings.Contains(lines[2], "\x1b[7m") {
+				if strings.Contains(lines[3], "\x1b[7m") {
 					t.Error("selected line should not use reverse video")
 				}
 			},
@@ -125,12 +125,12 @@ func TestRenderDashboard(t *testing.T) {
 			checks: func(t *testing.T, output string) {
 				t.Helper()
 				lines := strings.Split(output, "\n")
-				// Feature worktree (index 1) primary line is lines[2]
-				if len(lines) < 3 {
-					t.Fatal("expected at least 3 lines")
+				// Feature worktree (index 1) primary line is lines[3] (separator at line 2)
+				if len(lines) < 4 {
+					t.Fatal("expected at least 4 lines")
 				}
-				if !strings.Contains(lines[2], "4 files") {
-					t.Errorf("file count should appear on primary line of dirty worktree, got: %q", lines[2])
+				if !strings.Contains(lines[3], "4 files") {
+					t.Errorf("file count should appear on primary line of dirty worktree, got: %q", lines[3])
 				}
 			},
 		},

@@ -250,6 +250,7 @@ func (m Model) startDeleteConfirm() (tea.Model, tea.Cmd) {
 
 	ds.ConfirmDelete = true
 	ds.DeletePath = wt.Path
+	ds.DeleteBranch = wt.Branch
 	ds.DeleteDirty = wt.Dirty
 	ds.DeleteErr = ""
 	return m, nil
@@ -267,6 +268,7 @@ func (m Model) updateDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Cancel deletion.
 		ds.ConfirmDelete = false
 		ds.DeletePath = ""
+		ds.DeleteBranch = ""
 		ds.DeleteDirty = false
 	}
 	return m, nil
@@ -290,6 +292,7 @@ func (m Model) handleWorktreeRemoved(msg WorktreeRemovedMsg) (tea.Model, tea.Cmd
 	ds := &m.State.DashboardState
 	ds.DeleteInFlight = false
 	ds.DeletePath = ""
+	ds.DeleteBranch = ""
 	ds.DeleteDirty = false
 
 	if msg.Err != nil {
@@ -615,7 +618,10 @@ func (m Model) viewDashboardSplit(outerHeight int) string {
 func (m Model) dashboardFooter() string {
 	ds := m.State.DashboardState
 	if ds.DeleteInFlight {
-		return "Deleting..."
+		if ds.DeleteBranch != "" {
+			return fmt.Sprintf("Removing %s...", ds.DeleteBranch)
+		}
+		return "Removing worktree..."
 	}
 	if ds.DeleteErr != "" {
 		return ds.DeleteErr

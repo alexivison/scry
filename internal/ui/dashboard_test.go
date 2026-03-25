@@ -896,10 +896,10 @@ func TestDashboardDeleteConfirmFlow(t *testing.T) {
 	if !um2.State.DashboardState.DeleteInFlight {
 		t.Error("DeleteInFlight should be true after confirming deletion")
 	}
-	// View should show deleting indicator in footer.
+	// View should show removing indicator in footer.
 	view2 := um2.View()
-	if !strings.Contains(view2, "Deleting") {
-		t.Errorf("expected 'Deleting' indicator in view during deletion, got:\n%s", view2)
+	if !strings.Contains(view2, "Removing") {
+		t.Errorf("expected 'Removing' indicator in view during deletion, got:\n%s", view2)
 	}
 	if cmd == nil {
 		t.Fatal("expected async remove command, got nil")

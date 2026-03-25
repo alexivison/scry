@@ -20,7 +20,8 @@ var (
 	dirtyStyle    = lipgloss.NewStyle().Foreground(theme.Dirty)
 	hashStyle     = lipgloss.NewStyle().Foreground(theme.Muted)
 	staleStyle    = lipgloss.NewStyle().Foreground(theme.Error)
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
+	selectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
+	separatorStyle = lipgloss.NewStyle().Foreground(theme.DividerFg)
 )
 
 // RenderDashboard renders the worktree dashboard list constrained to the given dimensions.
@@ -37,15 +38,28 @@ func RenderDashboard(worktrees []model.WorktreeInfo, selectedIdx, scrollOffset, 
 
 	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, visibleEntries, len(worktrees))
 
+	// Show a separator between the main worktree (index 0) and the rest,
+	// but only when both main and at least one other entry are visible.
+	hasSeparator := len(worktrees) > 1 && scrollOffset == 0
+	if hasSeparator {
+		// The separator takes one line; reduce visible entries to compensate.
+		visibleEntries = (height - 1) / LinesPerEntry
+		if visibleEntries < 1 {
+			visibleEntries = 1
+		}
+	}
+
 	end := scrollOffset + visibleEntries
 	if end > len(worktrees) {
 		end = len(worktrees)
 	}
-
 	truncStyle := lipgloss.NewStyle().MaxWidth(width)
 
-	lines := make([]string, 0, (end-scrollOffset)*LinesPerEntry)
+	lines := make([]string, 0, (end-scrollOffset)*LinesPerEntry+1)
 	for i := scrollOffset; i < end; i++ {
+		if hasSeparator && i == 1 {
+			lines = append(lines, separatorStyle.Render(strings.Repeat("─", width)))
+		}
 		primary, secondary := renderWorktreeEntry(worktrees[i], i, selectedIdx, width, truncStyle)
 		lines = append(lines, primary, secondary)
 	}
