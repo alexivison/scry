@@ -80,7 +80,7 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, tru
 	if branch == "" {
 		branch = filepath.Base(wt.Path)
 	}
-	branchStyle := hashStyle
+	branchStyle := lipgloss.NewStyle().Foreground(theme.BrightText)
 	if selected {
 		branchStyle = selectedStyle
 	}
