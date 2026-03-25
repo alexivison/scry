@@ -37,9 +37,6 @@ func (s *MetadataService) ListFiles(ctx context.Context, cmp model.ResolvedCompa
 	if err != nil {
 		return nil, fmt.Errorf("parse name-status: %w", err)
 	}
-	if len(files) == 0 {
-		return nil, nil
-	}
 
 	stats := parseNumstat(numOut)
 	mergeStats(files, stats)
@@ -50,6 +47,10 @@ func (s *MetadataService) ListFiles(ctx context.Context, cmp model.ResolvedCompa
 			return nil, fmt.Errorf("untracked: %w", err)
 		}
 		files = append(files, untracked...)
+	}
+
+	if len(files) == 0 {
+		return nil, nil
 	}
 
 	return files, nil

@@ -274,8 +274,14 @@ type drillDownProviderImpl struct{}
 func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath string) (ui.DrillDownResult, error) {
 	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
 
+	repo, err := source.ResolveRepoContext(ctx, runner)
+	if err != nil {
+		return ui.DrillDownResult{}, fmt.Errorf("resolve repo for %s: %w", worktreePath, err)
+	}
+
 	resolver := &source.CompareResolver{Runner: runner}
 	req := model.CompareRequest{
+		Repo:    repo,
 		BaseRef: "", // resolves to @{upstream}
 		HeadRef: "", // working tree mode
 		Mode:    model.CompareThreeDot,
@@ -303,8 +309,13 @@ type previewLoaderImpl struct{}
 
 func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string) ([]model.FileSummary, error) {
 	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
+	repo, err := source.ResolveRepoContext(ctx, runner)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repo for %s: %w", worktreePath, err)
+	}
 	resolver := &source.CompareResolver{Runner: runner}
 	req := model.CompareRequest{
+		Repo:    repo,
 		BaseRef: "",
 		HeadRef: "",
 		Mode:    model.CompareThreeDot,
