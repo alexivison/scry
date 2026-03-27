@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	fileSelectedStyle = lipgloss.NewStyle().Reverse(true)
+	fileSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
 	fileDimStyle      = lipgloss.NewStyle().Faint(true)
 
 	// Status icon colors.
@@ -175,38 +175,23 @@ func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier revi
 	paddedPath := fmt.Sprintf("%-*s", pathWidth, path)
 
 	if selected {
-		rev := fileSelectedStyle
-		return rev.Render(prefix) + marker + rev.Render(" ") + icon + rev.Render("  "+paddedPath+" ") + counts
+		sel := fileSelectedStyle
+		return sel.Render(prefix) + marker + " " + icon + "  " + sel.Render(paddedPath) + " " + counts
 	}
 	return prefix + marker + " " + icon + "  " + textStyle.Render(paddedPath) + " " + counts
 }
 
 // prefixMarker returns a styled single-character prefix: flag takes priority over freshness.
-func prefixMarker(tier review.FreshnessTier, flagged, selected bool) string {
+func prefixMarker(tier review.FreshnessTier, flagged, _ bool) string {
 	if flagged {
-		s := flagStyle
-		if selected {
-			s = s.Reverse(true)
-		}
-		return s.Render("⚑")
+		return flagStyle.Render("⚑")
 	}
 	switch tier {
 	case review.FreshnessHot:
-		s := freshnessHotStyle
-		if selected {
-			s = s.Reverse(true)
-		}
-		return s.Render("●")
+		return freshnessHotStyle.Render("●")
 	case review.FreshnessWarm:
-		s := freshnessWarmStyle
-		if selected {
-			s = s.Reverse(true)
-		}
-		return s.Render("○")
+		return freshnessWarmStyle.Render("○")
 	default:
-		if selected {
-			return fileSelectedStyle.Render(" ")
-		}
 		return " "
 	}
 }
@@ -244,37 +229,19 @@ func statusStyleFor(s model.FileStatus) lipgloss.Style {
 	}
 }
 
-// RenderIcon returns a colored status icon, optionally with Reverse for selected rows.
-func RenderIcon(s model.FileStatus, reversed bool) string {
-	style := statusStyleFor(s)
-	if reversed {
-		style = style.Reverse(true)
-	}
-	return style.Render(StatusIcon(s))
+// RenderIcon returns a colored status icon.
+func RenderIcon(s model.FileStatus, _ bool) string {
+	return statusStyleFor(s).Render(StatusIcon(s))
 }
 
-// RenderCounts returns colored +/- counts, optionally with Reverse for selected rows.
-func RenderCounts(f model.FileSummary, reversed bool) string {
+// RenderCounts returns colored +/- counts.
+func RenderCounts(f model.FileSummary, _ bool) string {
 	if f.IsBinary {
-		style := statusDefaultStyle
-		if reversed {
-			style = style.Reverse(true)
-		}
-		return style.Render("binary")
+		return statusDefaultStyle.Render("binary")
 	}
-	addStyle := statusAddedStyle
-	delStyle := statusDeletedStyle
-	if reversed {
-		addStyle = addStyle.Reverse(true)
-		delStyle = delStyle.Reverse(true)
-	}
-	add := addStyle.Render(fmt.Sprintf("+%d", f.Additions))
-	del := delStyle.Render(fmt.Sprintf("-%d", f.Deletions))
-	sep := " "
-	if reversed {
-		sep = fileSelectedStyle.Render(" ")
-	}
-	return add + sep + del
+	add := statusAddedStyle.Render(fmt.Sprintf("+%d", f.Additions))
+	del := statusDeletedStyle.Render(fmt.Sprintf("-%d", f.Deletions))
+	return add + " " + del
 }
 
 // StatusIcon returns a single-character icon for a file status.
