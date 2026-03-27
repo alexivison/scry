@@ -22,6 +22,9 @@ var (
 	staleStyle    = lipgloss.NewStyle().Foreground(theme.Error)
 	selectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
 	separatorStyle = lipgloss.NewStyle().Foreground(theme.DividerFg)
+
+	// textStyle is the default style for non-selected text (file paths, branch names).
+	textStyle = lipgloss.NewStyle().Foreground(theme.BrightText)
 )
 
 // RenderDashboard renders the worktree dashboard list constrained to the given dimensions.
@@ -94,7 +97,7 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, tru
 	if branch == "" {
 		branch = filepath.Base(wt.Path)
 	}
-	branchStyle := lipgloss.NewStyle().Foreground(theme.BrightText)
+	branchStyle := textStyle
 	if selected {
 		branchStyle = selectedStyle
 	}

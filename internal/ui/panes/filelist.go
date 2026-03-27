@@ -178,7 +178,7 @@ func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier revi
 		rev := fileSelectedStyle
 		return rev.Render(prefix) + marker + rev.Render(" ") + icon + rev.Render("  "+paddedPath+" ") + counts
 	}
-	return prefix + marker + " " + icon + "  " + paddedPath + " " + counts
+	return prefix + marker + " " + icon + "  " + textStyle.Render(paddedPath) + " " + counts
 }
 
 // prefixMarker returns a styled single-character prefix: flag takes priority over freshness.
