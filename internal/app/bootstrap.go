@@ -203,7 +203,8 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	}
 
 	drillDown := &drillDownProviderImpl{}
-	remover := &worktreeRemoverImpl{runner: stableRunner}
+	removeRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot, Timeout: gitexec.RemoveTimeout})
+	remover := &worktreeRemoverImpl{runner: removeRunner}
 	preview := &previewLoaderImpl{}
 	m := ui.NewModel(state, ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover), ui.WithPreviewLoader(preview))
 	p := tea.NewProgram(m, tea.WithAltScreen())

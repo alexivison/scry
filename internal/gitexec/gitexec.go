@@ -15,6 +15,10 @@ import (
 // DefaultTimeout is applied when GitRunnerConfig.Timeout is zero.
 const DefaultTimeout = 30 * time.Second
 
+// RemoveTimeout is used for destructive operations like worktree removal
+// which can be significantly slower than read-only git commands.
+const RemoveTimeout = 2 * time.Minute
+
 // GitRunner executes git commands in a fixed working directory.
 type GitRunner interface {
 	RunGit(ctx context.Context, args ...string) (string, error)
