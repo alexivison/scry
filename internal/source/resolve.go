@@ -169,6 +169,37 @@ func (cr *CompareResolver) mergeBase(ctx context.Context, base, head string) (st
 	return strings.TrimSpace(out), nil
 }
 
+// LocalDefaultBranch returns the name of the local default branch, preferring
+// "main" over "master". Returns an error if neither local branch exists.
+func LocalDefaultBranch(ctx context.Context, r gitexec.GitRunner) (string, error) {
+	for _, name := range []string{"main", "master"} {
+		if _, err := r.RunGit(ctx, "rev-parse", "--verify", "--quiet", "refs/heads/"+name); err == nil {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no local default branch found (tried main, master)")
+}
+
+// WorktreeBaseRef returns the BaseRef to use for dashboard drill-down diffs:
+// the merge-base of HEAD and the local default branch, so a worktree's diff
+// shows its own changes relative to local trunk rather than @{upstream}.
+// Returns "" when no local default branch exists or merge-base fails, so the
+// caller falls back to the default @{upstream} resolution.
+//
+// Uses the fully qualified refs/heads/<branch> form for merge-base so a tag
+// of the same name cannot be picked up instead of the local branch.
+func WorktreeBaseRef(ctx context.Context, r gitexec.GitRunner) string {
+	branch, err := LocalDefaultBranch(ctx, r)
+	if err != nil {
+		return ""
+	}
+	mb, err := r.RunGit(ctx, "merge-base", "HEAD", "refs/heads/"+branch)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(mb)
+}
+
 // BootstrapResult holds the resolved repo context and a repo-scoped runner.
 type BootstrapResult struct {
 	Repo   model.RepoContext
