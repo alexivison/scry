@@ -283,8 +283,8 @@ func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath 
 	resolver := &source.CompareResolver{Runner: runner}
 	req := model.CompareRequest{
 		Repo:    repo,
-		BaseRef: "", // resolves to @{upstream}
-		HeadRef: "", // working tree mode
+		BaseRef: source.WorktreeBaseRef(ctx, runner), // local default branch merge-base; "" falls back to @{upstream}
+		HeadRef: "",                                  // working tree mode
 		Mode:    model.CompareThreeDot,
 	}
 	cmp, err := resolver.Resolve(ctx, req)
@@ -317,7 +317,7 @@ func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string
 	resolver := &source.CompareResolver{Runner: runner}
 	req := model.CompareRequest{
 		Repo:    repo,
-		BaseRef: "",
+		BaseRef: source.WorktreeBaseRef(ctx, runner),
 		HeadRef: "",
 		Mode:    model.CompareThreeDot,
 	}

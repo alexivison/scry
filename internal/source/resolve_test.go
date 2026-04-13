@@ -494,6 +494,180 @@ func TestCompareResolverResolve(t *testing.T) {
 	}
 }
 
+// --- LocalDefaultBranch ---------------------------------------------------
+
+func TestLocalDefaultBranch(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		runner  func(ctx context.Context, args ...string) (string, error)
+		want    string
+		wantErr bool
+	}{
+		"main exists": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "abc123\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: "main",
+		},
+		"master exists when main absent": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "", gitErr(1, "")
+				case "rev-parse --verify --quiet refs/heads/master":
+					return "def456\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: "master",
+		},
+		"prefers main when both exist": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "abc123\n", nil
+				case "rev-parse --verify --quiet refs/heads/master":
+					return "def456\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: "main",
+		},
+		"neither exists": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				return "", gitErr(1, "")
+			},
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := LocalDefaultBranch(context.Background(), &mockRunner{fn: tc.runner})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("LocalDefaultBranch = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// --- WorktreeBaseRef ------------------------------------------------------
+
+func TestWorktreeBaseRef(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		runner func(ctx context.Context, args ...string) (string, error)
+		want   string
+	}{
+		"main + merge-base succeeds": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "headSHA\n", nil
+				case "merge-base HEAD refs/heads/main":
+					return "mbSHA\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: "mbSHA",
+		},
+		"master + merge-base succeeds": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "", gitErr(1, "")
+				case "rev-parse --verify --quiet refs/heads/master":
+					return "headSHA\n", nil
+				case "merge-base HEAD refs/heads/master":
+					return "mbSHA\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: "mbSHA",
+		},
+		"no local default branch returns empty": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				return "", gitErr(1, "")
+			},
+			want: "",
+		},
+		"merge-base failure returns empty": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "headSHA\n", nil
+				case "merge-base HEAD refs/heads/main":
+					return "", gitErr(1, "no common ancestor")
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: "",
+		},
+		// Regression: ensure the fully qualified refs/heads/<branch> form is
+		// used so a tag named "main" cannot shadow the local branch in
+		// merge-base resolution.
+		"uses refs/heads/ to avoid tag collision": {
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "headSHA\n", nil
+				case "merge-base HEAD refs/heads/main":
+					return "branchMB\n", nil
+				// A plain "main" would match refs/tags/main here. If
+				// WorktreeBaseRef ever regresses to the short form, the
+				// mock returns a tag SHA and the assertion fails.
+				case "merge-base HEAD main":
+					return "tagMB\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: "branchMB",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := WorktreeBaseRef(context.Background(), &mockRunner{fn: tc.runner})
+			if got != tc.want {
+				t.Errorf("WorktreeBaseRef = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // --- Bootstrap ------------------------------------------------------------
 
 func TestBootstrapSuccess(t *testing.T) {
