@@ -12,9 +12,11 @@ import (
 type mockPreviewLoader struct {
 	files []model.FileSummary
 	err   error
+	bases []model.CompareBasis
 }
 
-func (m *mockPreviewLoader) LoadPreview(_ context.Context, _ string) ([]model.FileSummary, error) {
+func (m *mockPreviewLoader) LoadPreview(_ context.Context, _ string, basis model.CompareBasis) ([]model.FileSummary, error) {
+	m.bases = append(m.bases, basis)
 	return m.files, m.err
 }
 
@@ -63,7 +65,7 @@ func TestDashboardPreview_CacheHitOnReselect(t *testing.T) {
 	m.height = 30
 
 	// Pre-populate cache for worktree 0.
-	snap := WorktreeSnapshotKey(state.DashboardState.Worktrees[0])
+	snap := WorktreeSnapshotKey(state.DashboardState.Worktrees[0], state.CompareBasis)
 	m.State.DashboardState.PreviewCache = map[string]model.PreviewEntry{
 		snap: {Files: previewFiles()},
 	}
@@ -114,7 +116,7 @@ func TestDashboardPreview_StaleSnapshotDiscarded(t *testing.T) {
 
 	// The worktree's current snapshot.
 	wt := state.DashboardState.Worktrees[0]
-	currentSnap := WorktreeSnapshotKey(wt)
+	currentSnap := WorktreeSnapshotKey(wt, state.CompareBasis)
 
 	// Simulate a stale PreviewLoadedMsg with an outdated snapshot key
 	// (e.g., worktree state changed between request and response).
@@ -153,7 +155,7 @@ func TestDashboardPreview_CacheEviction(t *testing.T) {
 
 	// Add one more entry via handlePreviewLoaded.
 	wt := state.DashboardState.Worktrees[0]
-	snap := WorktreeSnapshotKey(wt)
+	snap := WorktreeSnapshotKey(wt, state.CompareBasis)
 	msg := PreviewLoadedMsg{Path: wt.Path, Snap: snap, Files: previewFiles()}
 	updated, _ := m.handlePreviewLoaded(msg)
 	um := updated.(Model)

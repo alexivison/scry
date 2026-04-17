@@ -139,3 +139,26 @@ func TestExitCode2BadFlags(t *testing.T) {
 		t.Errorf("exit code = %d, want 2", exitErr.ExitCode())
 	}
 }
+
+func TestVersionFlagBinary(t *testing.T) {
+	t.Parallel()
+
+	bin := t.TempDir() + "/scry"
+	build := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X main.version=9.9.9 -X main.commit=deadbee", "-o", bin, ".")
+	build.Dir = "."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command(bin, "--version")
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run --version: %v\n%s", err, buf.String())
+	}
+
+	if got := buf.String(); got != "scry 9.9.9 (deadbee)\n" {
+		t.Fatalf("output = %q, want %q", got, "scry 9.9.9 (deadbee)\n")
+	}
+}

@@ -53,7 +53,7 @@ type CompareResolver struct {
 
 // Resolve turns a CompareRequest into a fully-resolved ResolvedCompare.
 func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest) (model.ResolvedCompare, error) {
-	br, err := cr.resolveBase(ctx, req.BaseRef, req.HeadRef)
+	br, err := cr.resolveBase(ctx, req.BaseRef, req.HeadRef, req.Basis)
 	if err != nil {
 		return model.ResolvedCompare{}, err
 	}
@@ -68,6 +68,7 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 		return model.ResolvedCompare{
 			Repo:         req.Repo,
 			BaseRef:      baseSHA,
+			Basis:        normalizeBasis(req.Basis),
 			WorkingTree:  true,
 			DiffRange:    baseSHA,
 			WatchBaseRef: br.watchRef,
@@ -82,6 +83,7 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 	res := model.ResolvedCompare{
 		Repo:         req.Repo,
 		BaseRef:      baseSHA,
+		Basis:        normalizeBasis(req.Basis),
 		HeadRef:      headSHA,
 		WatchBaseRef: br.watchRef,
 	}
@@ -114,11 +116,29 @@ type baseResult struct {
 // resolveBase resolves the base ref. If empty, it tries @{upstream} first,
 // then falls back to merge-base of the effective head and the default branch.
 // headRef is the explicit --head value; when empty, HEAD is used for merge-base.
-func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef, headRef string) (baseResult, error) {
+func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef, headRef string, basis model.CompareBasis) (baseResult, error) {
 	if baseRef != "" {
 		return baseResult{ref: baseRef}, nil
 	}
 
+	switch normalizeBasis(basis) {
+	case model.CompareBasisLocalTrunk:
+		return cr.resolveLocalTrunkBase(ctx, headRef)
+	default:
+		return cr.resolveUpstreamBase(ctx, headRef)
+	}
+}
+
+func normalizeBasis(basis model.CompareBasis) model.CompareBasis {
+	switch basis {
+	case model.CompareBasisLocalTrunk:
+		return model.CompareBasisLocalTrunk
+	default:
+		return model.CompareBasisUpstream
+	}
+}
+
+func (cr *CompareResolver) resolveUpstreamBase(ctx context.Context, headRef string) (baseResult, error) {
 	out, err := cr.Runner.RunGit(ctx, "rev-parse", "--symbolic-full-name", "--verify", "@{upstream}")
 	if err == nil {
 		upstream := strings.TrimSpace(out)
@@ -149,6 +169,25 @@ func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef, headRef str
 	}
 
 	return baseResult{}, fmt.Errorf("no upstream configured and no fallback found; use --base to specify a base ref")
+}
+
+func (cr *CompareResolver) resolveLocalTrunkBase(ctx context.Context, headRef string) (baseResult, error) {
+	branch, err := LocalDefaultBranch(ctx, cr.Runner)
+	if err != nil {
+		return baseResult{}, err
+	}
+
+	mbHead := "HEAD"
+	if headRef != "" {
+		mbHead = headRef
+	}
+
+	trunkRef := "refs/heads/" + branch
+	mb, err := cr.Runner.RunGit(ctx, "merge-base", mbHead, trunkRef)
+	if err != nil {
+		return baseResult{}, fmt.Errorf("failed to compute merge-base against local trunk %q: %w", trunkRef, err)
+	}
+	return baseResult{ref: strings.TrimSpace(mb), watchRef: trunkRef}, nil
 }
 
 // resolveRef resolves a ref to its SHA via rev-parse --verify.

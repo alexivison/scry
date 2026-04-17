@@ -20,6 +20,11 @@ func main() {
 }
 
 func runWith(args []string) int {
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Printf("scry %s (%s)\n", version, commit)
+		return 0
+	}
+
 	cfg, err := config.Parse(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {

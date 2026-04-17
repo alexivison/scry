@@ -8,7 +8,7 @@ import (
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
-// BorderedPane wraps content in a rounded border with an optional title and footer.
+// BorderedPane wraps content in a flatter square border with an optional title and footer.
 // outerWidth and outerHeight are the total dimensions including borders.
 // When active is true the border uses theme.Accent; otherwise theme.Muted.
 // When showFooter is false the footer text is suppressed (used for compact tiers).
@@ -29,19 +29,19 @@ func BorderedPaneWithScroll(content, title, footer string, outerWidth, outerHeig
 		borderColor = theme.Accent
 	}
 	colorStyle := lipgloss.NewStyle().Foreground(borderColor)
-	scrollStyle := lipgloss.NewStyle().Foreground(theme.BrightText)
+	scrollStyle := lipgloss.NewStyle().Foreground(theme.Accent)
 
 	innerWidth := outerWidth - 2
 
 	// Build top border with title.
-	top := buildBorderLine("╭", "╮", "─", title, innerWidth, colorStyle)
+	top := buildBorderLine("┌", "┐", "─", title, innerWidth, colorStyle)
 
 	// Build bottom border with optional footer.
 	footerText := ""
 	if showFooter {
 		footerText = footer
 	}
-	bottom := buildBorderLine("╰", "╯", "─", footerText, innerWidth, colorStyle)
+	bottom := buildBorderLine("└", "┘", "─", footerText, innerWidth, colorStyle)
 
 	// Split content into lines and pad/truncate to fill inner area.
 	innerHeight := outerHeight - 2
@@ -55,7 +55,7 @@ func BorderedPaneWithScroll(content, title, footer string, outerWidth, outerHeig
 		}
 		rightSide := side
 		if i == scrollLine {
-			rightSide = scrollStyle.Render("┃")
+			rightSide = scrollStyle.Render("│")
 		}
 		rows[i] = side + padOrTruncate(line, innerWidth) + rightSide
 	}

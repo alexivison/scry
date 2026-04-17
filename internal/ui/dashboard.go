@@ -32,12 +32,12 @@ type DrillDownResult struct {
 
 // DrillDownProvider creates the diff context for a specific worktree.
 type DrillDownProvider interface {
-	LoadDrillDown(ctx context.Context, worktreePath string) (DrillDownResult, error)
+	LoadDrillDown(ctx context.Context, worktreePath string, basis model.CompareBasis) (DrillDownResult, error)
 }
 
 // PreviewLoader loads the top changed files for a worktree preview.
 type PreviewLoader interface {
-	LoadPreview(ctx context.Context, worktreePath string) ([]model.FileSummary, error)
+	LoadPreview(ctx context.Context, worktreePath string, basis model.CompareBasis) ([]model.FileSummary, error)
 }
 
 // WithPreviewLoader sets the PreviewLoader for dashboard preview pane.
@@ -353,8 +353,9 @@ func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 
 	path := wt.Path
 	provider := m.drillDownProvider
+	basis := m.State.CompareBasis
 	return m, func() tea.Msg {
-		result, err := provider.LoadDrillDown(context.Background(), path)
+		result, err := provider.LoadDrillDown(context.Background(), path, basis)
 		return DrillDownLoadedMsg{Result: result, Err: err, Generation: gen}
 	}
 }
@@ -383,6 +384,7 @@ func (m Model) handleDrillDownLoaded(msg DrillDownLoadedMsg) (tea.Model, tea.Cmd
 	review.BumpGeneration(&m.State)
 
 	m.State.Compare = msg.Result.Compare
+	m.State.CompareBasis = msg.Result.Compare.Basis
 	m.State.Files = msg.Result.Files
 	m.State.Patches = make(map[string]model.PatchLoadState)
 	m.patchLoader = msg.Result.PatchLoader
@@ -432,8 +434,11 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // WorktreeSnapshotKey returns a cache key for a worktree's mutable state.
-func WorktreeSnapshotKey(wt model.WorktreeInfo) string {
-	return fmt.Sprintf("%s|%s|%v|%d", wt.Path, wt.CommitHash, wt.Dirty, wt.ChangedFiles)
+func WorktreeSnapshotKey(wt model.WorktreeInfo, basis model.CompareBasis) string {
+	if basis != model.CompareBasisLocalTrunk {
+		basis = model.CompareBasisUpstream
+	}
+	return fmt.Sprintf("%s|%s|%v|%d|%s", wt.Path, wt.CommitHash, wt.Dirty, wt.ChangedFiles, basis)
 }
 
 // maybeLoadPreview triggers a preview load for the selected worktree if not cached.
@@ -450,7 +455,7 @@ func (m *Model) maybeLoadPreview() tea.Cmd {
 		return nil
 	}
 	wt := ds.Worktrees[ds.SelectedIdx]
-	snap := WorktreeSnapshotKey(wt)
+	snap := WorktreeSnapshotKey(wt, m.State.CompareBasis)
 
 	// Cache hit.
 	if ds.PreviewCache != nil {
@@ -464,8 +469,9 @@ func (m *Model) maybeLoadPreview() tea.Cmd {
 	ds.PreviewFiles = nil
 	loader := m.previewLoader
 	path := wt.Path
+	basis := m.State.CompareBasis
 	return func() tea.Msg {
-		files, err := loader.LoadPreview(context.Background(), path)
+		files, err := loader.LoadPreview(context.Background(), path, basis)
 		return PreviewLoadedMsg{Path: path, Snap: snap, Files: files, Err: err}
 	}
 }
@@ -498,7 +504,7 @@ func (m Model) handlePreviewLoaded(msg PreviewLoadedMsg) (tea.Model, tea.Cmd) {
 
 	// Apply to current view only if the selected worktree's snapshot still matches.
 	if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
-		currentSnap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx])
+		currentSnap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx], m.State.CompareBasis)
 		if msg.Snap == currentSnap {
 			ds.PreviewFiles = files
 		}

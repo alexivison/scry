@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/ui/theme"
 )
 
 // RenderPreview renders a compact file list for the dashboard preview pane.
@@ -32,7 +33,11 @@ func RenderPreview(files []model.FileSummary, width, height int) string {
 		if len(path) > pathBudget {
 			path = truncatePath(path, pathBudget)
 		}
-		line := fmt.Sprintf("%s %s %s", icon, fmt.Sprintf("%-*s", pathBudget, path), counts)
+		line := fmt.Sprintf("%s %s %s",
+			statusStyleFor(f.Status).Render(icon),
+			lipgloss.NewStyle().Foreground(theme.BrightText).Render(fmt.Sprintf("%-*s", pathBudget, path)),
+			counts,
+		)
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")

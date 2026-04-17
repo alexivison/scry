@@ -7,21 +7,21 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-func TestBorderedPane_RoundedCorners(t *testing.T) {
+func TestBorderedPane_SquareCorners(t *testing.T) {
 	t.Parallel()
 
 	out := BorderedPane("hello", "Title", "", 20, 5, true, true)
-	if !strings.Contains(out, "╭") {
-		t.Error("expected top-left rounded corner ╭")
+	if !strings.Contains(out, "┌") {
+		t.Error("expected top-left corner ┌")
 	}
-	if !strings.Contains(out, "╮") {
-		t.Error("expected top-right rounded corner ╮")
+	if !strings.Contains(out, "┐") {
+		t.Error("expected top-right corner ┐")
 	}
-	if !strings.Contains(out, "╰") {
-		t.Error("expected bottom-left rounded corner ╰")
+	if !strings.Contains(out, "└") {
+		t.Error("expected bottom-left corner └")
 	}
-	if !strings.Contains(out, "╯") {
-		t.Error("expected bottom-right rounded corner ╯")
+	if !strings.Contains(out, "┘") {
+		t.Error("expected bottom-right corner ┘")
 	}
 }
 
@@ -75,10 +75,10 @@ func TestBorderedPane_ActiveVsInactive(t *testing.T) {
 	active := BorderedPane("x", "T", "", 20, 5, true, true)
 	inactive := BorderedPane("x", "T", "", 20, 5, false, true)
 	// Both should render borders with same structure.
-	if !strings.Contains(active, "╭") {
+	if !strings.Contains(active, "┌") {
 		t.Error("active pane missing border")
 	}
-	if !strings.Contains(inactive, "╭") {
+	if !strings.Contains(inactive, "┌") {
 		t.Error("inactive pane missing border")
 	}
 	// Both should contain content.

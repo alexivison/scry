@@ -111,6 +111,16 @@ type Model struct {
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
 // when the file list is empty, 0 otherwise.
 func NewModel(state model.AppState, opts ...ModelOption) Model {
+	if state.CompareBasis == "" {
+		if state.Compare.Basis != "" {
+			state.CompareBasis = state.Compare.Basis
+		} else {
+			state.CompareBasis = model.CompareBasisUpstream
+		}
+	}
+	if state.Compare.Basis == "" {
+		state.Compare.Basis = state.CompareBasis
+	}
 	if len(state.Files) == 0 {
 		state.SelectedFile = -1
 	} else {
@@ -294,6 +304,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CommitEditedMsg:
 		return m.handleCommitEdited(msg)
 
+	case editorClosedMsg:
+		if msg.err != nil {
+			m.refreshErr = fmt.Sprintf("nvim failed: %v", msg.err)
+		}
+		return m, nil
+
 	case watch.FSEventMsg:
 		// fsnotify detected a file change — trigger immediate fingerprint check
 		// without rescheduling the polling timer (to avoid timer multiplication).
@@ -366,6 +382,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// W toggles whitespace ignore from any pane (except help/search/commit).
 		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleWhitespace()
+		}
+		// b toggles the compare basis from any diff/dashboard pane (except help/search/commit).
+		if msg.String() == "b" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
+			return m.toggleCompareBasis()
+		}
+		if msg.String() == "v" && !m.showHelp &&
+			m.State.FocusPane != model.PaneSearch &&
+			m.State.FocusPane != model.PaneCommit &&
+			m.State.FocusPane != model.PaneIdle &&
+			m.State.FocusPane != model.PaneDashboard {
+			return m.openInNeovim()
 		}
 		// Tab toggles layout (except during help/search/commit).
 		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
@@ -1003,6 +1030,36 @@ func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) toggleCompareBasis() (tea.Model, tea.Cmd) {
+	if m.State.CompareBasis == model.CompareBasisLocalTrunk {
+		m.State.CompareBasis = model.CompareBasisUpstream
+	} else {
+		m.State.CompareBasis = model.CompareBasisLocalTrunk
+	}
+	m.State.Compare.Basis = m.State.CompareBasis
+	m.compareRequest.Basis = m.State.CompareBasis
+	m.refreshErr = ""
+	m.State.LastFingerprint = ""
+
+	if m.State.WorktreeMode {
+		if m.State.DashboardState.DrillDown {
+			ds := m.State.DashboardState
+			if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
+				return m.startDrillDown(ds.Worktrees[ds.SelectedIdx])
+			}
+			return m, nil
+		}
+
+		m.State.DashboardState.PreviewFiles = nil
+		if cmd := m.maybeLoadPreview(); cmd != nil {
+			return m, cmd
+		}
+		return m, nil
+	}
+
+	return m.startRefresh()
+}
+
 // exportFlaggedFiles copies flagged file paths to the system clipboard.
 func (m Model) exportFlaggedFiles() (tea.Model, tea.Cmd) {
 	m.exportMsg = ""
@@ -1042,6 +1099,8 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	// Apply re-resolved compare if present.
 	if msg.Compare != nil {
 		m.State.Compare = *msg.Compare
+		m.State.CompareBasis = msg.Compare.Basis
+		m.syncWatchBaseRef(*msg.Compare)
 	}
 
 	// Save scroll state for the selected file before invalidation.
@@ -1142,6 +1201,18 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
+}
+
+func (m *Model) syncWatchBaseRef(cmp model.ResolvedCompare) {
+	if cmp.WatchBaseRef != "" {
+		m.watchBaseRef = cmp.WatchBaseRef
+		return
+	}
+	if m.compareRequest.BaseRef != "" {
+		m.watchBaseRef = m.compareRequest.BaseRef
+		return
+	}
+	m.watchBaseRef = "@{upstream}"
 }
 
 func isSentinelError(err error) bool {
@@ -1498,6 +1569,7 @@ func (m Model) viewHelp() string {
 			"  l/Enter   drill into worktree diff",
 			"",
 			"Actions",
+			fmt.Sprintf("  b         toggle diff basis (current: %s)", m.State.CompareBasis.Label()),
 			"  ?/Esc     close help",
 			"  q         quit",
 		}, "\n")
@@ -1528,12 +1600,12 @@ func (m Model) viewHelp() string {
 		"",
 		"Actions",
 		"  r         refresh",
+		fmt.Sprintf("  b         toggle diff basis (current: %s)", m.State.CompareBasis.Label()),
+		"  v         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
 		"  m         toggle file flag",
 		"  M         jump to next flagged file",
-		"  ?/Esc     close help",
-		"  q         quit",
 	)
 	if m.State.WatchEnabled {
 		watchLine := fmt.Sprintf("  [watch]   auto-refresh every %s", m.State.WatchInterval)
@@ -1545,6 +1617,10 @@ func (m Model) viewHelp() string {
 	if m.State.CommitEnabled {
 		help = append(help, "  c         generate commit message")
 	}
+	help = append(help,
+		"  ?/Esc     close help",
+		"  q         quit",
+	)
 	return strings.Join(help, "\n")
 }
 

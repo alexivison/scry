@@ -426,6 +426,44 @@ func (vp *PatchViewport) ViewportLineToDiffLine(vpLine int) int {
 	return 0
 }
 
+// CurrentTargetLine returns the most relevant new-file line number for the
+// current viewport position or hunk, for opening the file in an editor.
+func (vp *PatchViewport) CurrentTargetLine() (int, bool) {
+	if len(vp.Patch.Hunks) == 0 || len(vp.lines) == 0 {
+		return 0, false
+	}
+
+	hunk := vp.CurrentHunk
+	if hunk < 0 {
+		hunk = 0
+	}
+	if hunk >= len(vp.Patch.Hunks) {
+		hunk = len(vp.Patch.Hunks) - 1
+	}
+
+	start := vp.ScrollOffset
+	hunkStart := vp.hunkLineOffset(hunk)
+	if start < hunkStart {
+		start = hunkStart
+	}
+	hunkEnd := len(vp.lines)
+	if hunk+1 < len(vp.Patch.Hunks) {
+		hunkEnd = vp.hunkLineOffset(hunk + 1)
+	}
+
+	for i := start; i < hunkEnd; i++ {
+		if vp.lines[i].typ == lineTypeDiff && vp.lines[i].diff.NewNo != nil {
+			return *vp.lines[i].diff.NewNo, true
+		}
+	}
+	for _, line := range vp.Patch.Hunks[hunk].Lines {
+		if line.NewNo != nil {
+			return *line.NewNo, true
+		}
+	}
+	return 0, false
+}
+
 // Styles for patch rendering.
 var (
 	hunkHeaderStyle = lipgloss.NewStyle().

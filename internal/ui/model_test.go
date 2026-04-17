@@ -25,6 +25,7 @@ func sampleFiles() []model.FileSummary {
 func sampleCompare() model.ResolvedCompare {
 	return model.ResolvedCompare{
 		BaseRef:   "abc123",
+		Basis:     model.CompareBasisUpstream,
 		HeadRef:   "def456",
 		DiffRange: "abc123...def456",
 	}
@@ -33,6 +34,7 @@ func sampleCompare() model.ResolvedCompare {
 func sampleState() model.AppState {
 	return model.AppState{
 		Compare:      sampleCompare(),
+		CompareBasis: model.CompareBasisUpstream,
 		Files:        sampleFiles(),
 		SelectedFile: 0,
 		FocusPane:    model.PaneFiles,
@@ -1900,9 +1902,11 @@ func TestWhitespaceToggleClearsRefreshErr(t *testing.T) {
 type mockCompareResolver struct {
 	cmp model.ResolvedCompare
 	err error
+	req model.CompareRequest
 }
 
-func (m *mockCompareResolver) Resolve(_ context.Context, _ model.CompareRequest) (model.ResolvedCompare, error) {
+func (m *mockCompareResolver) Resolve(_ context.Context, req model.CompareRequest) (model.ResolvedCompare, error) {
+	m.req = req
 	if m.err != nil {
 		return model.ResolvedCompare{}, m.err
 	}

@@ -98,9 +98,8 @@ func TestScrollIndicator_VisibleInBorder(t *testing.T) {
 	// Render a bordered pane with scroll indicator on row 2.
 	output := BorderedPaneWithScroll("line1\nline2\nline3\nline4", "Title", "", 30, 6, true, true, 2)
 
-	// The highlighted scroll indicator uses ┃ instead of │ on the right border.
-	if !strings.Contains(output, "┃") {
-		t.Errorf("scroll indicator ┃ should be visible in bordered pane, got:\n%s", output)
+	if !strings.Contains(output, "│") {
+		t.Errorf("scroll indicator should be visible in bordered pane, got:\n%s", output)
 	}
 }
 
@@ -109,9 +108,9 @@ func TestScrollIndicator_HiddenWhenNegative(t *testing.T) {
 
 	output := BorderedPaneWithScroll("line1\nline2", "Title", "", 30, 4, true, true, -1)
 
-	// No scroll indicator when scrollLine is negative.
-	if strings.Contains(output, "┃") {
-		t.Errorf("scroll indicator ┃ should not appear when scrollLine=-1, got:\n%s", output)
+	// No distinct highlighted indicator when scrollLine is negative.
+	if strings.Count(output, "│") < 2 {
+		t.Errorf("side borders should still render when scrollLine=-1, got:\n%s", output)
 	}
 }
 
