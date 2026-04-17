@@ -20,8 +20,8 @@ var (
 	dirtyStyle    = lipgloss.NewStyle().Foreground(theme.Dirty)
 	hashStyle     = lipgloss.NewStyle().Foreground(theme.Muted)
 	staleStyle    = lipgloss.NewStyle().Foreground(theme.Error)
-	selectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
-	separatorStyle = lipgloss.NewStyle().Foreground(theme.DividerFg)
+	selectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.BrightText).Background(theme.SelectedBg)
+	separatorStyle = lipgloss.NewStyle().Foreground(theme.ChromeFaint)
 
 	// textStyle is the default style for non-selected text (file paths, branch names).
 	textStyle = lipgloss.NewStyle().Foreground(theme.BrightText)

@@ -111,6 +111,16 @@ type Model struct {
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
 // when the file list is empty, 0 otherwise.
 func NewModel(state model.AppState, opts ...ModelOption) Model {
+	if state.CompareBasis == "" {
+		if state.Compare.Basis != "" {
+			state.CompareBasis = state.Compare.Basis
+		} else {
+			state.CompareBasis = model.CompareBasisUpstream
+		}
+	}
+	if state.Compare.Basis == "" {
+		state.Compare.Basis = state.CompareBasis
+	}
 	if len(state.Files) == 0 {
 		state.SelectedFile = -1
 	} else {
@@ -294,6 +304,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CommitEditedMsg:
 		return m.handleCommitEdited(msg)
 
+	case editorClosedMsg:
+		if msg.err != nil {
+			m.refreshErr = fmt.Sprintf("nvim failed: %v", msg.err)
+		}
+		return m, nil
+
 	case watch.FSEventMsg:
 		// fsnotify detected a file change — trigger immediate fingerprint check
 		// without rescheduling the polling timer (to avoid timer multiplication).
@@ -366,6 +382,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// W toggles whitespace ignore from any pane (except help/search/commit).
 		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleWhitespace()
+		}
+		// b toggles the compare basis from any diff/dashboard pane (except help/search/commit).
+		if msg.String() == "b" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
+			return m.toggleCompareBasis()
+		}
+		if msg.String() == "v" && !m.showHelp &&
+			m.State.FocusPane != model.PaneSearch &&
+			m.State.FocusPane != model.PaneCommit &&
+			m.State.FocusPane != model.PaneIdle &&
+			m.State.FocusPane != model.PaneDashboard {
+			return m.openInNeovim()
 		}
 		// Tab toggles layout (except during help/search/commit).
 		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
@@ -526,7 +553,7 @@ func (m Model) pendingKeyTimeout() tea.Cmd {
 // fileListInnerHeight returns the visible row count for the file list pane.
 func (m Model) fileListInnerHeight() int {
 	outerH := m.height - 1 // status bar
-	_, h := panes.ContentDimensions(m.width, outerH)
+	_, h := panes.UnboxedSectionDimensions(m.width, outerH)
 	return h
 }
 
@@ -1003,6 +1030,36 @@ func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) toggleCompareBasis() (tea.Model, tea.Cmd) {
+	if m.State.CompareBasis == model.CompareBasisLocalTrunk {
+		m.State.CompareBasis = model.CompareBasisUpstream
+	} else {
+		m.State.CompareBasis = model.CompareBasisLocalTrunk
+	}
+	m.State.Compare.Basis = m.State.CompareBasis
+	m.compareRequest.Basis = m.State.CompareBasis
+	m.refreshErr = ""
+	m.State.LastFingerprint = ""
+
+	if m.State.WorktreeMode {
+		if m.State.DashboardState.DrillDown {
+			ds := m.State.DashboardState
+			if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
+				return m.startDrillDown(ds.Worktrees[ds.SelectedIdx])
+			}
+			return m, nil
+		}
+
+		m.State.DashboardState.PreviewFiles = nil
+		if cmd := m.maybeLoadPreview(); cmd != nil {
+			return m, cmd
+		}
+		return m, nil
+	}
+
+	return m.startRefresh()
+}
+
 // exportFlaggedFiles copies flagged file paths to the system clipboard.
 func (m Model) exportFlaggedFiles() (tea.Model, tea.Cmd) {
 	m.exportMsg = ""
@@ -1042,6 +1099,8 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	// Apply re-resolved compare if present.
 	if msg.Compare != nil {
 		m.State.Compare = *msg.Compare
+		m.State.CompareBasis = msg.Compare.Basis
+		m.syncWatchBaseRef(*msg.Compare)
 	}
 
 	// Save scroll state for the selected file before invalidation.
@@ -1142,6 +1201,18 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
+}
+
+func (m *Model) syncWatchBaseRef(cmp model.ResolvedCompare) {
+	if cmp.WatchBaseRef != "" {
+		m.watchBaseRef = cmp.WatchBaseRef
+		return
+	}
+	if m.compareRequest.BaseRef != "" {
+		m.watchBaseRef = m.compareRequest.BaseRef
+		return
+	}
+	m.watchBaseRef = "@{upstream}"
 }
 
 func isSentinelError(err error) bool {
@@ -1391,14 +1462,17 @@ func (m Model) viewFileList() string {
 	if outerHeight < 3 {
 		outerHeight = 3
 	}
-	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+	innerW, innerH := panes.UnboxedSectionDimensions(m.width, outerHeight)
 	content, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, 0,
 		innerW, innerH, true,
 		m.freshnessOpts(),
 	)
-	footer := fmt.Sprintf("%d files", len(m.State.Files))
-	return panes.BorderedPane(content, "Files", footer, m.width, outerHeight, true, m.showFooter())
+	meta := ""
+	if m.showFooter() {
+		meta = fmt.Sprintf("%d files", len(m.State.Files))
+	}
+	return panes.UnboxedSection(content, "Files", meta, m.width, outerHeight, true)
 }
 
 func (m Model) viewPatch() string {
@@ -1406,10 +1480,13 @@ func (m Model) viewPatch() string {
 	if outerHeight < 3 {
 		outerHeight = 3
 	}
-	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+	innerW, innerH := panes.UnboxedSectionDimensions(m.width, outerHeight)
 	content := m.renderPatch(innerW, innerH, m.width)
-	scrollLine := m.patchScrollLine(innerH)
-	return panes.BorderedPaneWithScroll(content, m.patchTitle(), m.patchFooter(), m.width, outerHeight, true, m.showFooter(), scrollLine)
+	meta := ""
+	if m.showFooter() {
+		meta = m.patchFooter()
+	}
+	return panes.UnboxedSection(content, m.patchTitle(), meta, m.width, outerHeight, true)
 }
 
 // renderPatch renders the patch pane content at the given dimensions.
@@ -1498,6 +1575,7 @@ func (m Model) viewHelp() string {
 			"  l/Enter   drill into worktree diff",
 			"",
 			"Actions",
+			fmt.Sprintf("  b         toggle diff basis (current: %s)", m.State.CompareBasis.Label()),
 			"  ?/Esc     close help",
 			"  q         quit",
 		}, "\n")
@@ -1528,12 +1606,12 @@ func (m Model) viewHelp() string {
 		"",
 		"Actions",
 		"  r         refresh",
+		fmt.Sprintf("  b         toggle diff basis (current: %s)", m.State.CompareBasis.Label()),
+		"  v         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
 		"  m         toggle file flag",
 		"  M         jump to next flagged file",
-		"  ?/Esc     close help",
-		"  q         quit",
 	)
 	if m.State.WatchEnabled {
 		watchLine := fmt.Sprintf("  [watch]   auto-refresh every %s", m.State.WatchInterval)
@@ -1545,6 +1623,10 @@ func (m Model) viewHelp() string {
 	if m.State.CommitEnabled {
 		help = append(help, "  c         generate commit message")
 	}
+	help = append(help,
+		"  ?/Esc     close help",
+		"  q         quit",
+	)
 	return strings.Join(help, "\n")
 }
 
@@ -1693,7 +1775,11 @@ func (m *Model) syncFileListScroll() {
 		return
 	}
 	outerHeight := m.height - 1 // reserve status bar
-	_, innerH := panes.ContentDimensions(m.width, outerHeight)
+	splitWidth := m.width - 1
+	if splitWidth < 1 {
+		splitWidth = 1
+	}
+	_, innerH := panes.UnboxedSectionDimensions(fileListWidth(splitWidth), outerHeight)
 	m.fileListScroll = panes.EnsureVisible(
 		m.State.SelectedFile, m.fileListScroll, innerH, len(m.State.Files),
 	)
@@ -1726,18 +1812,25 @@ func fileListWidth(termWidth int) int {
 	return w
 }
 
-// viewSplit renders the split-pane layout with bordered file list on left and bordered patch on right.
+// viewSplit renders the split-pane layout with unboxed file list and patch sections.
 func (m Model) viewSplit() string {
 	outerHeight := m.height - 1 // reserve status bar
 	if outerHeight < 3 {
 		return ""
 	}
 
-	flOuterWidth := fileListWidth(m.width)
-	patchOuterWidth := m.width - flOuterWidth
+	availableWidth := m.width - 1 // reserve one column for the divider
+	if availableWidth < 2 {
+		return ""
+	}
+	flOuterWidth := fileListWidth(availableWidth)
+	if flOuterWidth >= availableWidth {
+		flOuterWidth = availableWidth - 1
+	}
+	patchOuterWidth := availableWidth - flOuterWidth
 
-	flInnerW, flInnerH := panes.ContentDimensions(flOuterWidth, outerHeight)
-	patchInnerW, patchInnerH := panes.ContentDimensions(patchOuterWidth, outerHeight)
+	flInnerW, flInnerH := panes.UnboxedSectionDimensions(flOuterWidth, outerHeight)
+	patchInnerW, patchInnerH := panes.UnboxedSectionDimensions(patchOuterWidth, outerHeight)
 
 	filesActive := m.State.FocusPane == model.PaneFiles
 
@@ -1748,24 +1841,16 @@ func (m Model) viewSplit() string {
 	)
 	rightContent := m.renderPatch(patchInnerW, patchInnerH, patchOuterWidth)
 
-	showFoot := m.showFooter()
-	fileFooter := fmt.Sprintf("%d files", len(m.State.Files))
-	left := panes.BorderedPane(leftContent, "Files", fileFooter, flOuterWidth, outerHeight, filesActive, showFoot)
-	scrollLine := m.patchScrollLine(patchInnerH)
-	right := panes.BorderedPaneWithScroll(rightContent, m.patchTitle(), m.patchFooter(), patchOuterWidth, outerHeight, !filesActive, showFoot, scrollLine)
-
-	// Join bordered panes side by side, line by line.
-	leftLines := strings.Split(left, "\n")
-	rightLines := strings.Split(right, "\n")
-	rows := make([]string, len(leftLines))
-	for i := range leftLines {
-		r := ""
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-		rows[i] = leftLines[i] + r
+	fileMeta := ""
+	patchMeta := ""
+	if m.showFooter() {
+		fileMeta = fmt.Sprintf("%d files", len(m.State.Files))
+		patchMeta = m.patchFooter()
 	}
-	return strings.Join(rows, "\n")
+	left := panes.UnboxedSection(leftContent, "Files", fileMeta, flOuterWidth, outerHeight, filesActive)
+	right := panes.UnboxedSection(rightContent, m.patchTitle(), patchMeta, patchOuterWidth, outerHeight, !filesActive)
+
+	return panes.JoinColumns(left, right, flOuterWidth, patchOuterWidth)
 }
 
 // truncateToWidth trims a string to fit within a terminal-cell width budget.

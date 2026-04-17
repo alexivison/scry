@@ -673,8 +673,8 @@ func TestCommitUI_GeneratedMessageInBorderedArea(t *testing.T) {
 	m.height = 30
 
 	view := m.View()
-	// Commit message should be inside a bordered area (rounded border).
-	if !strings.Contains(view, "╭") || !strings.Contains(view, "╯") {
+	// Commit message should be inside a bordered area.
+	if !strings.Contains(view, "┌") || !strings.Contains(view, "┘") {
 		t.Errorf("commit view should use bordered area for message, got:\n%s", view)
 	}
 	if !strings.Contains(view, "feat: add feature") {
@@ -712,7 +712,7 @@ func TestCommitUI_SuccessViewBordered(t *testing.T) {
 	if !strings.Contains(view, "abc1234") {
 		t.Errorf("commit success view should show SHA, got:\n%s", view)
 	}
-	if !strings.Contains(view, "╭") {
+	if !strings.Contains(view, "┌") {
 		t.Errorf("commit success view should be bordered, got:\n%s", view)
 	}
 }
@@ -731,7 +731,7 @@ func TestCommitUI_ErrorViewBordered(t *testing.T) {
 	if !strings.Contains(view, "API error") {
 		t.Errorf("commit error view should show error, got:\n%s", view)
 	}
-	if !strings.Contains(view, "╭") {
+	if !strings.Contains(view, "┌") {
 		t.Errorf("commit error view should be bordered, got:\n%s", view)
 	}
 }

@@ -382,7 +382,7 @@ func TestOverlayDialog(t *testing.T) {
 			title: "Delete?", body: "wt", hint: "y/n",
 			checks: func(t *testing.T, output string) {
 				t.Helper()
-				if !strings.Contains(output, "╭") || !strings.Contains(output, "╯") {
+				if !strings.Contains(output, "┌") || !strings.Contains(output, "┘") {
 					t.Error("missing border characters")
 				}
 			},

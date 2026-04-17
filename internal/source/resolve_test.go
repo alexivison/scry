@@ -163,6 +163,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "origin/main",
+				Basis:   model.CompareBasisUpstream,
 				HeadRef: "feature",
 				Mode:    model.CompareThreeDot,
 			},
@@ -182,6 +183,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:      stubRepo,
 				BaseRef:   "aaa111",
+				Basis:     model.CompareBasisUpstream,
 				HeadRef:   "bbb222",
 				MergeBase: "ccc333",
 				DiffRange: "aaa111...bbb222",
@@ -191,6 +193,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "origin/main",
+				Basis:   model.CompareBasisUpstream,
 				HeadRef: "feature",
 				Mode:    model.CompareTwoDot,
 			},
@@ -208,6 +211,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:      stubRepo,
 				BaseRef:   "aaa111",
+				Basis:     model.CompareBasisUpstream,
 				HeadRef:   "bbb222",
 				MergeBase: "",
 				DiffRange: "aaa111..bbb222",
@@ -217,6 +221,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "origin/main",
+				Basis:   model.CompareBasisUpstream,
 				HeadRef: "", // empty → working tree mode
 				Mode:    model.CompareThreeDot,
 			},
@@ -232,6 +237,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:        stubRepo,
 				BaseRef:     "base111",
+				Basis:       model.CompareBasisUpstream,
 				HeadRef:     "",
 				WorkingTree: true,
 				MergeBase:   "",
@@ -242,6 +248,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "origin/main",
+				Basis:   model.CompareBasisUpstream,
 				HeadRef: "HEAD", // explicit → committed ref, not working tree
 				Mode:    model.CompareThreeDot,
 			},
@@ -261,6 +268,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:      stubRepo,
 				BaseRef:   "base111",
+				Basis:     model.CompareBasisUpstream,
 				HeadRef:   "head111",
 				MergeBase: "mb111",
 				DiffRange: "base111...head111",
@@ -270,6 +278,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			req: model.CompareRequest{
 				Repo:    stubRepo,
 				BaseRef: "", // default → merge-base(head, @{upstream})
+				Basis:   model.CompareBasisUpstream,
 				HeadRef: "feature",
 				Mode:    model.CompareThreeDot,
 			},
@@ -293,10 +302,103 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:         stubRepo,
 				BaseRef:      "mbup111",
+				Basis:        model.CompareBasisUpstream,
 				HeadRef:      "feat111",
 				MergeBase:    "mb222",
 				DiffRange:    "mbup111...feat111",
 				WatchBaseRef: "refs/remotes/origin/main",
+			},
+		},
+		"default base resolves to merge-base with local trunk when requested": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "",
+				Basis:   model.CompareBasisLocalTrunk,
+				HeadRef: "feature",
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "mainsha\n", nil
+				case "merge-base feature refs/heads/main":
+					return "mbmain111\n", nil
+				case "rev-parse --verify mbmain111":
+					return "mbmain111\n", nil
+				case "rev-parse --verify feature":
+					return "feat111\n", nil
+				case "merge-base mbmain111 feat111":
+					return "mb222\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: model.ResolvedCompare{
+				Repo:         stubRepo,
+				BaseRef:      "mbmain111",
+				Basis:        model.CompareBasisLocalTrunk,
+				HeadRef:      "feat111",
+				MergeBase:    "mb222",
+				DiffRange:    "mbmain111...feat111",
+				WatchBaseRef: "refs/heads/main",
+			},
+		},
+		"local trunk working tree uses HEAD merge-base": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "",
+				Basis:   model.CompareBasisLocalTrunk,
+				HeadRef: "",
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "mainsha\n", nil
+				case "merge-base HEAD refs/heads/main":
+					return "mbmain111\n", nil
+				case "rev-parse --verify mbmain111":
+					return "mbmain111\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: model.ResolvedCompare{
+				Repo:         stubRepo,
+				BaseRef:      "mbmain111",
+				Basis:        model.CompareBasisLocalTrunk,
+				WorkingTree:  true,
+				DiffRange:    "mbmain111",
+				WatchBaseRef: "refs/heads/main",
+			},
+		},
+		"local trunk basis returns error when branch missing": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "",
+				Basis:   model.CompareBasisLocalTrunk,
+				HeadRef: "feature",
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify --quiet refs/heads/main":
+					return "", gitErr(1, "missing main")
+				case "rev-parse --verify --quiet refs/heads/master":
+					return "", gitErr(1, "missing master")
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			wantErr: true,
+			errCheck: func(t *testing.T, err error) {
+				t.Helper()
+				if !strings.Contains(err.Error(), "no local default branch found") {
+					t.Errorf("error = %q, want local default branch message", err.Error())
+				}
 			},
 		},
 		"missing upstream falls back to merge-base with origin/main using explicit head": {
@@ -328,6 +430,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:         stubRepo,
 				BaseRef:      "mb333",
+				Basis:        model.CompareBasisUpstream,
 				HeadRef:      "feat111",
 				MergeBase:    "mb555",
 				DiffRange:    "mb333...feat111",
@@ -361,6 +464,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:         stubRepo,
 				BaseRef:      "mb444",
+				Basis:        model.CompareBasisUpstream,
 				HeadRef:      "feat111",
 				MergeBase:    "mb666",
 				DiffRange:    "mb444...feat111",
@@ -392,6 +496,7 @@ func TestCompareResolverResolve(t *testing.T) {
 			want: model.ResolvedCompare{
 				Repo:         stubRepo,
 				BaseRef:      "mb777",
+				Basis:        model.CompareBasisUpstream,
 				WorkingTree:  true,
 				DiffRange:    "mb777",
 				WatchBaseRef: "origin/main",

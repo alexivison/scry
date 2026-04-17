@@ -62,9 +62,11 @@ func Run(cfg config.Config) int {
 // runDiff is the normal diff-view pipeline.
 func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult) int {
 	resolver := &source.CompareResolver{Runner: boot.Runner}
+	basis := model.CompareBasisUpstream
 	req := model.CompareRequest{
 		Repo:             boot.Repo,
 		BaseRef:          cfg.BaseRef,
+		Basis:            basis,
 		HeadRef:          cfg.HeadRef,
 		Mode:             cfg.Mode,
 		IgnoreWhitespace: cfg.IgnoreWhitespace,
@@ -89,6 +91,7 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 
 	state := model.AppState{
 		Compare:          cmp,
+		CompareBasis:     basis,
 		Files:            files,
 		IgnoreWhitespace: cfg.IgnoreWhitespace,
 		FocusPane:        focusPane,
@@ -194,6 +197,7 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	// Start with an empty worktree list — data loads async after TUI launches.
 	state := model.AppState{
 		FocusPane:        model.PaneDashboard,
+		CompareBasis:     model.CompareBasisUpstream,
 		WorktreeMode:     true,
 		WatchEnabled:     cfg.Watch,
 		WatchInterval:    interval,
@@ -272,7 +276,7 @@ func (w *worktreeRemoverImpl) Remove(ctx context.Context, path string, force boo
 // drillDownProviderImpl creates a diff context for a specific worktree.
 type drillDownProviderImpl struct{}
 
-func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath string) (ui.DrillDownResult, error) {
+func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath string, basis model.CompareBasis) (ui.DrillDownResult, error) {
 	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
 
 	repo, err := source.ResolveRepoContext(ctx, runner)
@@ -283,8 +287,9 @@ func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath 
 	resolver := &source.CompareResolver{Runner: runner}
 	req := model.CompareRequest{
 		Repo:    repo,
-		BaseRef: source.WorktreeBaseRef(ctx, runner), // local default branch merge-base; "" falls back to @{upstream}
-		HeadRef: "",                                  // working tree mode
+		BaseRef: "",
+		Basis:   basis,
+		HeadRef: "", // working tree mode
 		Mode:    model.CompareThreeDot,
 	}
 	cmp, err := resolver.Resolve(ctx, req)
@@ -308,7 +313,7 @@ func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath 
 
 type previewLoaderImpl struct{}
 
-func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string) ([]model.FileSummary, error) {
+func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string, basis model.CompareBasis) ([]model.FileSummary, error) {
 	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
 	repo, err := source.ResolveRepoContext(ctx, runner)
 	if err != nil {
@@ -317,7 +322,8 @@ func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string
 	resolver := &source.CompareResolver{Runner: runner}
 	req := model.CompareRequest{
 		Repo:    repo,
-		BaseRef: source.WorktreeBaseRef(ctx, runner),
+		BaseRef: "",
+		Basis:   basis,
 		HeadRef: "",
 		Mode:    model.CompareThreeDot,
 	}

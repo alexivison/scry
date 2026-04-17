@@ -14,14 +14,14 @@ import (
 )
 
 var (
-	fileSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
+	fileSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.BrightText).Background(theme.SelectedBg)
 	fileDimStyle      = lipgloss.NewStyle().Faint(true)
 
 	// Status icon colors.
 	statusAddedStyle    = lipgloss.NewStyle().Foreground(theme.Added)
 	statusDeletedStyle  = lipgloss.NewStyle().Foreground(theme.Deleted)
 	statusModifiedStyle = lipgloss.NewStyle().Foreground(theme.Dirty)
-	statusRenamedStyle  = lipgloss.NewStyle().Foreground(theme.HunkHeader)
+	statusRenamedStyle  = lipgloss.NewStyle().Foreground(theme.Accent)
 	statusDefaultStyle  = lipgloss.NewStyle().Foreground(theme.Muted)
 
 	// Freshness markers.
@@ -32,7 +32,7 @@ var (
 	flagStyle = lipgloss.NewStyle().Foreground(theme.Dirty).Bold(true)
 
 	// Directory header style.
-	dirHeaderStyle = lipgloss.NewStyle().Foreground(theme.Muted).Faint(true)
+	dirHeaderStyle = lipgloss.NewStyle().Foreground(theme.ChromeFaint)
 )
 
 // FileListOpts holds optional parameters for file list rendering.

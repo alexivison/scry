@@ -98,9 +98,11 @@ func TestDashboardNavigateUpAtTop(t *testing.T) {
 type mockDrillDownProvider struct {
 	result DrillDownResult
 	err    error
+	bases  []model.CompareBasis
 }
 
-func (m *mockDrillDownProvider) LoadDrillDown(_ context.Context, _ string) (DrillDownResult, error) {
+func (m *mockDrillDownProvider) LoadDrillDown(_ context.Context, _ string, basis model.CompareBasis) (DrillDownResult, error) {
+	m.bases = append(m.bases, basis)
 	return m.result, m.err
 }
 
@@ -882,7 +884,7 @@ func TestDashboardDeleteConfirmFlow(t *testing.T) {
 	if !strings.Contains(view, "DIRTY") {
 		t.Errorf("dirty worktree prompt should warn about uncommitted changes, got:\n%s", view)
 	}
-	if !strings.Contains(view, "╭") {
+	if !strings.Contains(view, "┌") {
 		t.Error("confirmation dialog should have border")
 	}
 

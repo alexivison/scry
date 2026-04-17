@@ -60,6 +60,8 @@ func (m Model) viewStatusBar() string {
 		segments = append(segments, m.compareSegment(minimal))
 	}
 
+	segments = append(segments, m.basisSegment())
+
 	// Segment 2: Mode badges (non-dashboard).
 	if m.State.FocusPane != model.PaneDashboard {
 		segments = append(segments, m.modeBadges())
@@ -107,6 +109,10 @@ func (m Model) compareSegment(minimal bool) string {
 		return m.State.Compare.BaseRef + " (working tree)"
 	}
 	return m.State.Compare.DiffRange
+}
+
+func (m Model) basisSegment() string {
+	return m.State.CompareBasis.StatusLabel()
 }
 
 // modeBadges returns styled mode indicator badges (W for whitespace, C for commit).

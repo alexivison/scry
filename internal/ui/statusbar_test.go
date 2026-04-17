@@ -30,6 +30,9 @@ func TestStatusBar_Segments(t *testing.T) {
 	if !strings.Contains(bar, "abc123...def456") {
 		t.Error("status bar should contain compare range")
 	}
+	if !strings.Contains(bar, "basis: upstream") {
+		t.Error("status bar should contain active basis")
+	}
 }
 
 func TestStatusBar_ModeBadges(t *testing.T) {

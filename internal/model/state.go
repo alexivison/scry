@@ -57,6 +57,7 @@ type CommitState struct {
 // AppState is the top-level UI state threaded through the Bubble Tea model.
 type AppState struct {
 	Compare          ResolvedCompare
+	CompareBasis     CompareBasis
 	Files            []FileSummary
 	SelectedFile     int // Index into Files. -1 when Files is empty.
 	Patches          map[string]PatchLoadState

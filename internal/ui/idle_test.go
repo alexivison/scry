@@ -233,9 +233,9 @@ func TestIdleViewHasBorderedBox(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	// Bordered idle box uses rounded corners from lipgloss.
-	if !strings.Contains(view, "╭") || !strings.Contains(view, "╯") {
-		t.Errorf("idle view should use rounded border (╭/╯), got:\n%s", view)
+	// Bordered idle box uses square corners after the chrome restyle.
+	if !strings.Contains(view, "┌") || !strings.Contains(view, "┘") {
+		t.Errorf("idle view should use square border (┌/┘), got:\n%s", view)
 	}
 }
 
@@ -250,7 +250,7 @@ func TestIdleViewCenteredVertically(t *testing.T) {
 	// Find first line with border top — should not be line 0 (centered).
 	firstBorder := -1
 	for i, l := range lines {
-		if strings.Contains(l, "╭") {
+		if strings.Contains(l, "┌") {
 			firstBorder = i
 			break
 		}
