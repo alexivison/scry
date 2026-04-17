@@ -553,7 +553,7 @@ func (m Model) pendingKeyTimeout() tea.Cmd {
 // fileListInnerHeight returns the visible row count for the file list pane.
 func (m Model) fileListInnerHeight() int {
 	outerH := m.height - 1 // status bar
-	_, h := panes.ContentDimensions(m.width, outerH)
+	_, h := panes.UnboxedSectionDimensions(m.width, outerH)
 	return h
 }
 
@@ -1462,14 +1462,17 @@ func (m Model) viewFileList() string {
 	if outerHeight < 3 {
 		outerHeight = 3
 	}
-	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+	innerW, innerH := panes.UnboxedSectionDimensions(m.width, outerHeight)
 	content, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, 0,
 		innerW, innerH, true,
 		m.freshnessOpts(),
 	)
-	footer := fmt.Sprintf("%d files", len(m.State.Files))
-	return panes.BorderedPane(content, "Files", footer, m.width, outerHeight, true, m.showFooter())
+	meta := ""
+	if m.showFooter() {
+		meta = fmt.Sprintf("%d files", len(m.State.Files))
+	}
+	return panes.UnboxedSection(content, "Files", meta, m.width, outerHeight, true)
 }
 
 func (m Model) viewPatch() string {
@@ -1477,10 +1480,13 @@ func (m Model) viewPatch() string {
 	if outerHeight < 3 {
 		outerHeight = 3
 	}
-	innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+	innerW, innerH := panes.UnboxedSectionDimensions(m.width, outerHeight)
 	content := m.renderPatch(innerW, innerH, m.width)
-	scrollLine := m.patchScrollLine(innerH)
-	return panes.BorderedPaneWithScroll(content, m.patchTitle(), m.patchFooter(), m.width, outerHeight, true, m.showFooter(), scrollLine)
+	meta := ""
+	if m.showFooter() {
+		meta = m.patchFooter()
+	}
+	return panes.UnboxedSection(content, m.patchTitle(), meta, m.width, outerHeight, true)
 }
 
 // renderPatch renders the patch pane content at the given dimensions.
@@ -1769,7 +1775,11 @@ func (m *Model) syncFileListScroll() {
 		return
 	}
 	outerHeight := m.height - 1 // reserve status bar
-	_, innerH := panes.ContentDimensions(m.width, outerHeight)
+	splitWidth := m.width - 1
+	if splitWidth < 1 {
+		splitWidth = 1
+	}
+	_, innerH := panes.UnboxedSectionDimensions(fileListWidth(splitWidth), outerHeight)
 	m.fileListScroll = panes.EnsureVisible(
 		m.State.SelectedFile, m.fileListScroll, innerH, len(m.State.Files),
 	)
@@ -1802,18 +1812,25 @@ func fileListWidth(termWidth int) int {
 	return w
 }
 
-// viewSplit renders the split-pane layout with bordered file list on left and bordered patch on right.
+// viewSplit renders the split-pane layout with unboxed file list and patch sections.
 func (m Model) viewSplit() string {
 	outerHeight := m.height - 1 // reserve status bar
 	if outerHeight < 3 {
 		return ""
 	}
 
-	flOuterWidth := fileListWidth(m.width)
-	patchOuterWidth := m.width - flOuterWidth
+	availableWidth := m.width - 1 // reserve one column for the divider
+	if availableWidth < 2 {
+		return ""
+	}
+	flOuterWidth := fileListWidth(availableWidth)
+	if flOuterWidth >= availableWidth {
+		flOuterWidth = availableWidth - 1
+	}
+	patchOuterWidth := availableWidth - flOuterWidth
 
-	flInnerW, flInnerH := panes.ContentDimensions(flOuterWidth, outerHeight)
-	patchInnerW, patchInnerH := panes.ContentDimensions(patchOuterWidth, outerHeight)
+	flInnerW, flInnerH := panes.UnboxedSectionDimensions(flOuterWidth, outerHeight)
+	patchInnerW, patchInnerH := panes.UnboxedSectionDimensions(patchOuterWidth, outerHeight)
 
 	filesActive := m.State.FocusPane == model.PaneFiles
 
@@ -1824,24 +1841,16 @@ func (m Model) viewSplit() string {
 	)
 	rightContent := m.renderPatch(patchInnerW, patchInnerH, patchOuterWidth)
 
-	showFoot := m.showFooter()
-	fileFooter := fmt.Sprintf("%d files", len(m.State.Files))
-	left := panes.BorderedPane(leftContent, "Files", fileFooter, flOuterWidth, outerHeight, filesActive, showFoot)
-	scrollLine := m.patchScrollLine(patchInnerH)
-	right := panes.BorderedPaneWithScroll(rightContent, m.patchTitle(), m.patchFooter(), patchOuterWidth, outerHeight, !filesActive, showFoot, scrollLine)
-
-	// Join bordered panes side by side, line by line.
-	leftLines := strings.Split(left, "\n")
-	rightLines := strings.Split(right, "\n")
-	rows := make([]string, len(leftLines))
-	for i := range leftLines {
-		r := ""
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-		rows[i] = leftLines[i] + r
+	fileMeta := ""
+	patchMeta := ""
+	if m.showFooter() {
+		fileMeta = fmt.Sprintf("%d files", len(m.State.Files))
+		patchMeta = m.patchFooter()
 	}
-	return strings.Join(rows, "\n")
+	left := panes.UnboxedSection(leftContent, "Files", fileMeta, flOuterWidth, outerHeight, filesActive)
+	right := panes.UnboxedSection(rightContent, m.patchTitle(), patchMeta, patchOuterWidth, outerHeight, !filesActive)
+
+	return panes.JoinColumns(left, right, flOuterWidth, patchOuterWidth)
 }
 
 // truncateToWidth trims a string to fit within a terminal-cell width budget.

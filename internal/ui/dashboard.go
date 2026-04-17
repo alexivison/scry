@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -402,7 +401,7 @@ func (m *Model) syncDashboardScroll() {
 		return
 	}
 	outerHeight := m.height - 1 // reserve status bar
-	_, innerH := panes.ContentDimensions(m.width, outerHeight)
+	_, innerH := panes.UnboxedSectionDimensions(m.width, outerHeight)
 	visibleEntries := innerH / panes.LinesPerEntry
 	if visibleEntries < 1 {
 		visibleEntries = 1
@@ -553,16 +552,18 @@ func (m Model) viewDashboard() string {
 	if showPreview {
 		base = m.viewDashboardSplit(outerHeight)
 	} else {
-		innerW, innerH := panes.ContentDimensions(m.width, outerHeight)
+		innerW, innerH := panes.UnboxedSectionDimensions(m.width, outerHeight)
 		var content string
 		if len(ds.Worktrees) == 0 && m.State.RefreshInFlight {
 			content = "Loading worktrees..."
 		} else {
 			content = panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, innerW, innerH)
 		}
-		footer := m.dashboardFooter()
-		showFoot := m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != ""
-		base = panes.BorderedPane(content, "Worktrees", footer, m.width, outerHeight, true, showFoot)
+		meta := ""
+		if m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != "" {
+			meta = m.dashboardFooter()
+		}
+		base = panes.UnboxedSection(content, "Worktrees", meta, m.width, outerHeight, true)
 	}
 
 	// Overlay the confirmation dialog on top of the dashboard.
@@ -590,34 +591,32 @@ func (m Model) viewDashboard() string {
 // viewDashboardSplit renders the dashboard with a side preview pane.
 func (m Model) viewDashboardSplit(outerHeight int) string {
 	ds := m.State.DashboardState
-	showFoot := m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != ""
+	meta := ""
+	if m.showFooter() || ds.DeleteInFlight || ds.DeleteErr != "" {
+		meta = m.dashboardFooter()
+	}
 
 	// Allocate 60% to worktree list, 40% to preview.
-	listW := m.width * 6 / 10
-	previewW := m.width - listW
+	availableWidth := m.width - 1 // reserve one column for the divider
+	if availableWidth < 2 {
+		return ""
+	}
+	listW := availableWidth * 6 / 10
+	if listW >= availableWidth {
+		listW = availableWidth - 1
+	}
+	previewW := availableWidth - listW
 
-	listInnerW, listInnerH := panes.ContentDimensions(listW, outerHeight)
-	previewInnerW, previewInnerH := panes.ContentDimensions(previewW, outerHeight)
+	listInnerW, listInnerH := panes.UnboxedSectionDimensions(listW, outerHeight)
+	previewInnerW, previewInnerH := panes.UnboxedSectionDimensions(previewW, outerHeight)
 
 	listContent := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, listInnerW, listInnerH)
 	previewContent := panes.RenderPreview(ds.PreviewFiles, previewInnerW, previewInnerH)
 
-	listFooter := m.dashboardFooter()
-	left := panes.BorderedPane(listContent, "Worktrees", listFooter, listW, outerHeight, true, showFoot)
-	right := panes.BorderedPane(previewContent, "Preview", "", previewW, outerHeight, false, showFoot)
+	left := panes.UnboxedSection(listContent, "Worktrees", meta, listW, outerHeight, true)
+	right := panes.UnboxedSection(previewContent, "Preview", "", previewW, outerHeight, false)
 
-	// Join panes side by side.
-	leftLines := strings.Split(left, "\n")
-	rightLines := strings.Split(right, "\n")
-	rows := make([]string, len(leftLines))
-	for i := range leftLines {
-		r := ""
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-		rows[i] = leftLines[i] + r
-	}
-	return strings.Join(rows, "\n")
+	return panes.JoinColumns(left, right, listW, previewW)
 }
 
 // dashboardFooter returns the footer text for the worktree pane.
