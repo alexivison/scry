@@ -26,5 +26,6 @@ var (
 	BrightText     = lipgloss.Color("255")     // white
 	SelectedBg     = lipgloss.Color("237")     // subtle selected-row background
 	ChromeFaint    = lipgloss.Color("239")     // lighter separators/borders
+	PaneBorder     = lipgloss.Color("#373e47") // tmux pane border / divider chrome
 	InactiveChrome = lipgloss.Color("#768390") // ai-party tmux inactive pane chrome
 )

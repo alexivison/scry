@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	sectionDividerStyle       = lipgloss.NewStyle().Foreground(theme.InactiveChrome)
+	sectionDividerStyle       = lipgloss.NewStyle().Foreground(theme.PaneBorder)
 	sectionMetaStyle          = lipgloss.NewStyle().Foreground(theme.Muted)
 	sectionTitleActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
 	sectionTitleInactiveStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.InactiveChrome)
