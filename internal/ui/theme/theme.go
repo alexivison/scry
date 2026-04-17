@@ -1,5 +1,6 @@
 // Package theme provides semantic color tokens for the scry TUI.
-// All colors use standard ANSI codes so the terminal theme decides actual RGB.
+// Colors may use ANSI palette indices or explicit hex values where exact chrome
+// matching matters.
 package theme
 
 import "github.com/charmbracelet/lipgloss"
@@ -17,12 +18,13 @@ var (
 	Error = lipgloss.Color("1") // red
 
 	// Chrome.
-	Accent      = lipgloss.Color("7")   // soft bright gray
-	Muted       = lipgloss.Color("8")   // dim / bright-black
-	StatusBg    = lipgloss.Color("236") // medium-dark gray
-	StatusFg    = lipgloss.Color("252") // light gray
-	DividerFg   = lipgloss.Color("240") // medium gray
-	BrightText  = lipgloss.Color("255") // white
-	SelectedBg  = lipgloss.Color("237") // subtle selected-row background
-	ChromeFaint = lipgloss.Color("239") // lighter separators/borders
+	Accent         = lipgloss.Color("7")       // soft bright gray
+	Muted          = lipgloss.Color("8")       // dim / bright-black
+	StatusBg       = lipgloss.Color("236")     // medium-dark gray
+	StatusFg       = lipgloss.Color("252")     // light gray
+	DividerFg      = lipgloss.Color("240")     // medium gray
+	BrightText     = lipgloss.Color("255")     // white
+	SelectedBg     = lipgloss.Color("237")     // subtle selected-row background
+	ChromeFaint    = lipgloss.Color("239")     // lighter separators/borders
+	InactiveChrome = lipgloss.Color("#768390") // ai-party tmux inactive pane chrome
 )

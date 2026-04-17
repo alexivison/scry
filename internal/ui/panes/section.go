@@ -9,11 +9,13 @@ import (
 )
 
 var (
-	sectionDividerStyle       = lipgloss.NewStyle().Foreground(theme.ChromeFaint)
+	sectionDividerStyle       = lipgloss.NewStyle().Foreground(theme.InactiveChrome)
 	sectionMetaStyle          = lipgloss.NewStyle().Foreground(theme.Muted)
 	sectionTitleActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
-	sectionTitleInactiveStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.BrightText)
+	sectionTitleInactiveStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.InactiveChrome)
 )
+
+const sectionHeaderInset = 2
 
 // UnboxedSectionDimensions returns the width and content height for a main
 // browsing section with an inline header and faint separator.
@@ -85,26 +87,36 @@ func renderSectionHeader(title, meta string, width int, active bool) string {
 		return ""
 	}
 
+	inset := sectionHeaderInset
+	if inset > width-1 {
+		inset = width - 1
+	}
+	if inset < 0 {
+		inset = 0
+	}
+	availableWidth := width - inset
+	leftPad := strings.Repeat(" ", inset)
+
 	titleStyle := sectionTitleInactiveStyle
 	if active {
 		titleStyle = sectionTitleActiveStyle
 	}
 
-	title = fitSectionHeaderText(title, width)
+	title = fitSectionHeaderText(title, availableWidth)
 	if meta == "" {
-		return padOrTruncate(titleStyle.Render(title), width)
+		return padOrTruncate(leftPad+titleStyle.Render(title), width)
 	}
 
-	minTitleWidth := width / 3
+	minTitleWidth := availableWidth / 3
 	if minTitleWidth < 1 {
 		minTitleWidth = 1
 	}
-	maxMetaWidth := width - minTitleWidth - 1
+	maxMetaWidth := availableWidth - minTitleWidth - 1
 	if maxMetaWidth < 0 {
 		maxMetaWidth = 0
 	}
 	meta = fitSectionHeaderText(meta, maxMetaWidth)
-	titleWidth := width - lipgloss.Width(meta)
+	titleWidth := availableWidth - lipgloss.Width(meta)
 	if meta != "" {
 		titleWidth--
 	}
@@ -114,12 +126,12 @@ func renderSectionHeader(title, meta string, width int, active bool) string {
 	}
 	title = fitSectionHeaderText(title, titleWidth)
 
-	header := titleStyle.Render(title)
+	header := leftPad + titleStyle.Render(title)
 	if meta == "" {
 		return padOrTruncate(header, width)
 	}
 
-	gap := width - lipgloss.Width(title) - lipgloss.Width(meta)
+	gap := width - inset - lipgloss.Width(title) - lipgloss.Width(meta)
 	if gap < 1 {
 		gap = 1
 	}
