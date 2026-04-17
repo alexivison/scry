@@ -165,6 +165,25 @@ func initialDiffState(cfg config.Config, cmp model.ResolvedCompare, basis model.
 	}
 }
 
+func initialDashboardState(cfg config.Config) model.AppState {
+	interval := cfg.WatchInterval
+	if interval == 0 {
+		interval = 2 * time.Second
+	}
+
+	return model.AppState{
+		FocusPane:        model.PaneDashboard,
+		Layout:           model.LayoutSplit,
+		CompareBasis:     model.CompareBasisUpstream,
+		WorktreeMode:     true,
+		WatchEnabled:     cfg.Watch,
+		WatchInterval:    interval,
+		GroupByDirectory: cfg.GroupByDirectory,
+		RefreshInFlight:  true, // signal that initial load is pending
+		Patches:          make(map[string]model.PatchLoadState),
+	}
+}
+
 // commitProviderAdapter bridges the domain CommitMessageProvider to the UI CommitProvider.
 // It collects staged data and delegates to the underlying provider.
 type commitProviderAdapter struct {
@@ -194,22 +213,8 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	stableRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot})
 	loader := &worktreeLoaderImpl{runner: stableRunner}
 
-	interval := cfg.WatchInterval
-	if interval == 0 {
-		interval = 2 * time.Second
-	}
-
 	// Start with an empty worktree list — data loads async after TUI launches.
-	state := model.AppState{
-		FocusPane:        model.PaneDashboard,
-		CompareBasis:     model.CompareBasisUpstream,
-		WorktreeMode:     true,
-		WatchEnabled:     cfg.Watch,
-		WatchInterval:    interval,
-		GroupByDirectory: cfg.GroupByDirectory,
-		RefreshInFlight:  true, // signal that initial load is pending
-		Patches:          make(map[string]model.PatchLoadState),
-	}
+	state := initialDashboardState(cfg)
 
 	drillDown := &drillDownProviderImpl{}
 	removeRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot, Timeout: gitexec.RemoveTimeout})

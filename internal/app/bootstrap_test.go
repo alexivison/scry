@@ -34,3 +34,28 @@ func TestInitialDiffStateDefaultsToSplitLayout(t *testing.T) {
 		t.Fatal("Patches map is nil")
 	}
 }
+
+func TestInitialDashboardStateDefaultsToSplitLayout(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Watch:            true,
+		WatchInterval:    3 * time.Second,
+		GroupByDirectory: true,
+	}
+
+	state := initialDashboardState(cfg)
+
+	if state.Layout != model.LayoutSplit {
+		t.Fatalf("Layout = %q, want %q", state.Layout, model.LayoutSplit)
+	}
+	if state.FocusPane != model.PaneDashboard {
+		t.Fatalf("FocusPane = %q, want %q", state.FocusPane, model.PaneDashboard)
+	}
+	if !state.WorktreeMode {
+		t.Fatal("WorktreeMode = false, want true")
+	}
+	if state.Patches == nil {
+		t.Fatal("Patches map is nil")
+	}
+}
