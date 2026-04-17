@@ -84,24 +84,7 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		return 128
 	}
 
-	focusPane := model.PaneFiles
-	if cfg.Watch && len(files) == 0 {
-		focusPane = model.PaneIdle
-	}
-
-	state := model.AppState{
-		Compare:          cmp,
-		CompareBasis:     basis,
-		Files:            files,
-		IgnoreWhitespace: cfg.IgnoreWhitespace,
-		FocusPane:        focusPane,
-		Patches:          make(map[string]model.PatchLoadState),
-		WatchEnabled:     cfg.Watch,
-		WatchInterval:    cfg.WatchInterval,
-		CommitEnabled:    cfg.Commit,
-		CommitAuto:       cfg.CommitAuto,
-		GroupByDirectory: cfg.GroupByDirectory,
-	}
+	state := initialDiffState(cfg, cmp, basis, files)
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
 	opts := []ui.ModelOption{
@@ -158,6 +141,28 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 	}
 
 	return 0
+}
+
+func initialDiffState(cfg config.Config, cmp model.ResolvedCompare, basis model.CompareBasis, files []model.FileSummary) model.AppState {
+	focusPane := model.PaneFiles
+	if cfg.Watch && len(files) == 0 {
+		focusPane = model.PaneIdle
+	}
+
+	return model.AppState{
+		Compare:          cmp,
+		CompareBasis:     basis,
+		Files:            files,
+		IgnoreWhitespace: cfg.IgnoreWhitespace,
+		FocusPane:        focusPane,
+		Layout:           model.LayoutSplit,
+		Patches:          make(map[string]model.PatchLoadState),
+		WatchEnabled:     cfg.Watch,
+		WatchInterval:    cfg.WatchInterval,
+		CommitEnabled:    cfg.Commit,
+		CommitAuto:       cfg.CommitAuto,
+		GroupByDirectory: cfg.GroupByDirectory,
+	}
 }
 
 // commitProviderAdapter bridges the domain CommitMessageProvider to the UI CommitProvider.
