@@ -13,6 +13,7 @@ import (
 	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
+	"github.com/alexivison/scry/internal/search"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
@@ -395,6 +396,7 @@ func TestPatchHorizontalScrollKeys(t *testing.T) {
 	m.height = 5
 	m.State.FocusPane = model.PanePatch
 	m.patchViewport = panes.NewPatchViewport(horizontalScrollPatch())
+	m.patchViewport.LineMode = model.LineModeScroll
 	m.patchViewport.Width = 24
 	m.patchViewport.Height = 1
 	m.patchViewport.ScrollOffset = 1
@@ -428,6 +430,56 @@ func TestPatchHorizontalScrollKeys(t *testing.T) {
 	m = updated.(Model)
 	if got := m.patchViewport.XOffset; got != 0 {
 		t.Fatalf("0 XOffset = %d, want reset to zero", got)
+	}
+}
+
+func TestNewModelDefaultsPatchLineModeWrap(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+
+	if m.State.PatchLineMode != model.LineModeWrap {
+		t.Fatalf("PatchLineMode = %v, want LineModeWrap", m.State.PatchLineMode)
+	}
+}
+
+func TestPatchWrapToggleKey(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 24
+	m.height = 5
+	m.State.FocusPane = model.PanePatch
+	m.State.PatchLineMode = model.LineModeWrap
+	m.patchViewport = panes.NewPatchViewport(horizontalScrollPatch())
+	m.patchViewport.Width = 24
+	m.patchViewport.Height = 3
+	m.patchViewport.ScrollOffset = 2 // continuation row for the first diff line
+	m.patchViewport.XOffset = 8
+
+	updated, _ := m.Update(keyMsg('w'))
+	m = updated.(Model)
+
+	if m.State.PatchLineMode != model.LineModeScroll {
+		t.Fatalf("PatchLineMode = %v, want LineModeScroll", m.State.PatchLineMode)
+	}
+	if m.patchViewport.LineMode != model.LineModeScroll {
+		t.Fatalf("viewport LineMode = %v, want LineModeScroll", m.patchViewport.LineMode)
+	}
+	if m.patchViewport.XOffset != 0 {
+		t.Fatalf("XOffset = %d, want 0 after toggling to scroll", m.patchViewport.XOffset)
+	}
+	if m.patchViewport.ScrollOffset != 1 {
+		t.Fatalf("ScrollOffset = %d, want first row of same logical line", m.patchViewport.ScrollOffset)
+	}
+
+	updated, _ = m.Update(keyMsg('w'))
+	m = updated.(Model)
+	if m.State.PatchLineMode != model.LineModeWrap {
+		t.Fatalf("PatchLineMode = %v, want LineModeWrap", m.State.PatchLineMode)
+	}
+	if m.patchViewport.LineMode != model.LineModeWrap {
+		t.Fatalf("viewport LineMode = %v, want LineModeWrap", m.patchViewport.LineMode)
 	}
 }
 
@@ -947,6 +999,34 @@ func TestDirectionalSearchStoresLogicalLineMatch(t *testing.T) {
 	}
 	if match.Start != len("package ") || match.End != len("package main") {
 		t.Fatalf("SearchMatch span = [%d,%d), want [%d,%d)", match.Start, match.End, len("package "), len("package main"))
+	}
+}
+
+func TestDirectionalSearchWrappedLineScrollsToFirstVisualRow(t *testing.T) {
+	t.Parallel()
+
+	patch := horizontalScrollPatch()
+	loader := &mockPatchLoader{patches: map[string]model.FilePatch{"main.go": patch}}
+	m := NewModel(sampleState(), WithPatchLoader(loader))
+	m.width = 24
+	m.height = 5
+	um := enterAndLoad(t, m)
+	um.patchViewport.Width = 24
+	um.patchViewport.Height = 3
+	um.patchViewport.GutterVisible = true
+	um.State.SearchQuery = "def"
+
+	if got, want := um.patchViewport.TotalLines(), 3; got != want {
+		t.Fatalf("TotalLines() = %d, want %d with wrapped diff line", got, want)
+	}
+
+	um.executeSearch(search.SearchNext)
+
+	if um.patchViewport.ScrollOffset != 1 {
+		t.Fatalf("ScrollOffset = %d, want first visual row of matched logical diff line", um.patchViewport.ScrollOffset)
+	}
+	if um.patchViewport.SearchMatch.Line != 0 {
+		t.Fatalf("SearchMatch.Line = %d, want logical diff line 0", um.patchViewport.SearchMatch.Line)
 	}
 }
 
@@ -2309,6 +2389,37 @@ func TestRefreshPreservesScrollForUnchangedPatch(t *testing.T) {
 	}
 	if result.patchViewport.CurrentHunk != savedHunk {
 		t.Errorf("CurrentHunk = %d, want %d (preserved)", result.patchViewport.CurrentHunk, savedHunk)
+	}
+}
+
+func TestRefreshPreservesWrappedLogicalAnchorAcrossWidthChange(t *testing.T) {
+	t.Parallel()
+
+	patch := horizontalScrollPatch()
+	loader := &mockPatchLoader{patches: map[string]model.FilePatch{"main.go": patch}}
+	metaLoader := &mockMetadataLoader{files: sampleFiles()}
+	m := NewModel(sampleState(), WithPatchLoader(loader), WithMetadataLoader(metaLoader))
+	m.width = 24
+	m.height = 5
+
+	um := enterAndLoad(t, m)
+	if um.patchViewport == nil {
+		t.Fatal("expected patchViewport after enter")
+	}
+	um.patchViewport.Width = 24
+	um.patchViewport.Height = 3
+	um.patchViewport.GutterVisible = true
+	um.patchViewport.ScrollOffset = 2 // continuation row for the first diff line
+
+	um.width = 80
+	um.metadataLoader = &mockMetadataLoader{files: sampleFiles()}
+	result := refreshAndComplete(t, um)
+
+	if result.patchViewport == nil {
+		t.Fatal("patchViewport should survive refresh of unchanged file")
+	}
+	if result.patchViewport.ScrollOffset != 1 {
+		t.Fatalf("ScrollOffset = %d, want first visual row of same logical diff line after width change", result.patchViewport.ScrollOffset)
 	}
 }
 

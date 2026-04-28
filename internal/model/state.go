@@ -25,8 +25,8 @@ const (
 type LineMode int
 
 const (
-	LineModeScroll LineMode = iota
-	LineModeWrap
+	LineModeWrap LineMode = iota
+	LineModeScroll
 )
 
 // LoadStatus tracks the lifecycle of an async patch load.

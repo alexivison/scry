@@ -72,6 +72,32 @@ func noNewlinePatch() model.FilePatch {
 	}
 }
 
+func wrappedTwoHunkPatch() model.FilePatch {
+	return model.FilePatch{
+		Summary: model.FileSummary{Path: "wrap.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{
+			{
+				Header:   "func first()",
+				OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1,
+				Lines: []model.DiffLine{{
+					Kind:  model.LineAdded,
+					NewNo: intP(1),
+					Text:  "0123456789abcdefghijkl",
+				}},
+			},
+			{
+				Header:   "func second()",
+				OldStart: 10, OldLen: 1, NewStart: 10, NewLen: 1,
+				Lines: []model.DiffLine{{
+					Kind:  model.LineAdded,
+					NewNo: intP(10),
+					Text:  "second()",
+				}},
+			},
+		},
+	}
+}
+
 func TestNewPatchViewport(t *testing.T) {
 	t.Parallel()
 
@@ -160,6 +186,75 @@ func TestNextHunk(t *testing.T) {
 				t.Errorf("ScrollOffset = %d, want %d", vp.ScrollOffset, tc.wantLine)
 			}
 		})
+	}
+}
+
+func TestNextHunkUsesVisualRowsInWrapMode(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(wrappedTwoHunkPatch())
+	vp.Width = 24
+	vp.Height = 5
+	vp.GutterVisible = true
+
+	vp.NextHunk()
+
+	if vp.CurrentHunk != 1 {
+		t.Fatalf("CurrentHunk = %d, want 1", vp.CurrentHunk)
+	}
+	if vp.ScrollOffset != 3 {
+		t.Fatalf("ScrollOffset = %d, want visual row 3 after wrapped first hunk", vp.ScrollOffset)
+	}
+}
+
+func TestPrevHunkUsesVisualRowsInWrapMode(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(wrappedTwoHunkPatch())
+	vp.Width = 24
+	vp.Height = 5
+	vp.GutterVisible = true
+	vp.CurrentHunk = 1
+	vp.ScrollOffset = vp.hunkLineOffset(1)
+
+	vp.PrevHunk()
+
+	if vp.CurrentHunk != 0 {
+		t.Fatalf("CurrentHunk = %d, want 0", vp.CurrentHunk)
+	}
+	if vp.ScrollOffset != 0 {
+		t.Fatalf("ScrollOffset = %d, want first hunk header", vp.ScrollOffset)
+	}
+}
+
+func TestSetLineModePreservesLogicalAnchorAndResetsScrollXOffset(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(wrappedTwoHunkPatch())
+	vp.Width = 24
+	vp.Height = 5
+	vp.GutterVisible = true
+	vp.ScrollOffset = 2 // continuation row for the first diff line
+	vp.XOffset = 8
+
+	vp.SetLineMode(model.LineModeScroll)
+
+	if vp.LineMode != model.LineModeScroll {
+		t.Fatalf("LineMode = %v, want LineModeScroll", vp.LineMode)
+	}
+	if vp.XOffset != 0 {
+		t.Fatalf("XOffset = %d, want reset to 0 when entering scroll mode", vp.XOffset)
+	}
+	if vp.ScrollOffset != 1 {
+		t.Fatalf("ScrollOffset = %d, want first row of same logical diff line", vp.ScrollOffset)
+	}
+
+	vp.SetLineMode(model.LineModeWrap)
+	if vp.LineMode != model.LineModeWrap {
+		t.Fatalf("LineMode = %v, want LineModeWrap", vp.LineMode)
+	}
+	if vp.ScrollOffset != 1 {
+		t.Fatalf("ScrollOffset = %d, want logical anchor preserved across mode toggle", vp.ScrollOffset)
 	}
 }
 
