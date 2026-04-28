@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/ui/syntax"
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
@@ -27,8 +28,9 @@ type PatchViewport struct {
 	GutterVisible bool        // when false, suppress line number gutter (minimal mode)
 
 	// Pre-computed flat line list for rendering.
-	lines        []patchLine
-	gutterDigits int // width of each line-number column (min 4)
+	lines             []patchLine
+	gutterDigits      int // width of each line-number column (min 4)
+	syntaxHighlighted *syntax.LineCache
 }
 
 const horizontalScrollStep = 8
@@ -65,6 +67,11 @@ func NewPatchViewport(patch model.FilePatch) *PatchViewport {
 	vp.lines = vp.buildLines()
 	vp.gutterDigits = vp.computeGutterDigits()
 	return vp
+}
+
+// SetSyntaxHighlighter enables body-only syntax highlighting for diff lines.
+func (vp *PatchViewport) SetSyntaxHighlighter(lines *syntax.LineCache) {
+	vp.syntaxHighlighted = lines
 }
 
 // computeGutterDigits returns the number of digits needed for the largest
@@ -311,7 +318,7 @@ func (vp *PatchViewport) Render() string {
 			if vp.SearchQuery != "" && vp.SearchMatch.Line == pl.diffIndex {
 				match = vp.SearchMatch
 			}
-			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, match, vp.GutterVisible, vp.gutterDigits, vp.LineMode, vp.XOffset))
+			rendered = append(rendered, vp.renderDiffLine(pl.diff, pl.diffIndex, match))
 		}
 	}
 	return strings.Join(rendered, "\n")
@@ -333,11 +340,38 @@ func (vp *PatchViewport) visibleLines() []patchLine {
 	return vp.lines[start:end]
 }
 
+func (vp *PatchViewport) renderDiffLine(dl model.DiffLine, diffIndex int, match SearchMatch) string {
+	return renderDiffLineBodyHL(
+		dl,
+		vp.highlightBody(dl, diffIndex, match),
+		vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind),
+		vp.Width,
+		vp.SearchQuery,
+		match,
+		vp.GutterVisible,
+		vp.gutterDigits,
+		vp.LineMode,
+		vp.XOffset,
+	)
+}
+
+func (vp *PatchViewport) highlightBody(dl model.DiffLine, diffIndex int, match SearchMatch) string {
+	if vp.syntaxHighlighted == nil || !syntax.Highlightable(dl.Kind) {
+		return dl.Text
+	}
+	if vp.SearchQuery != "" && match.validForBody(dl.Text) {
+		return vp.syntaxHighlighted.HighlightLineSpan(diffIndex, dl.Text, match.Start, match.End)
+	}
+	return vp.syntaxHighlighted.HighlightLine(diffIndex, dl.Text)
+}
+
 type diffLineLayers struct {
 	gutter string
 	prefix string
 	body   string
 	style  lipgloss.Style
+
+	bodyStyled bool
 }
 
 func buildDiffLineLayers(dl model.DiffLine, gutterVisible bool, gutterDigits int) diffLineLayers {
@@ -354,11 +388,17 @@ func buildDiffLineLayers(dl model.DiffLine, gutterVisible bool, gutterDigits int
 }
 
 func renderDiffLineHL(dl model.DiffLine, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int, lineMode model.LineMode, xOffset int) string {
+	return renderDiffLineBodyHL(dl, dl.Text, false, width, query, match, gutterVisible, gutterDigits, lineMode, xOffset)
+}
+
+func renderDiffLineBodyHL(dl model.DiffLine, body string, bodyStyled bool, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int, lineMode model.LineMode, xOffset int) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
 
 	layers := buildDiffLineLayers(dl, gutterVisible, gutterDigits)
+	layers.body = body
+	layers.bodyStyled = bodyStyled
 	return emitDiffLine(layers, width, query, match, lineMode, xOffset)
 }
 
@@ -381,17 +421,27 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 	}
 
 	body := layers.prefix + visibleBody
+	if layers.bodyStyled {
+		body = layers.style.Render(layers.prefix) + visibleBody
+	}
+
 	if layers.gutter != "" {
-		if query != "" && match.validForBody(layers.body) {
+		if !layers.bodyStyled && query != "" && match.validForBody(layers.body) {
 			return layers.gutter + highlightSpan(body, bodySpanToVisibleContentSpan(match, layers.prefix, xOffset, visibleBody), layers.style)
+		}
+		if layers.bodyStyled {
+			return layers.gutter + body
 		}
 		return layers.gutter + layers.style.Render(body)
 	}
 
-	if query != "" && match.validForBody(layers.body) {
+	if !layers.bodyStyled && query != "" && match.validForBody(layers.body) {
 		return highlightSpan(body, bodySpanToVisibleContentSpan(match, layers.prefix, xOffset, visibleBody), layers.style)
 	}
 
+	if layers.bodyStyled {
+		return body
+	}
 	return layers.style.Render(body)
 }
 

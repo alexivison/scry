@@ -45,6 +45,24 @@ func TestDiffLineLayersSeparateGutterPrefixBody(t *testing.T) {
 	}
 }
 
+func TestStyledBodyDoesNotOwnDiffPrefix(t *testing.T) {
+	t.Parallel()
+
+	dl := model.DiffLine{Kind: model.LineAdded, NewNo: intP(7), Text: `return "ok"`}
+	styledBody := "\x1b[32mreturn\x1b[0m \"ok\""
+
+	got := renderDiffLineBodyHL(dl, styledBody, true, 0, "", NoSearchMatch(), false, 4, model.LineModeScroll, 0)
+	if stripped, want := ansi.Strip(got), `+return "ok"`; stripped != want {
+		t.Fatalf("renderDiffLineBodyHL() stripped = %q, want %q", stripped, want)
+	}
+
+	prefixAt := strings.Index(got, "+")
+	styleAt := strings.Index(got, "\x1b[32m")
+	if prefixAt < 0 || styleAt < 0 || styleAt < prefixAt {
+		t.Fatalf("syntax styling should start after the diff prefix: %q", got)
+	}
+}
+
 func TestPatchRenderSnapshotRepresentativeDiff(t *testing.T) {
 	t.Parallel()
 
@@ -311,6 +329,29 @@ func TestHorizontalScrollPreservesANSIBodySequences(t *testing.T) {
 	}
 	if w := lipgloss.Width(got); w > vp.Width {
 		t.Fatalf("rendered width = %d, want <= %d: %q", w, vp.Width, got)
+	}
+}
+
+func TestHorizontalScrollPreservesStyledBodySearchSequences(t *testing.T) {
+	t.Parallel()
+
+	dl := model.DiffLine{Kind: model.LineAdded, NewNo: intP(1), Text: "0123456789abcdefghijkl"}
+	styledBody := "\x1b[31m0123456789\x1b[0m\x1b[7mabc\x1b[0mdefghijkl"
+	match := SearchMatch{Line: 0, Start: 10, End: 13}
+
+	got := renderDiffLineBodyHL(dl, styledBody, true, 14, "abc", match, false, 4, model.LineModeScroll, 8)
+	stripped := ansi.Strip(got)
+	if !strings.Contains(got, "\x1b[7m") {
+		t.Fatalf("rendered line lost styled search span: %q", got)
+	}
+	if strings.Contains(stripped, "01234567") {
+		t.Fatalf("rendered line still contains skipped left body: %q", stripped)
+	}
+	if !strings.Contains(stripped, "+89abcdefghi") {
+		t.Fatalf("rendered line = %q, want styled body cropped after diff prefix", stripped)
+	}
+	if w := lipgloss.Width(got); w > 14 {
+		t.Fatalf("rendered width = %d, want <= 14: %q", w, got)
 	}
 }
 
