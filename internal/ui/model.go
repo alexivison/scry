@@ -1198,6 +1198,8 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.Width = m.width
 	vp.Height = m.height - 1
 	vp.GutterVisible = m.width >= 60
+	vp.LineMode = m.State.PatchLineMode
+	vp.XOffset = 0
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
@@ -1285,6 +1287,18 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up":
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollUp()
+		}
+	case "right":
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollRight()
+		}
+	case "left":
+		if m.patchViewport != nil {
+			m.patchViewport.ScrollLeft()
+		}
+	case "home", "0":
+		if m.patchViewport != nil {
+			m.patchViewport.ResetXOffset()
 		}
 	case "g":
 		m.pendingKey = 'g'
@@ -1512,6 +1526,7 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
 	m.patchViewport.GutterVisible = outerWidth >= 60
+	m.patchViewport.ClampXOffset()
 	return m.patchViewport.Render()
 }
 
@@ -1598,6 +1613,8 @@ func (m Model) viewHelp() string {
 		"  G         jump to bottom",
 		"  ctrl+d/u  half-page down/up",
 		"  ctrl+f/b  full page down/up",
+		"  left/right horizontal scroll",
+		"  0/Home    reset horizontal scroll",
 		"  ]c/[c     next/prev changed file",
 		"",
 		"Search",

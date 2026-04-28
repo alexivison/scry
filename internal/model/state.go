@@ -21,6 +21,14 @@ const (
 	LayoutSplit LayoutMode = "split"
 )
 
+// LineMode controls how long patch body lines are laid out.
+type LineMode int
+
+const (
+	LineModeScroll LineMode = iota
+	LineModeWrap
+)
+
 // LoadStatus tracks the lifecycle of an async patch load.
 type LoadStatus string
 
@@ -66,6 +74,7 @@ type AppState struct {
 	SearchQuery      string
 	FocusPane        Pane
 	Layout           LayoutMode
+	PatchLineMode    LineMode
 
 	// Watch mode state (v0.2).
 	WatchEnabled    bool
@@ -80,9 +89,9 @@ type AppState struct {
 	CommitState   CommitState
 
 	// Freshness tracking (v0.3).
-	GroupByDirectory bool              // config-driven directory grouping in file list
-	FileChangeGen   map[string]int    // path → CacheGeneration when file last changed
-	FlaggedFiles  map[string]bool // session-scoped file bookmarks
+	GroupByDirectory bool            // config-driven directory grouping in file list
+	FileChangeGen    map[string]int  // path → CacheGeneration when file last changed
+	FlaggedFiles     map[string]bool // session-scoped file bookmarks
 
 	// Worktree dashboard mode (v0.2).
 	WorktreeMode   bool
