@@ -16,6 +16,13 @@ const (
 	SearchPrev
 )
 
+// Match identifies a query occurrence in a logical diff line.
+type Match struct {
+	Line  int
+	Start int
+	End   int
+}
+
 // Index holds a searchable list of line texts extracted from a FilePatch.
 type Index struct {
 	lines []string
@@ -42,13 +49,22 @@ func (idx *Index) Len() int {
 // It returns the matching line index and true, or (0, false) if not found.
 // Empty query always returns (0, false). Search wraps around.
 func (idx *Index) Find(query string, fromLine int, dir SearchDirection) (int, bool) {
+	match, ok := idx.FindMatch(query, fromLine, dir)
+	if !ok {
+		return 0, false
+	}
+	return match.Line, true
+}
+
+// FindMatch searches for query and returns its logical line and byte span.
+// Empty query always returns false. Search wraps around.
+func (idx *Index) FindMatch(query string, fromLine int, dir SearchDirection) (Match, bool) {
 	n := len(idx.lines)
 	if n == 0 || query == "" {
-		return 0, false
+		return Match{}, false
 	}
 
 	caseSensitive := hasUppercase(query)
-	matcher := substringMatcher(query, caseSensitive)
 
 	// Wrap fromLine into [0, n-1] using modular arithmetic.
 	fromLine = ((fromLine % n) + n) % n
@@ -60,11 +76,12 @@ func (idx *Index) Find(query string, fromLine int, dir SearchDirection) (int, bo
 		} else {
 			candidate = (fromLine - i%n + n) % n
 		}
-		if matcher(idx.lines[candidate]) {
-			return candidate, true
+		start, end, ok := findMatchSpan(idx.lines[candidate], query, caseSensitive)
+		if ok {
+			return Match{Line: candidate, Start: start, End: end}, true
 		}
 	}
-	return 0, false
+	return Match{}, false
 }
 
 func hasUppercase(s string) bool {
@@ -76,14 +93,41 @@ func hasUppercase(s string) bool {
 	return false
 }
 
-func substringMatcher(query string, caseSensitive bool) func(string) bool {
+func findMatchSpan(line, query string, caseSensitive bool) (int, int, bool) {
 	if caseSensitive {
-		return func(line string) bool {
-			return strings.Contains(line, query)
+		start := strings.Index(line, query)
+		if start < 0 {
+			return 0, 0, false
 		}
+		return start, start + len(query), true
 	}
-	lower := strings.ToLower(query)
-	return func(line string) bool {
-		return strings.Contains(strings.ToLower(line), lower)
+
+	lineRunes := []rune(strings.ToLower(line))
+	queryRunes := []rune(strings.ToLower(query))
+	if len(queryRunes) == 0 || len(queryRunes) > len(lineRunes) {
+		return 0, 0, false
 	}
+	for startRune := 0; startRune <= len(lineRunes)-len(queryRunes); startRune++ {
+		if string(lineRunes[startRune:startRune+len(queryRunes)]) != string(queryRunes) {
+			continue
+		}
+		start := byteOffsetForRune(line, startRune)
+		end := byteOffsetForRune(line, startRune+len(queryRunes))
+		return start, end, true
+	}
+	return 0, 0, false
+}
+
+func byteOffsetForRune(s string, runeIdx int) int {
+	if runeIdx <= 0 {
+		return 0
+	}
+	count := 0
+	for byteIdx := range s {
+		if count == runeIdx {
+			return byteIdx
+		}
+		count++
+	}
+	return len(s)
 }

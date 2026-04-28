@@ -20,9 +20,9 @@ type PatchViewport struct {
 	Width        int
 	Height       int
 
-	SearchQuery   string // current search query for highlighting
-	MatchLine     int    // viewport line of the current match (-1 = none)
-	GutterVisible bool   // when false, suppress line number gutter (minimal mode)
+	SearchQuery   string      // current search query for highlighting
+	SearchMatch   SearchMatch // current match anchored to a logical diff line
+	GutterVisible bool        // when false, suppress line number gutter (minimal mode)
 
 	// Pre-computed flat line list for rendering.
 	lines        []patchLine
@@ -37,14 +37,27 @@ const (
 )
 
 type patchLine struct {
-	typ    lineType
-	header string         // only for hunkHeader
-	diff   model.DiffLine // only for diff lines
+	typ       lineType
+	header    string         // only for hunkHeader
+	diff      model.DiffLine // only for diff lines
+	diffIndex int            // logical diff line index, headers excluded
+}
+
+// SearchMatch identifies the current search match in logical diff-line space.
+type SearchMatch struct {
+	Line  int
+	Start int
+	End   int
+}
+
+// NoSearchMatch returns the sentinel used when no search match is active.
+func NoSearchMatch() SearchMatch {
+	return SearchMatch{Line: -1, Start: -1, End: -1}
 }
 
 // NewPatchViewport creates a viewport positioned at the first hunk.
 func NewPatchViewport(patch model.FilePatch) *PatchViewport {
-	vp := &PatchViewport{Patch: patch, GutterVisible: true}
+	vp := &PatchViewport{Patch: patch, SearchMatch: NoSearchMatch(), GutterVisible: true}
 	vp.lines = vp.buildLines()
 	vp.gutterDigits = vp.computeGutterDigits()
 	return vp
@@ -73,10 +86,12 @@ func (vp *PatchViewport) computeGutterDigits() int {
 
 func (vp *PatchViewport) buildLines() []patchLine {
 	var lines []patchLine
+	diffIndex := 0
 	for _, h := range vp.Patch.Hunks {
-		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h)})
+		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1})
 		for _, dl := range h.Lines {
-			lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl})
+			lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, diffIndex: diffIndex})
+			diffIndex++
 		}
 	}
 	return lines
@@ -227,82 +242,95 @@ func (vp *PatchViewport) Render() string {
 
 	visible := vp.lines[start:end]
 	rendered := make([]string, 0, len(visible))
-	for i, pl := range visible {
-		absLine := start + i
+	for _, pl := range visible {
 		switch pl.typ {
 		case lineTypeHunkHeader:
 			rendered = append(rendered, renderHunkSeparator(pl.header, vp.Width))
 		case lineTypeDiff:
-			isMatch := vp.SearchQuery != "" && absLine == vp.MatchLine
-			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, isMatch, vp.GutterVisible, vp.gutterDigits))
+			match := NoSearchMatch()
+			if vp.SearchQuery != "" && vp.SearchMatch.Line == pl.diffIndex {
+				match = vp.SearchMatch
+			}
+			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, match, vp.GutterVisible, vp.gutterDigits))
 		}
 	}
 	return strings.Join(rendered, "\n")
 }
 
-func renderDiffLineHL(dl model.DiffLine, width int, query string, highlight bool, gutterVisible bool, gutterDigits int) string {
+type diffLineLayers struct {
+	gutter string
+	prefix string
+	body   string
+	style  lipgloss.Style
+}
+
+func buildDiffLineLayers(dl model.DiffLine, gutterVisible bool, gutterDigits int) diffLineLayers {
+	prefix, style := diffLineStyle(dl.Kind)
+	layers := diffLineLayers{
+		prefix: prefix,
+		body:   dl.Text,
+		style:  style,
+	}
+	if gutterVisible {
+		layers.gutter = formatGutter(dl.OldNo, dl.NewNo, gutterDigits)
+	}
+	return layers
+}
+
+func renderDiffLineHL(dl model.DiffLine, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
 
-	prefix, style := diffLineStyle(dl.Kind)
-	body := prefix + dl.Text
+	layers := buildDiffLineLayers(dl, gutterVisible, gutterDigits)
+	return emitDiffLine(layers, width, query, match)
+}
 
-	if gutterVisible {
-		gutter := formatGutter(dl.OldNo, dl.NewNo, gutterDigits)
+func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMatch) string {
+	body := layers.prefix + layers.body
+	if layers.gutter != "" {
 		if width > 0 {
-			bodyBudget := width - lipgloss.Width(gutter)
+			bodyBudget := width - lipgloss.Width(layers.gutter)
 			if bodyBudget > 0 && lipgloss.Width(body) > bodyBudget {
 				body = truncateToWidth(body, bodyBudget)
 			}
 		}
-		if highlight && query != "" {
-			return gutter + highlightMatch(body, query, style)
+		if query != "" && match.validForBody(layers.body) {
+			return layers.gutter + highlightSpan(body, bodySpanToContentSpan(match, layers.prefix), layers.style)
 		}
-		return gutter + style.Render(body)
+		return layers.gutter + layers.style.Render(body)
 	}
 
 	if width > 0 && lipgloss.Width(body) > width {
 		body = truncateToWidth(body, width)
 	}
 
-	if highlight && query != "" {
-		return highlightMatch(body, query, style)
+	if query != "" && match.validForBody(layers.body) {
+		return highlightSpan(body, bodySpanToContentSpan(match, layers.prefix), layers.style)
 	}
 
-	return style.Render(body)
+	return layers.style.Render(body)
 }
 
-func highlightMatch(line, query string, baseStyle lipgloss.Style) string {
-	caseSensitive := strings.ToLower(query) != query
-	if caseSensitive {
-		idx := strings.Index(line, query)
-		if idx < 0 {
-			return baseStyle.Render(line)
-		}
-		hlStyle := baseStyle.Reverse(true)
-		return baseStyle.Render(line[:idx]) + hlStyle.Render(line[idx:idx+len(query)]) + baseStyle.Render(line[idx+len(query):])
+func (m SearchMatch) validForBody(body string) bool {
+	return m.Line >= 0 && m.Start >= 0 && m.End > m.Start && m.End <= len(body)
+}
+
+func bodySpanToContentSpan(match SearchMatch, prefix string) SearchMatch {
+	prefixLen := len(prefix)
+	return SearchMatch{
+		Line:  match.Line,
+		Start: prefixLen + match.Start,
+		End:   prefixLen + match.End,
 	}
-	// Case-insensitive: ToLower can change byte lengths, so find the match
-	// by rune position to avoid slicing the original with misaligned byte offsets.
-	lowerLine := strings.ToLower(line)
-	lowerQuery := strings.ToLower(query)
-	byteIdx := strings.Index(lowerLine, lowerQuery)
-	if byteIdx < 0 {
+}
+
+func highlightSpan(line string, span SearchMatch, baseStyle lipgloss.Style) string {
+	if span.Start < 0 || span.End < span.Start || span.End > len(line) {
 		return baseStyle.Render(line)
 	}
-	// Map byte offset in lowered string to rune offset, then back to original byte offset.
-	runeStart := len([]rune(lowerLine[:byteIdx]))
-	runeLen := len([]rune(lowerQuery))
-	origRunes := []rune(line)
-	if runeStart+runeLen > len(origRunes) {
-		return baseStyle.Render(line)
-	}
-	before := string(origRunes[:runeStart])
-	match := string(origRunes[runeStart : runeStart+runeLen])
-	after := string(origRunes[runeStart+runeLen:])
 	hlStyle := baseStyle.Reverse(true)
-	return baseStyle.Render(before) + hlStyle.Render(match) + baseStyle.Render(after)
+	return baseStyle.Render(line[:span.Start]) + hlStyle.Render(line[span.Start:span.End]) + baseStyle.Render(line[span.End:])
 }
 
 func diffLineStyle(kind model.LineKind) (string, lipgloss.Style) {
@@ -390,13 +418,9 @@ func (vp *PatchViewport) IsHunkHeader(vpLine int) bool {
 // DiffLineToViewportLine converts a DiffLine index (0-based across all hunks,
 // headers excluded) to the corresponding viewport line index (headers included).
 func (vp *PatchViewport) DiffLineToViewportLine(diffIdx int) int {
-	count := 0
 	for i, pl := range vp.lines {
-		if pl.typ == lineTypeDiff {
-			if count == diffIdx {
-				return i
-			}
-			count++
+		if pl.typ == lineTypeDiff && pl.diffIndex == diffIdx {
+			return i
 		}
 	}
 	return 0
@@ -411,19 +435,16 @@ func (vp *PatchViewport) ViewportLineToDiffLine(vpLine int) int {
 	if vpLine >= len(vp.lines) {
 		vpLine = len(vp.lines) - 1
 	}
-	count := 0
+	lastDiff := 0
 	for i, pl := range vp.lines {
 		if pl.typ == lineTypeDiff {
 			if i >= vpLine {
-				return count
+				return pl.diffIndex
 			}
-			count++
+			lastDiff = pl.diffIndex
 		}
 	}
-	if count > 0 {
-		return count - 1
-	}
-	return 0
+	return lastDiff
 }
 
 // CurrentTargetLine returns the most relevant new-file line number for the

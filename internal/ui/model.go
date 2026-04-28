@@ -1361,19 +1361,19 @@ func (m *Model) searchFrom(from int, dir search.SearchDirection) {
 		return
 	}
 
-	line, ok := m.searchIndex.Find(m.State.SearchQuery, from, dir)
+	match, ok := m.searchIndex.FindMatch(m.State.SearchQuery, from, dir)
 	if !ok {
 		m.searchNotFound = fmt.Sprintf("Pattern not found: %s", m.State.SearchQuery)
 		m.patchViewport.SearchQuery = ""
-		m.patchViewport.MatchLine = -1
+		m.patchViewport.SearchMatch = panes.NoSearchMatch()
 		return
 	}
 
 	m.searchNotFound = ""
-	vpLine := m.patchViewport.DiffLineToViewportLine(line)
+	vpLine := m.patchViewport.DiffLineToViewportLine(match.Line)
 	m.patchViewport.ScrollOffset = vpLine
 	m.patchViewport.SyncCurrentHunk()
-	m.patchViewport.MatchLine = vpLine
+	m.patchViewport.SearchMatch = panes.SearchMatch{Line: match.Line, Start: match.Start, End: match.End}
 	m.patchViewport.SearchQuery = m.State.SearchQuery
 }
 

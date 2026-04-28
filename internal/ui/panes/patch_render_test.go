@@ -24,6 +24,46 @@ func TestGutterFormat_SeparatorColumn(t *testing.T) {
 	}
 }
 
+func TestDiffLineLayersSeparateGutterPrefixBody(t *testing.T) {
+	t.Parallel()
+
+	dl := model.DiffLine{Kind: model.LineAdded, NewNo: intP(7), Text: "fmt.Println(value)"}
+	layers := buildDiffLineLayers(dl, true, 4)
+
+	if !strings.Contains(layers.gutter, "   7") {
+		t.Fatalf("gutter = %q, want new line number", layers.gutter)
+	}
+	if layers.prefix != "+" {
+		t.Fatalf("prefix = %q, want +", layers.prefix)
+	}
+	if layers.body != "fmt.Println(value)" {
+		t.Fatalf("body = %q, want raw diff text", layers.body)
+	}
+	if strings.Contains(layers.body, layers.prefix) {
+		t.Fatalf("body should not include prefix %q: %q", layers.prefix, layers.body)
+	}
+}
+
+func TestPatchRenderSnapshotRepresentativeDiff(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(threeHunkPatch())
+	vp.Width = 0
+	vp.Height = 4
+	vp.GutterVisible = true
+
+	want := strings.Join([]string{
+		"── @@ -1,3 +1,4 @@ func init() ",
+		"   1    1 │  package main",
+		"        2 │ +import \"os\"",
+		"   2    3 │  ",
+	}, "\n")
+
+	if got := vp.Render(); got != want {
+		t.Fatalf("Render() mismatch\nwant: %q\n got: %q", want, got)
+	}
+}
+
 func TestHunkSeparator_HorizontalRule(t *testing.T) {
 	t.Parallel()
 
