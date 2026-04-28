@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/alexivison/scry/internal/model"
 )
@@ -233,13 +234,93 @@ func TestTruncateToWidth_PreservesANSI(t *testing.T) {
 	}
 }
 
-func TestPatchViewportDefaultLineModeScroll(t *testing.T) {
+func TestPatchViewportDefaultLineModeWrap(t *testing.T) {
 	t.Parallel()
 
 	vp := NewPatchViewport(threeHunkPatch())
 
-	if vp.LineMode != model.LineModeScroll {
-		t.Fatalf("LineMode = %v, want LineModeScroll", vp.LineMode)
+	if vp.LineMode != model.LineModeWrap {
+		t.Fatalf("LineMode = %v, want LineModeWrap", vp.LineMode)
+	}
+}
+
+func TestWrapRenderingContinuationRowsAlignWithBody(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
+	vp.Width = 24
+	vp.Height = 3
+	vp.ScrollOffset = 1
+	vp.GutterVisible = true
+
+	lines := strings.Split(ansi.Strip(vp.Render()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("rendered lines = %d, want 2 continuation rows:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[0], "+0123456789a") {
+		t.Fatalf("first row should include gutter, prefix, and first body segment: %q", lines[0])
+	}
+	if strings.Contains(lines[1], "+") || strings.Contains(lines[1], "│") {
+		t.Fatalf("continuation row should have blank gutter and prefix: %q", lines[1])
+	}
+	firstBodyCol := visualColumn(lines[0], "0")
+	continuationBodyCol := visualColumn(lines[1], "b")
+	if firstBodyCol < 0 || continuationBodyCol < 0 || firstBodyCol != continuationBodyCol {
+		t.Fatalf("continuation body column = %d, want %d\n%s", continuationBodyCol, firstBodyCol, strings.Join(lines, "\n"))
+	}
+}
+
+func visualColumn(line, marker string) int {
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return -1
+	}
+	return lipgloss.Width(line[:idx])
+}
+
+func TestWrapSearchHighlightOnContinuationRow(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	text := "0123456789abcdefghijkl"
+	matchStart := strings.Index(text, "def")
+	vp := NewPatchViewport(singleLinePatch(text))
+	vp.Width = 24
+	vp.Height = 3
+	vp.ScrollOffset = 1
+	vp.GutterVisible = true
+	vp.SearchQuery = "def"
+	vp.SearchMatch = SearchMatch{Line: 0, Start: matchStart, End: matchStart + len("def")}
+
+	lines := strings.Split(vp.Render(), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("rendered lines = %d, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(ansi.Strip(lines[1]), "bcdefghijkl") {
+		t.Fatalf("continuation row should contain matched body segment: %q", ansi.Strip(lines[1]))
+	}
+	if !strings.Contains(lines[1], "\x1b[7") {
+		t.Fatalf("continuation row should contain reversed search highlight: %q", lines[1])
+	}
+}
+
+func TestScrollModeKeepsOneLogicalLinePerRenderedRow(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
+	vp.LineMode = model.LineModeScroll
+	vp.Width = 24
+	vp.Height = 3
+	vp.GutterVisible = true
+
+	if got, want := vp.TotalLines(), 2; got != want {
+		t.Fatalf("TotalLines() = %d, want %d in scroll mode", got, want)
+	}
+
+	output := ansi.Strip(vp.Render())
+	if strings.Contains(output, "bcdefghijkl") {
+		t.Fatalf("scroll mode should truncate instead of rendering continuation rows:\n%s", output)
 	}
 }
 
@@ -247,6 +328,7 @@ func TestHorizontalScrollClampsXOffset(t *testing.T) {
 	t.Parallel()
 
 	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
+	vp.LineMode = model.LineModeScroll
 	vp.Width = 24
 	vp.Height = 1
 	vp.ScrollOffset = 1
@@ -285,6 +367,7 @@ func TestHorizontalScrollKeepsGutterAndPrefixFixed(t *testing.T) {
 	t.Parallel()
 
 	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
+	vp.LineMode = model.LineModeScroll
 	vp.Width = 24
 	vp.Height = 1
 	vp.ScrollOffset = 1
@@ -311,6 +394,7 @@ func TestHorizontalScrollPreservesANSIBodySequences(t *testing.T) {
 
 	styledBody := "\x1b[31m0123456789abcdef\x1b[0m"
 	vp := NewPatchViewport(singleLinePatch(styledBody))
+	vp.LineMode = model.LineModeScroll
 	vp.Width = 22
 	vp.Height = 1
 	vp.ScrollOffset = 1

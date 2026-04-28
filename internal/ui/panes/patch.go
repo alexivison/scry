@@ -47,6 +47,22 @@ type patchLine struct {
 	header    string         // only for hunkHeader
 	diff      model.DiffLine // only for diff lines
 	diffIndex int            // logical diff line index, headers excluded
+	hunkIndex int
+}
+
+type visualRow struct {
+	line         patchLine
+	segment      bodySegment
+	continuation bool
+}
+
+type bodySegment struct {
+	text         string
+	start        int
+	end          int
+	displayStart int
+	displayEnd   int
+	index        int
 }
 
 // SearchMatch identifies the current search match in logical diff-line space.
@@ -63,7 +79,7 @@ func NoSearchMatch() SearchMatch {
 
 // NewPatchViewport creates a viewport positioned at the first hunk.
 func NewPatchViewport(patch model.FilePatch) *PatchViewport {
-	vp := &PatchViewport{Patch: patch, LineMode: model.LineModeScroll, SearchMatch: NoSearchMatch(), GutterVisible: true}
+	vp := &PatchViewport{Patch: patch, LineMode: model.LineModeWrap, SearchMatch: NoSearchMatch(), GutterVisible: true}
 	vp.lines = vp.buildLines()
 	vp.gutterDigits = vp.computeGutterDigits()
 	return vp
@@ -98,10 +114,10 @@ func (vp *PatchViewport) computeGutterDigits() int {
 func (vp *PatchViewport) buildLines() []patchLine {
 	var lines []patchLine
 	diffIndex := 0
-	for _, h := range vp.Patch.Hunks {
-		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1})
+	for hunkIndex, h := range vp.Patch.Hunks {
+		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1, hunkIndex: hunkIndex})
 		for _, dl := range h.Lines {
-			lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, diffIndex: diffIndex})
+			lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, diffIndex: diffIndex, hunkIndex: hunkIndex})
 			diffIndex++
 		}
 	}
@@ -121,11 +137,12 @@ func (vp *PatchViewport) hunkLineOffset(hunk int) int {
 	if hunk <= 0 || len(vp.Patch.Hunks) == 0 {
 		return 0
 	}
-	offset := 0
-	for i := 0; i < hunk && i < len(vp.Patch.Hunks); i++ {
-		offset += 1 + len(vp.Patch.Hunks[i].Lines) // header + lines
+	for i, row := range vp.visualRows() {
+		if row.line.typ == lineTypeHunkHeader && row.line.hunkIndex == hunk {
+			return i
+		}
 	}
-	return offset
+	return 0
 }
 
 // NextHunk advances to the next hunk. No-op at the last hunk.
@@ -148,7 +165,7 @@ func (vp *PatchViewport) PrevHunk() {
 
 // ScrollDown moves the viewport one line down. No-op at the bottom.
 func (vp *PatchViewport) ScrollDown() {
-	if vp.ScrollOffset < len(vp.lines)-1 {
+	if vp.ScrollOffset < vp.TotalLines()-1 {
 		vp.ScrollOffset++
 		vp.SyncCurrentHunk()
 	}
@@ -164,12 +181,13 @@ func (vp *PatchViewport) ScrollUp() {
 
 // PageDown moves the viewport one full page down.
 func (vp *PatchViewport) PageDown() {
-	if len(vp.lines) == 0 {
+	total := vp.TotalLines()
+	if total == 0 {
 		return
 	}
 	vp.ScrollOffset += vp.Height
-	if vp.ScrollOffset > len(vp.lines)-1 {
-		vp.ScrollOffset = len(vp.lines) - 1
+	if vp.ScrollOffset > total-1 {
+		vp.ScrollOffset = total - 1
 	}
 	vp.SyncCurrentHunk()
 }
@@ -185,12 +203,13 @@ func (vp *PatchViewport) PageUp() {
 
 // HalfPageDown moves the viewport half a page down.
 func (vp *PatchViewport) HalfPageDown() {
-	if len(vp.lines) == 0 {
+	total := vp.TotalLines()
+	if total == 0 {
 		return
 	}
 	vp.ScrollOffset += vp.Height / 2
-	if vp.ScrollOffset > len(vp.lines)-1 {
-		vp.ScrollOffset = len(vp.lines) - 1
+	if vp.ScrollOffset > total-1 {
+		vp.ScrollOffset = total - 1
 	}
 	vp.SyncCurrentHunk()
 }
@@ -212,7 +231,7 @@ func (vp *PatchViewport) ScrollToTop() {
 
 // ScrollToBottom jumps to the end of the patch.
 func (vp *PatchViewport) ScrollToBottom() {
-	max := len(vp.lines) - vp.Height
+	max := vp.TotalLines() - vp.Height
 	if max < 0 {
 		max = 0
 	}
@@ -245,6 +264,9 @@ func (vp *PatchViewport) ResetXOffset() {
 
 // ClampXOffset constrains horizontal scroll to the currently visible body range.
 func (vp *PatchViewport) ClampXOffset() {
+	if vp.LineMode != model.LineModeScroll {
+		return
+	}
 	if vp.XOffset < 0 {
 		vp.XOffset = 0
 		return
@@ -262,7 +284,8 @@ func (vp *PatchViewport) MaxXOffset() int {
 
 	bodyWidth := -1
 	longestBody := 0
-	for _, pl := range vp.visibleLines() {
+	for _, row := range vp.visibleRows() {
+		pl := row.line
 		if pl.typ != lineTypeDiff || pl.diff.Kind == model.LineNoNewline {
 			continue
 		}
@@ -296,6 +319,86 @@ func (vp *PatchViewport) SyncCurrentHunk() {
 	vp.CurrentHunk = 0
 }
 
+// SetLineMode switches between wrap and horizontal-scroll layout while keeping
+// the same logical diff line at the top of the viewport when possible.
+func (vp *PatchViewport) SetLineMode(mode model.LineMode) {
+	if vp.LineMode == mode {
+		if mode == model.LineModeScroll {
+			vp.XOffset = 0
+		}
+		return
+	}
+
+	diffLine, rowOffset, ok := vp.ScrollAnchor()
+	vp.LineMode = mode
+	if mode == model.LineModeScroll {
+		vp.XOffset = 0
+	}
+	if ok {
+		if offset, found := vp.ScrollOffsetForDiffLine(diffLine, rowOffset); found {
+			vp.ScrollOffset = offset
+		}
+	}
+	vp.clampScrollOffset()
+	vp.SyncCurrentHunk()
+}
+
+// ScrollAnchor returns the logical diff line and wrapped-row offset currently
+// at the top of the viewport. Hunk headers do not have a diff-line anchor.
+func (vp *PatchViewport) ScrollAnchor() (diffLine int, rowOffset int, ok bool) {
+	rows := vp.visualRows()
+	if len(rows) == 0 {
+		return 0, 0, false
+	}
+	idx := vp.ScrollOffset
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(rows) {
+		idx = len(rows) - 1
+	}
+	row := rows[idx]
+	if row.line.typ != lineTypeDiff {
+		return 0, 0, false
+	}
+	return row.line.diffIndex, row.segment.index, true
+}
+
+// ScrollOffsetForDiffLine returns the visual row offset for a logical diff line
+// and wrapped-row offset. If the requested row no longer exists, it clamps to
+// the last visual row for that logical line.
+func (vp *PatchViewport) ScrollOffsetForDiffLine(diffLine int, rowOffset int) (int, bool) {
+	last := -1
+	for i, row := range vp.visualRows() {
+		if row.line.typ != lineTypeDiff || row.line.diffIndex != diffLine {
+			continue
+		}
+		last = i
+		if row.segment.index >= rowOffset {
+			return i, true
+		}
+	}
+	if last >= 0 {
+		return last, true
+	}
+	return 0, false
+}
+
+func (vp *PatchViewport) clampScrollOffset() {
+	total := vp.TotalLines()
+	if total == 0 {
+		vp.ScrollOffset = 0
+		return
+	}
+	if vp.ScrollOffset < 0 {
+		vp.ScrollOffset = 0
+		return
+	}
+	if vp.ScrollOffset >= total {
+		vp.ScrollOffset = total - 1
+	}
+}
+
 // Render produces the visible portion of the patch for the current viewport.
 func (vp *PatchViewport) Render() string {
 	if len(vp.Patch.Hunks) == 0 {
@@ -306,52 +409,176 @@ func (vp *PatchViewport) Render() string {
 		return ""
 	}
 
+	vp.clampScrollOffset()
 	vp.ClampXOffset()
-	visible := vp.visibleLines()
+	visible := vp.visibleRows()
 	rendered := make([]string, 0, len(visible))
-	for _, pl := range visible {
-		switch pl.typ {
+	for _, row := range visible {
+		switch row.line.typ {
 		case lineTypeHunkHeader:
-			rendered = append(rendered, renderHunkSeparator(pl.header, vp.Width))
+			rendered = append(rendered, renderHunkSeparator(row.line.header, vp.Width))
 		case lineTypeDiff:
 			match := NoSearchMatch()
-			if vp.SearchQuery != "" && vp.SearchMatch.Line == pl.diffIndex {
+			if vp.SearchQuery != "" && vp.SearchMatch.Line == row.line.diffIndex {
 				match = vp.SearchMatch
 			}
-			rendered = append(rendered, vp.renderDiffLine(pl.diff, pl.diffIndex, match))
+			rendered = append(rendered, vp.renderDiffVisualRow(row, match))
 		}
 	}
 	return strings.Join(rendered, "\n")
 }
 
-func (vp *PatchViewport) visibleLines() []patchLine {
+func (vp *PatchViewport) visibleRows() []visualRow {
+	rows := vp.visualRows()
 	end := vp.ScrollOffset + vp.Height
-	if end > len(vp.lines) {
-		end = len(vp.lines)
+	if end > len(rows) {
+		end = len(rows)
 	}
 	start := vp.ScrollOffset
-	if start > len(vp.lines) {
-		start = len(vp.lines)
+	if start > len(rows) {
+		start = len(rows)
 	}
 
 	if start > end {
 		start = end
 	}
-	return vp.lines[start:end]
+	return rows[start:end]
 }
 
-func (vp *PatchViewport) renderDiffLine(dl model.DiffLine, diffIndex int, match SearchMatch) string {
-	return renderDiffLineBodyHL(
+func (vp *PatchViewport) visualRows() []visualRow {
+	rows := make([]visualRow, 0, len(vp.lines))
+	for _, line := range vp.lines {
+		if line.typ == lineTypeHunkHeader {
+			rows = append(rows, visualRow{line: line})
+			continue
+		}
+
+		segments := []bodySegment{fullBodySegment(line.diff.Text)}
+		if vp.LineMode == model.LineModeWrap && line.diff.Kind != model.LineNoNewline && vp.Width > 0 {
+			bodyBudget := vp.bodyBudget(line.diff)
+			if bodyBudget > 0 {
+				segments = wrapBodySegments(line.diff.Text, bodyBudget)
+			}
+		}
+		for i, segment := range segments {
+			rows = append(rows, visualRow{
+				line:         line,
+				segment:      segment,
+				continuation: i > 0,
+			})
+		}
+	}
+	return rows
+}
+
+func (vp *PatchViewport) bodyBudget(dl model.DiffLine) int {
+	layers := buildDiffLineLayers(dl, vp.GutterVisible, vp.gutterDigits)
+	return diffLineBodyWidth(layers, vp.Width)
+}
+
+func fullBodySegment(body string) bodySegment {
+	return bodySegment{
+		text:         body,
+		start:        0,
+		end:          len(body),
+		displayStart: 0,
+		displayEnd:   ansi.StringWidth(body),
+		index:        0,
+	}
+}
+
+func wrapBodySegments(body string, width int) []bodySegment {
+	if body == "" || width <= 0 {
+		return []bodySegment{fullBodySegment(body)}
+	}
+
+	var segments []bodySegment
+	segmentStart := 0
+	segmentDisplayStart := 0
+	displayCol := 0
+	segmentIndex := 0
+
+	for i := 0; i < len(body); {
+		cluster, clusterWidth := ansi.FirstGraphemeCluster(body[i:], ansi.GraphemeWidth)
+		if cluster == "" {
+			break
+		}
+		if i > segmentStart && displayCol-segmentDisplayStart+clusterWidth > width {
+			segments = append(segments, bodySegmentRange(body, segmentStart, i, segmentDisplayStart, displayCol, segmentIndex))
+			segmentStart = i
+			segmentDisplayStart = displayCol
+			segmentIndex++
+		}
+
+		i += len(cluster)
+		displayCol += clusterWidth
+
+		if displayCol-segmentDisplayStart == width {
+			segments = append(segments, bodySegmentRange(body, segmentStart, i, segmentDisplayStart, displayCol, segmentIndex))
+			segmentStart = i
+			segmentDisplayStart = displayCol
+			segmentIndex++
+		}
+	}
+
+	if segmentStart < len(body) {
+		segments = append(segments, bodySegmentRange(body, segmentStart, len(body), segmentDisplayStart, displayCol, segmentIndex))
+	}
+	if len(segments) == 0 {
+		return []bodySegment{fullBodySegment(body)}
+	}
+	return segments
+}
+
+func bodySegmentRange(body string, start, end, displayStart, displayEnd, index int) bodySegment {
+	return bodySegment{
+		text:         body[start:end],
+		start:        start,
+		end:          end,
+		displayStart: displayStart,
+		displayEnd:   displayEnd,
+		index:        index,
+	}
+}
+
+func (s bodySegment) matchInSegment(match SearchMatch) SearchMatch {
+	start := max(match.Start, s.start)
+	end := min(match.End, s.end)
+	if match.Line < 0 || start >= end {
+		return NoSearchMatch()
+	}
+	return SearchMatch{
+		Line:  match.Line,
+		Start: start - s.start,
+		End:   end - s.start,
+	}
+}
+
+func (vp *PatchViewport) renderDiffVisualRow(row visualRow, match SearchMatch) string {
+	dl := row.line.diff
+	body := row.segment.text
+	bodyStyled := false
+	segmentMatch := row.segment.matchInSegment(match)
+
+	if vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind) {
+		highlighted := vp.highlightBody(dl, row.line.diffIndex, match)
+		body = ansi.Cut(highlighted, row.segment.displayStart, row.segment.displayEnd)
+		bodyStyled = true
+		segmentMatch = NoSearchMatch()
+	}
+
+	return renderDiffLineSegmentHL(
 		dl,
-		vp.highlightBody(dl, diffIndex, match),
-		vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind),
+		body,
+		bodyStyled,
 		vp.Width,
 		vp.SearchQuery,
-		match,
+		segmentMatch,
 		vp.GutterVisible,
 		vp.gutterDigits,
 		vp.LineMode,
 		vp.XOffset,
+		row.continuation,
 	)
 }
 
@@ -392,6 +619,10 @@ func renderDiffLineHL(dl model.DiffLine, width int, query string, match SearchMa
 }
 
 func renderDiffLineBodyHL(dl model.DiffLine, body string, bodyStyled bool, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int, lineMode model.LineMode, xOffset int) string {
+	return renderDiffLineSegmentHL(dl, body, bodyStyled, width, query, match, gutterVisible, gutterDigits, lineMode, xOffset, false)
+}
+
+func renderDiffLineSegmentHL(dl model.DiffLine, body string, bodyStyled bool, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int, lineMode model.LineMode, xOffset int, continuation bool) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
@@ -399,12 +630,16 @@ func renderDiffLineBodyHL(dl model.DiffLine, body string, bodyStyled bool, width
 	layers := buildDiffLineLayers(dl, gutterVisible, gutterDigits)
 	layers.body = body
 	layers.bodyStyled = bodyStyled
-	return emitDiffLine(layers, width, query, match, lineMode, xOffset)
+	return emitDiffLine(layers, width, query, match, lineMode, xOffset, continuation)
 }
 
-func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMatch, lineMode model.LineMode, xOffset int) string {
+func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMatch, lineMode model.LineMode, xOffset int, continuation bool) string {
 	if lineMode != model.LineModeScroll || xOffset < 0 {
 		xOffset = 0
+	}
+	if continuation {
+		layers.gutter = strings.Repeat(" ", lipgloss.Width(layers.gutter))
+		layers.prefix = strings.Repeat(" ", lipgloss.Width(layers.prefix))
 	}
 
 	visibleBody := layers.body
@@ -537,7 +772,7 @@ func renderHunkSeparator(header string, width int) string {
 // ScrollIndicatorPos returns the scroll position as a ratio (0.0–1.0) for
 // rendering a scroll indicator on the border edge.
 func (vp *PatchViewport) ScrollIndicatorPos() float64 {
-	total := len(vp.lines)
+	total := vp.TotalLines()
 	if total <= vp.Height || total == 0 {
 		return 0
 	}
@@ -556,22 +791,23 @@ func truncateToWidth(s string, maxWidth int) string {
 
 // TotalLines returns the total number of rendered lines (headers + diff lines).
 func (vp *PatchViewport) TotalLines() int {
-	return len(vp.lines)
+	return len(vp.visualRows())
 }
 
 // IsHunkHeader reports whether the given viewport line is a hunk header.
 func (vp *PatchViewport) IsHunkHeader(vpLine int) bool {
-	if vpLine < 0 || vpLine >= len(vp.lines) {
+	rows := vp.visualRows()
+	if vpLine < 0 || vpLine >= len(rows) {
 		return false
 	}
-	return vp.lines[vpLine].typ == lineTypeHunkHeader
+	return rows[vpLine].line.typ == lineTypeHunkHeader
 }
 
 // DiffLineToViewportLine converts a DiffLine index (0-based across all hunks,
 // headers excluded) to the corresponding viewport line index (headers included).
 func (vp *PatchViewport) DiffLineToViewportLine(diffIdx int) int {
-	for i, pl := range vp.lines {
-		if pl.typ == lineTypeDiff && pl.diffIndex == diffIdx {
+	for i, row := range vp.visualRows() {
+		if row.line.typ == lineTypeDiff && row.line.diffIndex == diffIdx {
 			return i
 		}
 	}
@@ -581,19 +817,23 @@ func (vp *PatchViewport) DiffLineToViewportLine(diffIdx int) int {
 // ViewportLineToDiffLine converts a viewport line index to the DiffLine index.
 // If the viewport line is a hunk header, it returns the index of the next DiffLine.
 func (vp *PatchViewport) ViewportLineToDiffLine(vpLine int) int {
+	rows := vp.visualRows()
+	if len(rows) == 0 {
+		return 0
+	}
 	if vpLine < 0 {
 		vpLine = 0
 	}
-	if vpLine >= len(vp.lines) {
-		vpLine = len(vp.lines) - 1
+	if vpLine >= len(rows) {
+		vpLine = len(rows) - 1
 	}
 	lastDiff := 0
-	for i, pl := range vp.lines {
-		if pl.typ == lineTypeDiff {
+	for i, row := range rows {
+		if row.line.typ == lineTypeDiff {
 			if i >= vpLine {
-				return pl.diffIndex
+				return row.line.diffIndex
 			}
-			lastDiff = pl.diffIndex
+			lastDiff = row.line.diffIndex
 		}
 	}
 	return lastDiff
@@ -602,7 +842,8 @@ func (vp *PatchViewport) ViewportLineToDiffLine(vpLine int) int {
 // CurrentTargetLine returns the most relevant new-file line number for the
 // current viewport position or hunk, for opening the file in an editor.
 func (vp *PatchViewport) CurrentTargetLine() (int, bool) {
-	if len(vp.Patch.Hunks) == 0 || len(vp.lines) == 0 {
+	rows := vp.visualRows()
+	if len(vp.Patch.Hunks) == 0 || len(rows) == 0 {
 		return 0, false
 	}
 
@@ -619,14 +860,14 @@ func (vp *PatchViewport) CurrentTargetLine() (int, bool) {
 	if start < hunkStart {
 		start = hunkStart
 	}
-	hunkEnd := len(vp.lines)
+	hunkEnd := len(rows)
 	if hunk+1 < len(vp.Patch.Hunks) {
 		hunkEnd = vp.hunkLineOffset(hunk + 1)
 	}
 
 	for i := start; i < hunkEnd; i++ {
-		if vp.lines[i].typ == lineTypeDiff && vp.lines[i].diff.NewNo != nil {
-			return *vp.lines[i].diff.NewNo, true
+		if rows[i].line.typ == lineTypeDiff && rows[i].line.diff.NewNo != nil {
+			return *rows[i].line.diff.NewNo, true
 		}
 	}
 	for _, line := range vp.Patch.Hunks[hunk].Lines {

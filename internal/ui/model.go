@@ -89,7 +89,8 @@ type Model struct {
 	savedFilePath     string // path of the file whose scroll was saved
 	savedContentHash  string
 	savedScrollOffset int
-	savedCurrentHunk  int
+	savedScrollDiff   int
+	savedScrollRow    int
 	savedSearchQuery  string
 
 	commitProvider CommitProvider     // optional provider for AI commit messages
@@ -971,8 +972,7 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 			// Restore scroll if same file and content hash matches pre-refresh snapshot.
 			if m.savedFilePath == msg.Path && m.savedContentHash != "" &&
 				ps.ContentHash == m.savedContentHash && m.patchViewport != nil {
-				m.patchViewport.ScrollOffset = m.savedScrollOffset
-				m.patchViewport.CurrentHunk = m.savedCurrentHunk
+				m.restoreSavedPatchScroll()
 				m.State.SearchQuery = m.savedSearchQuery
 			} else {
 				// Content changed or file changed — clear search state.
@@ -981,6 +981,8 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 			// Always clear saved state after use (or mismatch) to prevent bleed.
 			m.savedFilePath = ""
 			m.savedContentHash = ""
+			m.savedScrollDiff = -1
+			m.savedScrollRow = 0
 			m.savedSearchQuery = ""
 		}
 	}
@@ -1121,7 +1123,8 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	m.savedFilePath = ""
 	m.savedContentHash = ""
 	m.savedScrollOffset = 0
-	m.savedCurrentHunk = 0
+	m.savedScrollDiff = -1
+	m.savedScrollRow = 0
 	m.savedSearchQuery = ""
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 		path := m.State.Files[m.State.SelectedFile].Path
@@ -1131,7 +1134,10 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		}
 		if m.patchViewport != nil {
 			m.savedScrollOffset = m.patchViewport.ScrollOffset
-			m.savedCurrentHunk = m.patchViewport.CurrentHunk
+			if diffLine, rowOffset, ok := m.patchViewport.ScrollAnchor(); ok {
+				m.savedScrollDiff = diffLine
+				m.savedScrollRow = rowOffset
+			}
 		}
 		m.savedSearchQuery = m.State.SearchQuery
 	}
@@ -1223,6 +1229,21 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
+}
+
+func (m *Model) restoreSavedPatchScroll() {
+	if m.patchViewport == nil {
+		return
+	}
+	if m.savedScrollDiff >= 0 {
+		if offset, ok := m.patchViewport.ScrollOffsetForDiffLine(m.savedScrollDiff, m.savedScrollRow); ok {
+			m.patchViewport.ScrollOffset = offset
+			m.patchViewport.SyncCurrentHunk()
+			return
+		}
+	}
+	m.patchViewport.ScrollOffset = m.savedScrollOffset
+	m.patchViewport.SyncCurrentHunk()
 }
 
 func (m *Model) syncWatchBaseRef(cmp model.ResolvedCompare) {
@@ -1320,6 +1341,10 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.patchViewport.ResetXOffset()
 		}
+	case "w":
+		if m.patchViewport != nil {
+			m.togglePatchLineMode()
+		}
 	case "g":
 		m.pendingKey = 'g'
 		m.pendingKeySeq++
@@ -1367,6 +1392,17 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = true
 	}
 	return m, nil
+}
+
+func (m *Model) togglePatchLineMode() {
+	if m.State.PatchLineMode == model.LineModeWrap {
+		m.State.PatchLineMode = model.LineModeScroll
+	} else {
+		m.State.PatchLineMode = model.LineModeWrap
+	}
+	if m.patchViewport != nil {
+		m.patchViewport.SetLineMode(m.State.PatchLineMode)
+	}
 }
 
 func (m *Model) executeSearch(dir search.SearchDirection) {
@@ -1633,7 +1669,7 @@ func (m Model) viewHelp() string {
 		"  G         jump to bottom",
 		"  ctrl+d/u  half-page down/up",
 		"  ctrl+f/b  full page down/up",
-		"  left/right horizontal scroll",
+		"  w         wrap/scroll; left/right horizontal scroll",
 		"  0/Home    reset horizontal scroll",
 		"  ]c/[c     next/prev changed file",
 		"",
