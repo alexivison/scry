@@ -316,8 +316,8 @@ func TestHunkLineOffset(t *testing.T) {
 		wantOffset int
 	}{
 		"hunk 0": {hunk: 0, wantOffset: 0},
-		"hunk 1": {hunk: 1, wantOffset: 4},  // 1 header + 3 lines
-		"hunk 2": {hunk: 2, wantOffset: 9},   // 4 + 1 header + 4 lines
+		"hunk 1": {hunk: 1, wantOffset: 4}, // 1 header + 3 lines
+		"hunk 2": {hunk: 2, wantOffset: 9}, // 4 + 1 header + 4 lines
 	}
 
 	for name, tc := range tests {
@@ -358,7 +358,7 @@ func TestScrollDownUp(t *testing.T) {
 			setup: func(vp *PatchViewport) {
 				vp.ScrollOffset = vp.TotalLines() - 1
 			},
-			action: func(vp *PatchViewport) { vp.ScrollDown() },
+			action:     func(vp *PatchViewport) { vp.ScrollDown() },
 			wantOffset: -1, // sentinel: use TotalLines()-1
 		},
 		"multiple scroll downs": {
@@ -500,14 +500,14 @@ func TestDiffLineToViewportLine(t *testing.T) {
 		diffIdx int
 		wantVP  int
 	}{
-		"first diff line":         {diffIdx: 0, wantVP: 1},
-		"second diff line":        {diffIdx: 1, wantVP: 2},
-		"last in hunk0":           {diffIdx: 2, wantVP: 3},
-		"first in hunk1":          {diffIdx: 3, wantVP: 5},
-		"last in hunk1":           {diffIdx: 6, wantVP: 8},
-		"first in hunk2":          {diffIdx: 7, wantVP: 10},
-		"last diff line":          {diffIdx: 9, wantVP: 12},
-		"out of range returns 0":  {diffIdx: 99, wantVP: 0},
+		"first diff line":        {diffIdx: 0, wantVP: 1},
+		"second diff line":       {diffIdx: 1, wantVP: 2},
+		"last in hunk0":          {diffIdx: 2, wantVP: 3},
+		"first in hunk1":         {diffIdx: 3, wantVP: 5},
+		"last in hunk1":          {diffIdx: 6, wantVP: 8},
+		"first in hunk2":         {diffIdx: 7, wantVP: 10},
+		"last diff line":         {diffIdx: 9, wantVP: 12},
+		"out of range returns 0": {diffIdx: 99, wantVP: 0},
 	}
 
 	for name, tc := range tests {
@@ -555,32 +555,27 @@ func TestRenderGutterSuppression(t *testing.T) {
 	}
 }
 
-func TestHighlightMatch_UnicodeByteLengthChange(t *testing.T) {
+func TestHighlightSpan_UnicodeByteSpan(t *testing.T) {
 	t.Parallel()
 
-	// U+023A (Ⱥ, 2 bytes) lowercases to U+2C65 (ⱥ, 3 bytes).
-	// The lowered string is longer than the original. A byte index from the
-	// lowered string applied to the original causes a slice bounds panic.
-	line := "a\u023Ab"       // 4 bytes: a(1) + Ⱥ(2) + b(1)
-	query := "b"             // case-insensitive (all lowercase)
+	line := "a\u023Ab" // 4 bytes: a(1) + Ⱥ(2) + b(1)
+	span := SearchMatch{Line: 0, Start: 1, End: 3}
 
 	style := lipgloss.NewStyle()
-	// Must not panic.
-	result := highlightMatch(line, query, style)
+	result := highlightSpan(line, span, style)
 	if result == "" {
-		t.Error("highlightMatch returned empty string")
+		t.Error("highlightSpan returned empty string")
 	}
 }
 
-func TestHighlightMatch_CaseInsensitiveASCII(t *testing.T) {
+func TestHighlightSpan_ASCII(t *testing.T) {
 	t.Parallel()
 
 	line := "Hello World"
-	query := "hello" // all-lowercase → case-insensitive search
+	span := SearchMatch{Line: 0, Start: 0, End: len("Hello")}
 	style := lipgloss.NewStyle()
 
-	result := highlightMatch(line, query, style)
-	// Should find and highlight "Hello" even though query is "hello".
+	result := highlightSpan(line, span, style)
 	if !strings.Contains(result, "Hello") {
 		t.Errorf("expected result to contain 'Hello', got: %s", result)
 	}
@@ -620,16 +615,16 @@ func TestViewportLineToDiffLine(t *testing.T) {
 		vpLine   int
 		wantDiff int
 	}{
-		"hunk header maps to next diff line": {vpLine: 0, wantDiff: 0},
-		"first diff line":                    {vpLine: 1, wantDiff: 0},
-		"second diff line":                   {vpLine: 2, wantDiff: 1},
+		"hunk header maps to next diff line":    {vpLine: 0, wantDiff: 0},
+		"first diff line":                       {vpLine: 1, wantDiff: 0},
+		"second diff line":                      {vpLine: 2, wantDiff: 1},
 		"hunk1 header maps to first hunk1 diff": {vpLine: 4, wantDiff: 3},
-		"first diff in hunk1":                {vpLine: 5, wantDiff: 3},
-		"last diff in hunk1":                 {vpLine: 8, wantDiff: 6},
-		"hunk2 header":                       {vpLine: 9, wantDiff: 7},
-		"last diff line":                     {vpLine: 12, wantDiff: 9},
-		"negative clamps to 0":               {vpLine: -5, wantDiff: 0},
-		"beyond end clamps to last":          {vpLine: 100, wantDiff: 9},
+		"first diff in hunk1":                   {vpLine: 5, wantDiff: 3},
+		"last diff in hunk1":                    {vpLine: 8, wantDiff: 6},
+		"hunk2 header":                          {vpLine: 9, wantDiff: 7},
+		"last diff line":                        {vpLine: 12, wantDiff: 9},
+		"negative clamps to 0":                  {vpLine: -5, wantDiff: 0},
+		"beyond end clamps to last":             {vpLine: 100, wantDiff: 9},
 	}
 
 	for name, tc := range tests {

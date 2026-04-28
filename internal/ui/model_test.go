@@ -780,6 +780,32 @@ func TestDirectionalSearchEnterExecutesSearch(t *testing.T) {
 	}
 }
 
+func TestDirectionalSearchStoresLogicalLineMatch(t *testing.T) {
+	t.Parallel()
+
+	um := enterPatchPane(t)
+
+	updated, _ := um.Update(keyMsg('/'))
+	um2 := updated.(Model)
+	for _, r := range "main" {
+		updated, _ = um2.Update(keyMsg(r))
+		um2 = updated.(Model)
+	}
+	updated, _ = um2.Update(enterMsg())
+	um3 := updated.(Model)
+
+	if um3.patchViewport.ScrollOffset != 1 {
+		t.Fatalf("ScrollOffset = %d, want rendered row 1", um3.patchViewport.ScrollOffset)
+	}
+	match := um3.patchViewport.SearchMatch
+	if match.Line != 0 {
+		t.Fatalf("SearchMatch.Line = %d, want logical diff line 0", match.Line)
+	}
+	if match.Start != len("package ") || match.End != len("package main") {
+		t.Fatalf("SearchMatch span = [%d,%d), want [%d,%d)", match.Start, match.End, len("package "), len("package main"))
+	}
+}
+
 func TestDirectionalSearchEnterNextMatch(t *testing.T) {
 	t.Parallel()
 

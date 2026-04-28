@@ -124,6 +124,45 @@ func TestFindForward(t *testing.T) {
 	}
 }
 
+func TestFindMatchReturnsLogicalLineAndSpan(t *testing.T) {
+	t.Parallel()
+
+	idx := Build(samplePatch())
+
+	match, ok := idx.FindMatch("main", 0, SearchNext)
+	if !ok {
+		t.Fatal("FindMatch returned no match")
+	}
+	if match.Line != 0 {
+		t.Fatalf("Line = %d, want 0", match.Line)
+	}
+	if match.Start != len("package ") || match.End != len("package main") {
+		t.Fatalf("span = [%d,%d), want [%d,%d)", match.Start, match.End, len("package "), len("package main"))
+	}
+}
+
+func TestFindMatchCaseInsensitiveUnicodeSpan(t *testing.T) {
+	t.Parallel()
+
+	patch := model.FilePatch{
+		Hunks: []model.Hunk{{
+			Lines: []model.DiffLine{{Kind: model.LineContext, Text: "a\u023Ab"}},
+		}},
+	}
+	idx := Build(patch)
+
+	match, ok := idx.FindMatch("\u2C65", 0, SearchNext)
+	if !ok {
+		t.Fatal("FindMatch returned no match")
+	}
+	if match.Line != 0 {
+		t.Fatalf("Line = %d, want 0", match.Line)
+	}
+	if match.Start != 1 || match.End != 3 {
+		t.Fatalf("span = [%d,%d), want [1,3)", match.Start, match.End)
+	}
+}
+
 func TestFindBackward(t *testing.T) {
 	t.Parallel()
 
