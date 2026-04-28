@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/model"
 )
@@ -211,6 +212,120 @@ func TestTruncateToWidth_PreservesANSI(t *testing.T) {
 	}
 	if !strings.Contains(got, "hello") {
 		t.Errorf("truncateToWidth should keep 'hello', got %q", got)
+	}
+}
+
+func TestPatchViewportDefaultLineModeScroll(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(threeHunkPatch())
+
+	if vp.LineMode != model.LineModeScroll {
+		t.Fatalf("LineMode = %v, want LineModeScroll", vp.LineMode)
+	}
+}
+
+func TestHorizontalScrollClampsXOffset(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
+	vp.Width = 24
+	vp.Height = 1
+	vp.ScrollOffset = 1
+
+	if got, want := vp.MaxXOffset(), 11; got != want {
+		t.Fatalf("MaxXOffset() = %d, want %d", got, want)
+	}
+
+	vp.ScrollRight()
+	if got, want := vp.XOffset, 8; got != want {
+		t.Fatalf("after first ScrollRight XOffset = %d, want %d", got, want)
+	}
+
+	vp.ScrollRight()
+	if got, want := vp.XOffset, 11; got != want {
+		t.Fatalf("after second ScrollRight XOffset = %d, want clamped max %d", got, want)
+	}
+
+	vp.ScrollRight()
+	if got, want := vp.XOffset, 11; got != want {
+		t.Fatalf("after third ScrollRight XOffset = %d, want still clamped max %d", got, want)
+	}
+
+	vp.ScrollLeft()
+	if got, want := vp.XOffset, 3; got != want {
+		t.Fatalf("after ScrollLeft XOffset = %d, want %d", got, want)
+	}
+
+	vp.ScrollLeft()
+	if got := vp.XOffset; got != 0 {
+		t.Fatalf("after second ScrollLeft XOffset = %d, want clamped zero", got)
+	}
+}
+
+func TestHorizontalScrollKeepsGutterAndPrefixFixed(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
+	vp.Width = 24
+	vp.Height = 1
+	vp.ScrollOffset = 1
+	before := ansi.Strip(vp.Render())
+
+	vp.XOffset = 8
+	after := ansi.Strip(vp.Render())
+
+	beforePrefix := before[:strings.Index(before, "+")+1]
+	afterPrefix := after[:strings.Index(after, "+")+1]
+	if afterPrefix != beforePrefix {
+		t.Fatalf("fixed gutter/prefix moved\nbefore: %q\nafter:  %q", before, after)
+	}
+	if strings.Contains(after, "01234567") {
+		t.Fatalf("scrolled body still contains skipped left text: %q", after)
+	}
+	if !strings.Contains(after, "89abcdefghi") {
+		t.Fatalf("scrolled body = %q, want visible body starting at offset 8", after)
+	}
+}
+
+func TestHorizontalScrollPreservesANSIBodySequences(t *testing.T) {
+	t.Parallel()
+
+	styledBody := "\x1b[31m0123456789abcdef\x1b[0m"
+	vp := NewPatchViewport(singleLinePatch(styledBody))
+	vp.Width = 22
+	vp.Height = 1
+	vp.ScrollOffset = 1
+	vp.XOffset = 8
+
+	got := vp.Render()
+	stripped := ansi.Strip(got)
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("rendered line lost ANSI escapes: %q", got)
+	}
+	if strings.Contains(stripped, "01234567") {
+		t.Fatalf("rendered line still contains skipped left body: %q", stripped)
+	}
+	if !strings.Contains(stripped, "89abcdef") {
+		t.Fatalf("rendered line = %q, want ANSI body truncated from left", stripped)
+	}
+	if w := lipgloss.Width(got); w > vp.Width {
+		t.Fatalf("rendered width = %d, want <= %d: %q", w, vp.Width, got)
+	}
+}
+
+func singleLinePatch(text string) model.FilePatch {
+	return model.FilePatch{
+		Summary: model.FileSummary{Path: "long.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{{
+			Header:   "func long()",
+			OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1,
+			Lines: []model.DiffLine{{
+				Kind:  model.LineAdded,
+				NewNo: intP(1),
+				Text:  text,
+			}},
+		}},
 	}
 }
 

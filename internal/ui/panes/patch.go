@@ -17,6 +17,8 @@ type PatchViewport struct {
 	Patch        model.FilePatch
 	CurrentHunk  int
 	ScrollOffset int // line index at top of viewport
+	LineMode     model.LineMode
+	XOffset      int // horizontal body-column offset in scroll mode
 	Width        int
 	Height       int
 
@@ -28,6 +30,8 @@ type PatchViewport struct {
 	lines        []patchLine
 	gutterDigits int // width of each line-number column (min 4)
 }
+
+const horizontalScrollStep = 8
 
 type lineType int
 
@@ -57,7 +61,7 @@ func NoSearchMatch() SearchMatch {
 
 // NewPatchViewport creates a viewport positioned at the first hunk.
 func NewPatchViewport(patch model.FilePatch) *PatchViewport {
-	vp := &PatchViewport{Patch: patch, SearchMatch: NoSearchMatch(), GutterVisible: true}
+	vp := &PatchViewport{Patch: patch, LineMode: model.LineModeScroll, SearchMatch: NoSearchMatch(), GutterVisible: true}
 	vp.lines = vp.buildLines()
 	vp.gutterDigits = vp.computeGutterDigits()
 	return vp
@@ -209,6 +213,70 @@ func (vp *PatchViewport) ScrollToBottom() {
 	vp.SyncCurrentHunk()
 }
 
+// ScrollRight moves the visible code body right by the fixed horizontal step.
+func (vp *PatchViewport) ScrollRight() {
+	if vp.LineMode != model.LineModeScroll {
+		return
+	}
+	vp.XOffset += horizontalScrollStep
+	vp.ClampXOffset()
+}
+
+// ScrollLeft moves the visible code body left by the fixed horizontal step.
+func (vp *PatchViewport) ScrollLeft() {
+	if vp.LineMode != model.LineModeScroll {
+		return
+	}
+	vp.XOffset -= horizontalScrollStep
+	vp.ClampXOffset()
+}
+
+// ResetXOffset returns horizontal scroll to the beginning of the code body.
+func (vp *PatchViewport) ResetXOffset() {
+	vp.XOffset = 0
+}
+
+// ClampXOffset constrains horizontal scroll to the currently visible body range.
+func (vp *PatchViewport) ClampXOffset() {
+	if vp.XOffset < 0 {
+		vp.XOffset = 0
+		return
+	}
+	if max := vp.MaxXOffset(); vp.XOffset > max {
+		vp.XOffset = max
+	}
+}
+
+// MaxXOffset returns the largest useful horizontal body offset for visible rows.
+func (vp *PatchViewport) MaxXOffset() int {
+	if vp.LineMode != model.LineModeScroll || vp.Width <= 0 {
+		return 0
+	}
+
+	bodyWidth := -1
+	longestBody := 0
+	for _, pl := range vp.visibleLines() {
+		if pl.typ != lineTypeDiff || pl.diff.Kind == model.LineNoNewline {
+			continue
+		}
+		layers := buildDiffLineLayers(pl.diff, vp.GutterVisible, vp.gutterDigits)
+		if bodyWidth < 0 {
+			bodyWidth = diffLineBodyWidth(layers, vp.Width)
+		}
+		if w := lipgloss.Width(layers.body); w > longestBody {
+			longestBody = w
+		}
+	}
+	if bodyWidth <= 0 {
+		return 0
+	}
+	max := longestBody - bodyWidth
+	if max < 0 {
+		return 0
+	}
+	return max
+}
+
 // SyncCurrentHunk derives CurrentHunk from ScrollOffset so that n/p
 // navigate relative to the hunk the user is actually viewing.
 func (vp *PatchViewport) SyncCurrentHunk() {
@@ -231,16 +299,8 @@ func (vp *PatchViewport) Render() string {
 		return ""
 	}
 
-	end := vp.ScrollOffset + vp.Height
-	if end > len(vp.lines) {
-		end = len(vp.lines)
-	}
-	start := vp.ScrollOffset
-	if start > len(vp.lines) {
-		start = len(vp.lines)
-	}
-
-	visible := vp.lines[start:end]
+	vp.ClampXOffset()
+	visible := vp.visibleLines()
 	rendered := make([]string, 0, len(visible))
 	for _, pl := range visible {
 		switch pl.typ {
@@ -251,10 +311,26 @@ func (vp *PatchViewport) Render() string {
 			if vp.SearchQuery != "" && vp.SearchMatch.Line == pl.diffIndex {
 				match = vp.SearchMatch
 			}
-			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, match, vp.GutterVisible, vp.gutterDigits))
+			rendered = append(rendered, renderDiffLineHL(pl.diff, vp.Width, vp.SearchQuery, match, vp.GutterVisible, vp.gutterDigits, vp.LineMode, vp.XOffset))
 		}
 	}
 	return strings.Join(rendered, "\n")
+}
+
+func (vp *PatchViewport) visibleLines() []patchLine {
+	end := vp.ScrollOffset + vp.Height
+	if end > len(vp.lines) {
+		end = len(vp.lines)
+	}
+	start := vp.ScrollOffset
+	if start > len(vp.lines) {
+		start = len(vp.lines)
+	}
+
+	if start > end {
+		start = end
+	}
+	return vp.lines[start:end]
 }
 
 type diffLineLayers struct {
@@ -277,51 +353,77 @@ func buildDiffLineLayers(dl model.DiffLine, gutterVisible bool, gutterDigits int
 	return layers
 }
 
-func renderDiffLineHL(dl model.DiffLine, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int) string {
+func renderDiffLineHL(dl model.DiffLine, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int, lineMode model.LineMode, xOffset int) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
 
 	layers := buildDiffLineLayers(dl, gutterVisible, gutterDigits)
-	return emitDiffLine(layers, width, query, match)
+	return emitDiffLine(layers, width, query, match, lineMode, xOffset)
 }
 
-func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMatch) string {
-	body := layers.prefix + layers.body
-	if layers.gutter != "" {
-		if width > 0 {
-			bodyBudget := width - lipgloss.Width(layers.gutter)
-			if bodyBudget > 0 && lipgloss.Width(body) > bodyBudget {
-				body = truncateToWidth(body, bodyBudget)
+func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMatch, lineMode model.LineMode, xOffset int) string {
+	if lineMode != model.LineModeScroll || xOffset < 0 {
+		xOffset = 0
+	}
+
+	visibleBody := layers.body
+	if width > 0 {
+		bodyWidth := diffLineBodyWidth(layers, width)
+		if bodyWidth <= 0 {
+			visibleBody = ""
+		} else {
+			if xOffset > 0 {
+				visibleBody = ansi.TruncateLeft(visibleBody, xOffset, "")
 			}
+			visibleBody = ansi.Truncate(visibleBody, bodyWidth, "")
 		}
+	}
+
+	body := layers.prefix + visibleBody
+	if layers.gutter != "" {
 		if query != "" && match.validForBody(layers.body) {
-			return layers.gutter + highlightSpan(body, bodySpanToContentSpan(match, layers.prefix), layers.style)
+			return layers.gutter + highlightSpan(body, bodySpanToVisibleContentSpan(match, layers.prefix, xOffset, visibleBody), layers.style)
 		}
 		return layers.gutter + layers.style.Render(body)
 	}
 
-	if width > 0 && lipgloss.Width(body) > width {
-		body = truncateToWidth(body, width)
-	}
-
 	if query != "" && match.validForBody(layers.body) {
-		return highlightSpan(body, bodySpanToContentSpan(match, layers.prefix), layers.style)
+		return highlightSpan(body, bodySpanToVisibleContentSpan(match, layers.prefix, xOffset, visibleBody), layers.style)
 	}
 
 	return layers.style.Render(body)
+}
+
+func diffLineBodyWidth(layers diffLineLayers, width int) int {
+	bodyWidth := width - lipgloss.Width(layers.gutter) - lipgloss.Width(layers.prefix)
+	if bodyWidth < 0 {
+		return 0
+	}
+	return bodyWidth
 }
 
 func (m SearchMatch) validForBody(body string) bool {
 	return m.Line >= 0 && m.Start >= 0 && m.End > m.Start && m.End <= len(body)
 }
 
-func bodySpanToContentSpan(match SearchMatch, prefix string) SearchMatch {
+func bodySpanToVisibleContentSpan(match SearchMatch, prefix string, xOffset int, visibleBody string) SearchMatch {
 	prefixLen := len(prefix)
+	start := match.Start - xOffset
+	end := match.End - xOffset
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if end > len(visibleBody) {
+		end = len(visibleBody)
+	}
 	return SearchMatch{
 		Line:  match.Line,
-		Start: prefixLen + match.Start,
-		End:   prefixLen + match.End,
+		Start: prefixLen + start,
+		End:   prefixLen + end,
 	}
 }
 
