@@ -21,6 +21,7 @@ import (
 	"github.com/alexivison/scry/internal/search"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
+	"github.com/alexivison/scry/internal/ui/syntax"
 	"github.com/alexivison/scry/internal/ui/theme"
 	"github.com/alexivison/scry/internal/watch"
 )
@@ -64,6 +65,7 @@ type Model struct {
 	compareResolver CompareReResolver
 	compareRequest  model.CompareRequest
 	patchViewport   *panes.PatchViewport
+	syntaxCache     *syntax.Cache
 	patchErr        string
 	patchFallback   string // fallback message for binary/submodule/oversized files
 	showHelp        bool
@@ -146,7 +148,7 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(theme.Accent)
-	m := Model{State: state, spinner: s}
+	m := Model{State: state, syntaxCache: syntax.NewCache(), spinner: s}
 	for _, opt := range opts {
 		opt(&m)
 	}
@@ -1200,6 +1202,10 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.GutterVisible = m.width >= 60
 	vp.LineMode = m.State.PatchLineMode
 	vp.XOffset = 0
+	if m.syntaxCache == nil {
+		m.syntaxCache = syntax.NewCache()
+	}
+	vp.SetSyntaxHighlighter(m.syntaxCache.ForPatch(*ps.Patch, ps.ContentHash))
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""
