@@ -7,10 +7,13 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
+	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
 
@@ -232,6 +235,66 @@ func TestNewModelNonEmpty(t *testing.T) {
 	}
 	if m.State.FocusPane != model.PaneFiles {
 		t.Errorf("FocusPane = %q, want %q", m.State.FocusPane, model.PaneFiles)
+	}
+}
+
+func TestModelPlumbsColorProfileIntoSyntaxLineCache(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previous)
+	})
+
+	body := `func main() { return "ok" }`
+	patch := model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go"},
+		Hunks: []model.Hunk{{
+			OldStart: 1,
+			OldLen:   1,
+			NewStart: 1,
+			NewLen:   1,
+			Lines: []model.DiffLine{{
+				Kind:  model.LineContext,
+				OldNo: intP(1),
+				NewNo: intP(1),
+				Text:  body,
+			}},
+		}},
+	}
+	state := sampleState()
+	state.Files = []model.FileSummary{{Path: "main.go"}}
+
+	none := NewModel(state, WithColorProfile(terminal.ColorNone))
+	none.width = 80
+	none.height = 4
+	none.applyPatchResult(model.PatchLoadState{Patch: &patch, ContentHash: "hash-none"})
+	if none.patchViewport == nil {
+		t.Fatal("ColorNone model did not create a patch viewport")
+	}
+	none.patchViewport.ScrollOffset = 1
+	none.patchViewport.Height = 1
+	none.patchViewport.GutterVisible = false
+	gotNone := none.patchViewport.Render()
+	if gotNone != " "+body {
+		t.Fatalf("ColorNone rendered line = %q, want raw context body %q", gotNone, " "+body)
+	}
+	if strings.Contains(gotNone, "\x1b[") {
+		t.Fatalf("ColorNone rendered syntax escapes: %q", gotNone)
+	}
+
+	basic := NewModel(state, WithColorProfile(terminal.ColorBasic))
+	basic.width = 80
+	basic.height = 4
+	basic.applyPatchResult(model.PatchLoadState{Patch: &patch, ContentHash: "hash-basic"})
+	if basic.patchViewport == nil {
+		t.Fatal("ColorBasic model did not create a patch viewport")
+	}
+	basic.patchViewport.ScrollOffset = 1
+	basic.patchViewport.Height = 1
+	basic.patchViewport.GutterVisible = false
+	gotBasic := basic.patchViewport.Render()
+	if !strings.Contains(gotBasic, "\x1b[") {
+		t.Fatalf("ColorBasic rendered line should include syntax escapes: %q", gotBasic)
 	}
 }
 

@@ -30,6 +30,7 @@ func Run(cfg config.Config) int {
 	}
 
 	ctx := context.Background()
+	colorProfile := terminal.DetectColorProfile(terminal.OSEnv())
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -54,13 +55,13 @@ func Run(cfg config.Config) int {
 	}
 
 	if cfg.ShouldUseDashboard(worktreeCount) {
-		return runDashboard(ctx, cfg, boot)
+		return runDashboard(ctx, cfg, boot, colorProfile)
 	}
-	return runDiff(ctx, cfg, boot)
+	return runDiff(ctx, cfg, boot, colorProfile)
 }
 
 // runDiff is the normal diff-view pipeline.
-func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult) int {
+func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult, colorProfile terminal.ColorProfile) int {
 	resolver := &source.CompareResolver{Runner: boot.Runner}
 	basis := model.CompareBasisUpstream
 	req := model.CompareRequest{
@@ -88,6 +89,7 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
 	opts := []ui.ModelOption{
+		ui.WithColorProfile(colorProfile),
 		ui.WithPatchLoader(patchSvc),
 		ui.WithMetadataLoader(metaSvc),
 		ui.WithCompareResolver(resolver, req),
@@ -204,7 +206,7 @@ func (a *commitProviderAdapter) Generate(ctx context.Context) (string, error) {
 
 // runDashboard is the worktree dashboard pipeline.
 // Launches the TUI immediately with an empty list and loads worktree data async.
-func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapResult) int {
+func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapResult, colorProfile terminal.ColorProfile) int {
 	// Use a runner rooted at the common git dir (stable across worktree deletions).
 	stableRoot := boot.Repo.GitCommonDir
 	if stableRoot == "" {
@@ -220,7 +222,7 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	removeRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot, Timeout: gitexec.RemoveTimeout})
 	remover := &worktreeRemoverImpl{runner: removeRunner}
 	preview := &previewLoaderImpl{}
-	m := ui.NewModel(state, ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover), ui.WithPreviewLoader(preview))
+	m := ui.NewModel(state, ui.WithColorProfile(colorProfile), ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover), ui.WithPreviewLoader(preview))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
