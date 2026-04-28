@@ -66,6 +66,7 @@ type Model struct {
 	compareRequest  model.CompareRequest
 	patchViewport   *panes.PatchViewport
 	syntaxCache     *syntax.Cache
+	colorProfile    terminal.ColorProfile
 	patchErr        string
 	patchFallback   string // fallback message for binary/submodule/oversized files
 	showHelp        bool
@@ -148,9 +149,12 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(theme.Accent)
-	m := Model{State: state, syntaxCache: syntax.NewCache(), spinner: s}
+	m := Model{State: state, colorProfile: terminal.ColorBasic, spinner: s}
 	for _, opt := range opts {
 		opt(&m)
+	}
+	if m.syntaxCache == nil {
+		m.syntaxCache = syntax.NewCache(m.colorProfile)
 	}
 	return m
 }
@@ -173,6 +177,14 @@ func WithCompareResolver(cr CompareReResolver, req model.CompareRequest) ModelOp
 	return func(m *Model) {
 		m.compareResolver = cr
 		m.compareRequest = req
+	}
+}
+
+// WithColorProfile sets the terminal color capability used for syntax colors.
+func WithColorProfile(profile terminal.ColorProfile) ModelOption {
+	return func(m *Model) {
+		m.colorProfile = profile
+		m.syntaxCache = nil
 	}
 }
 
@@ -1202,10 +1214,12 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.GutterVisible = m.width >= 60
 	vp.LineMode = m.State.PatchLineMode
 	vp.XOffset = 0
-	if m.syntaxCache == nil {
-		m.syntaxCache = syntax.NewCache()
+	if m.colorProfile != terminal.ColorNone {
+		if m.syntaxCache == nil {
+			m.syntaxCache = syntax.NewCache(m.colorProfile)
+		}
+		vp.SetSyntaxHighlighter(m.syntaxCache.ForPatch(*ps.Patch, ps.ContentHash))
 	}
-	vp.SetSyntaxHighlighter(m.syntaxCache.ForPatch(*ps.Patch, ps.ContentHash))
 	m.patchViewport = vp
 	m.searchIndex = search.Build(*ps.Patch)
 	m.searchNotFound = ""

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
@@ -22,12 +23,18 @@ type CacheKey struct {
 
 // Cache owns memoized syntax rendering for loaded patches.
 type Cache struct {
-	entries map[CacheKey]*LineCache
+	entries    map[CacheKey]*LineCache
+	profile    terminal.ColorProfile
+	profileSet bool
 }
 
 // NewCache creates an empty syntax cache.
-func NewCache() *Cache {
-	return &Cache{entries: make(map[CacheKey]*LineCache)}
+func NewCache(profiles ...terminal.ColorProfile) *Cache {
+	return &Cache{
+		entries:    make(map[CacheKey]*LineCache),
+		profile:    colorProfileOrDefault(profiles...),
+		profileSet: true,
+	}
 }
 
 // ForPatch returns the line cache keyed by path and PatchLoadState content hash.
@@ -43,9 +50,16 @@ func (c *Cache) ForPatch(patch model.FilePatch, contentHash string) *LineCache {
 	if cached, ok := c.entries[key]; ok {
 		return cached
 	}
-	lineCache := NewLineCache(patch.Summary.Path, patch.Summary.OldPath, sampleFromPatch(patch))
+	lineCache := NewLineCache(patch.Summary.Path, patch.Summary.OldPath, sampleFromPatch(patch), c.colorProfile())
 	c.entries[key] = lineCache
 	return lineCache
+}
+
+func (c *Cache) colorProfile() terminal.ColorProfile {
+	if c == nil || !c.profileSet {
+		return terminal.ColorBasic
+	}
+	return normalizeColorProfile(c.profile)
 }
 
 // LineCache memoizes highlighted bodies by logical diff-line index.
@@ -55,9 +69,9 @@ type LineCache struct {
 }
 
 // NewLineCache creates a per-patch line highlighter.
-func NewLineCache(path, oldPath, sample string) *LineCache {
+func NewLineCache(path, oldPath, sample string, profiles ...terminal.ColorProfile) *LineCache {
 	return &LineCache{
-		highlighter: NewHighlighter(path, oldPath, sample),
+		highlighter: NewHighlighter(path, oldPath, sample, profiles...),
 		lines:       make(map[int]string),
 	}
 }
@@ -91,12 +105,17 @@ func (lc *LineCache) HighlightLineSpan(line int, body string, start, end int) st
 
 // Highlighter wraps a coalesced Chroma lexer.
 type Highlighter struct {
-	lexer chroma.Lexer
+	lexer   chroma.Lexer
+	profile terminal.ColorProfile
 }
 
 // NewHighlighter creates a highlighter using Scry's lexer detection order.
-func NewHighlighter(path, oldPath, sample string) *Highlighter {
-	return &Highlighter{lexer: DetectLexer(path, oldPath, sample)}
+func NewHighlighter(path, oldPath, sample string, profiles ...terminal.ColorProfile) *Highlighter {
+	profile := colorProfileOrDefault(profiles...)
+	if profile == terminal.ColorNone {
+		return &Highlighter{profile: profile}
+	}
+	return &Highlighter{lexer: DetectLexer(path, oldPath, sample), profile: profile}
 }
 
 // DetectLexer selects a lexer by path, old path, content sample, then fallback.
@@ -130,7 +149,7 @@ func (h *Highlighter) HighlightSpan(body string, start, end int) string {
 }
 
 func (h *Highlighter) highlight(body string, match span) string {
-	if body == "" || h == nil || h.lexer == nil {
+	if body == "" || h == nil || h.profile == terminal.ColorNone || h.lexer == nil {
 		return body
 	}
 
@@ -145,7 +164,7 @@ func (h *Highlighter) highlight(body string, match span) string {
 		if token == chroma.EOF || token.Value == "" {
 			continue
 		}
-		style := styleFor(token.Type)
+		style := styleFor(token.Type, h.profile)
 		b.WriteString(renderToken(style, token.Value, offset, match))
 		offset += len(token.Value)
 	}
@@ -190,31 +209,93 @@ func renderToken(style lipgloss.Style, value string, tokenStart int, match span)
 		style.Render(value[overlapEnd:])
 }
 
-func styleFor(tokenType chroma.TokenType) lipgloss.Style {
+func styleFor(tokenType chroma.TokenType, profile terminal.ColorProfile) lipgloss.Style {
+	palette := paletteFor(profile)
 	switch {
 	case tokenType == chroma.Error || tokenType == chroma.GenericError:
-		return errorStyle
+		return lipgloss.NewStyle().Foreground(palette.error)
 	case tokenType.InCategory(chroma.Comment):
-		return commentStyle
+		return lipgloss.NewStyle().Foreground(palette.comment).Faint(true)
 	case tokenType == chroma.KeywordType ||
 		tokenType == chroma.NameClass ||
 		tokenType == chroma.NameBuiltin ||
 		tokenType == chroma.NameException:
-		return typeStyle
+		return lipgloss.NewStyle().Foreground(palette.typeName)
 	case tokenType.InCategory(chroma.Keyword):
-		return keywordStyle
+		return lipgloss.NewStyle().Foreground(palette.keyword).Bold(true)
 	case tokenType.InSubCategory(chroma.LiteralString):
-		return stringStyle
+		return lipgloss.NewStyle().Foreground(palette.string)
 	case tokenType.InSubCategory(chroma.LiteralNumber) ||
 		tokenType == chroma.LiteralDate ||
 		tokenType == chroma.LiteralOther ||
 		tokenType == chroma.NameConstant ||
 		tokenType == chroma.KeywordConstant:
-		return constantStyle
+		return lipgloss.NewStyle().Foreground(palette.constant)
 	case tokenType.InSubCategory(chroma.NameFunction):
-		return functionStyle
+		return lipgloss.NewStyle().Foreground(palette.function)
 	default:
 		return lipgloss.NewStyle()
+	}
+}
+
+type tokenPalette struct {
+	comment  lipgloss.Color
+	keyword  lipgloss.Color
+	string   lipgloss.Color
+	constant lipgloss.Color
+	typeName lipgloss.Color
+	function lipgloss.Color
+	error    lipgloss.Color
+}
+
+func paletteFor(profile terminal.ColorProfile) tokenPalette {
+	switch normalizeColorProfile(profile) {
+	case terminal.ColorANSI256:
+		return tokenPalette{
+			comment:  lipgloss.Color("244"),
+			keyword:  lipgloss.Color("33"),
+			string:   lipgloss.Color("114"),
+			constant: lipgloss.Color("175"),
+			typeName: lipgloss.Color("81"),
+			function: lipgloss.Color("81"),
+			error:    lipgloss.Color("196"),
+		}
+	case terminal.ColorTrueColor:
+		return tokenPalette{
+			comment:  lipgloss.Color("#6A737D"),
+			keyword:  lipgloss.Color("#D73A49"),
+			string:   lipgloss.Color("#22863A"),
+			constant: lipgloss.Color("#B31D87"),
+			typeName: lipgloss.Color("#00A4B8"),
+			function: lipgloss.Color("#00A4B8"),
+			error:    lipgloss.Color("#D1242F"),
+		}
+	default:
+		return tokenPalette{
+			comment:  theme.Muted,
+			keyword:  theme.Accent,
+			string:   lipgloss.Color("2"),
+			constant: lipgloss.Color("5"),
+			typeName: lipgloss.Color("6"),
+			function: lipgloss.Color("6"),
+			error:    theme.Error,
+		}
+	}
+}
+
+func colorProfileOrDefault(profiles ...terminal.ColorProfile) terminal.ColorProfile {
+	if len(profiles) == 0 {
+		return terminal.ColorBasic
+	}
+	return normalizeColorProfile(profiles[0])
+}
+
+func normalizeColorProfile(profile terminal.ColorProfile) terminal.ColorProfile {
+	switch profile {
+	case terminal.ColorNone, terminal.ColorBasic, terminal.ColorANSI256, terminal.ColorTrueColor:
+		return profile
+	default:
+		return terminal.ColorBasic
 	}
 }
 
@@ -241,28 +322,3 @@ func sampleFromPatch(patch model.FilePatch) string {
 func Highlightable(kind model.LineKind) bool {
 	return kind == model.LineAdded || kind == model.LineDeleted || kind == model.LineContext
 }
-
-var (
-	commentStyle = lipgloss.NewStyle().
-			Foreground(theme.Muted).
-			Faint(true)
-
-	keywordStyle = lipgloss.NewStyle().
-			Foreground(theme.Accent).
-			Bold(true)
-
-	stringStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("2"))
-
-	constantStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("5"))
-
-	typeStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("6"))
-
-	functionStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("6"))
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(theme.Error)
-)
