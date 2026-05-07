@@ -93,16 +93,36 @@ func buildBorderLine(left, right, fill, label string, innerWidth int, style lipg
 }
 
 // padOrTruncate ensures a string fits exactly within the given visual width.
+// When the input carries ANSI styling (e.g. a tinted diff row), a hard reset is
+// injected before any padding spaces and at the cell boundary so the bg/fg
+// state cannot bleed into adjacent columns or the next row.
 func padOrTruncate(s string, width int) string {
 	w := lipgloss.Width(s)
-	if w == width {
-		return s
+	hasANSI := strings.ContainsRune(s, ansiESC)
+	var out string
+	switch {
+	case w > width:
+		out = truncateToWidth(s, width)
+	case w < width:
+		pad := strings.Repeat(" ", width-w)
+		if hasANSI {
+			out = s + ansiReset + pad
+		} else {
+			out = s + pad
+		}
+	default:
+		out = s
 	}
-	if w > width {
-		return truncateToWidth(s, width)
+	if hasANSI && !strings.HasSuffix(out, ansiReset) {
+		out += ansiReset
 	}
-	return s + strings.Repeat(" ", width-w)
+	return out
 }
+
+const (
+	ansiESC   = '\x1b'
+	ansiReset = "\x1b[0m"
+)
 
 // ContentDimensions returns the inner width and height available for content
 // inside a bordered pane with the given outer dimensions. Values are clamped to ≥0.

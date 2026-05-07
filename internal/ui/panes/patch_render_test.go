@@ -470,6 +470,200 @@ func TestFormatGutter_LargeLineNumbers(t *testing.T) {
 	}
 }
 
+// withANSIColorProfile forces lipgloss to emit ANSI escape sequences so we can
+// assert background colors in the rendered output. Tests run as goroutines in a
+// non-TTY default to Ascii (no-color), which masks the styling we want to check.
+func withANSIColorProfile(t *testing.T) {
+	t.Helper()
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(old) })
+}
+
+// backgroundSGRFragment returns the SGR parameter substring (e.g. "48;2;17;40;26"
+// or "48;5;22") that lipgloss emits for the style's background under the active
+// color profile. Useful for asserting bg presence without locking to a specific
+// palette entry — the same fragment appears in compound SGRs that merge fg+bg.
+func backgroundSGRFragment(t *testing.T, style lipgloss.Style) string {
+	t.Helper()
+	probe := lipgloss.NewStyle().Background(style.GetBackground()).Render(" ")
+	open := strings.Index(probe, "\x1b[")
+	close := strings.Index(probe, "m")
+	if open < 0 || close <= open+2 {
+		t.Fatalf("could not extract bg SGR fragment from probe %q", probe)
+	}
+	frag := probe[open+2 : close]
+	if frag == "" {
+		t.Fatalf("empty bg SGR fragment from probe %q", probe)
+	}
+	return frag
+}
+
+// firstDiffLine returns the first rendered diff line that contains the given
+// raw body substring, used to scope assertions to the added/deleted/context row.
+func firstDiffLine(t *testing.T, output, bodyMarker string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(ansi.Strip(line), bodyMarker) {
+			return line
+		}
+	}
+	t.Fatalf("no rendered line contained %q in:\n%s", bodyMarker, output)
+	return ""
+}
+
+func TestAddedDeletedRowsCarryBackgroundTint(t *testing.T) {
+	withANSIColorProfile(t)
+
+	vp := NewPatchViewport(threeHunkPatch())
+	vp.Width = 80
+	vp.Height = 20
+	vp.GutterVisible = true
+	output := vp.Render()
+
+	addedLine := firstDiffLine(t, output, `import "os"`)
+	deletedLine := firstDiffLine(t, output, "old()")
+	contextLine := firstDiffLine(t, output, "package main")
+
+	// The body content (not just the +/- prefix) should be wrapped in the
+	// row's background-color escape. We anchor on the body bytes to prove the
+	// tint extends past the prefix column.
+	// lipgloss may emit the bg either standalone (\x1b[<bg>m) or merged with
+	// the foreground in a compound SGR (\x1b[<fg>;<bg>m). Probe a bg-only
+	// style for the SGR parameter fragment so the assertion stays semantic
+	// and survives palette/profile changes.
+	addedBgSGR := backgroundSGRFragment(t, addedStyle)
+	deletedBgSGR := backgroundSGRFragment(t, deletedStyle)
+
+	requireBeforeBody := func(line, sgr, bodyMarker string) {
+		t.Helper()
+		bgAt := strings.Index(line, sgr)
+		bodyAt := strings.Index(line, bodyMarker)
+		if bgAt < 0 || bodyAt < 0 || bgAt > bodyAt {
+			t.Fatalf("bg %q does not precede body %q in: %q", sgr, bodyMarker, line)
+		}
+	}
+
+	requireBeforeBody(addedLine, addedBgSGR, "import")
+	requireBeforeBody(deletedLine, deletedBgSGR, "old()")
+
+	// The body content (not just the +/- prefix) must be inside the tinted
+	// span — verify by looking for the bg fragment somewhere before any
+	// terminal reset that follows the body characters.
+	if idx := strings.Index(addedLine, addedBgSGR); idx < 0 || !strings.Contains(addedLine[idx:], `import "os"`) {
+		t.Fatalf("added bg span does not cover body: %q", addedLine)
+	}
+	if idx := strings.Index(deletedLine, deletedBgSGR); idx < 0 || !strings.Contains(deletedLine[idx:], "old()") {
+		t.Fatalf("deleted bg span does not cover body: %q", deletedLine)
+	}
+
+	// Context rows must NOT pick up either tint.
+	if strings.Contains(contextLine, addedBgSGR) || strings.Contains(contextLine, deletedBgSGR) {
+		t.Fatalf("context row leaked diff bg tint: %q", contextLine)
+	}
+
+	// Stripped content remains unchanged by the tint.
+	if got := ansi.Strip(addedLine); !strings.Contains(got, `+import "os"`) {
+		t.Fatalf("added row stripped content changed: %q", got)
+	}
+	if got := ansi.Strip(deletedLine); !strings.Contains(got, "old()") || !strings.Contains(got, "-") {
+		t.Fatalf("deleted row stripped content changed: %q", got)
+	}
+}
+
+func TestStyledBodyRetainsRowBackgroundAcrossInnerResets(t *testing.T) {
+	withANSIColorProfile(t)
+
+	dl := model.DiffLine{Kind: model.LineAdded, NewNo: intP(7), Text: `return "ok"`}
+	// Simulates a chroma-style highlighted body: an inner full-reset that
+	// would normally drop any outer background.
+	styledBody := "\x1b[31mreturn\x1b[0m \"ok\""
+
+	got := renderDiffLineBodyHL(dl, styledBody, true, 0, "", NoSearchMatch(), false, 4, model.LineModeScroll, 0)
+	addedBgSGR := backgroundSGRFragment(t, addedStyle)
+
+	// The bg fragment must appear at least twice: once around the prefix/body
+	// and once re-applied after the inner \x1b[0m so the tint persists.
+	if count := strings.Count(got, addedBgSGR); count < 2 {
+		t.Fatalf("expected bg %q re-applied after inner reset, got %d occurrences in %q", addedBgSGR, count, got)
+	}
+	// Inner full reset must still be followed by a bg-restore sequence.
+	if !strings.Contains(got, "\x1b[0m\x1b[") || !strings.Contains(got[strings.Index(got, "\x1b[0m"):], addedBgSGR) {
+		t.Fatalf("bg restore sequence missing after inner reset: %q", got)
+	}
+	// Sanity: the syntax color survives.
+	if !strings.Contains(got, "\x1b[31m") {
+		t.Fatalf("syntax foreground sequence dropped: %q", got)
+	}
+	// Stripped content unchanged.
+	if want, stripped := `+return "ok"`, ansi.Strip(got); stripped != want {
+		t.Fatalf("stripped content = %q, want %q", stripped, want)
+	}
+}
+
+func TestJoinColumnsContainsTintWithinRightColumn(t *testing.T) {
+	withANSIColorProfile(t)
+
+	// Render a tinted patch row and join it next to a plain left column
+	// matching the real split layout (file list on the left, patch on the right).
+	vp := NewPatchViewport(threeHunkPatch())
+	vp.Width = 30
+	vp.Height = 5
+	vp.GutterVisible = true
+	right := vp.Render()
+	leftLines := []string{"file-a.go", "file-b.go", "file-c.go", "file-d.go", "file-e.go"}
+	left := strings.Join(leftLines, "\n")
+
+	const leftWidth = 12
+	joined := JoinColumns(left, right, leftWidth, vp.Width)
+
+	addedBgSGR := backgroundSGRFragment(t, addedStyle)
+	deletedBgSGR := backgroundSGRFragment(t, deletedStyle)
+
+	rows := strings.Split(joined, "\n")
+	for i, row := range rows {
+		// Stripped left-column slice must be one of the file-list strings —
+		// proves no tinted bytes leaked left of the divider.
+		left := ansi.Strip(row)
+		if len(left) < leftWidth {
+			t.Fatalf("row %d shorter than leftWidth %d: %q", i, leftWidth, left)
+		}
+		leftCell := strings.TrimRight(left[:leftWidth], " ")
+		if leftCell != "" {
+			found := false
+			for _, name := range leftLines {
+				if leftCell == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("row %d left column corrupted: %q (full row: %q)", i, leftCell, ansi.Strip(row))
+			}
+		}
+
+		// The bg SGR must never appear before the divider column on any row,
+		// i.e. its byte position is to the right of the divider's left-column
+		// padding boundary in the unstripped row.
+		divIdx := strings.Index(row, "│")
+		if divIdx < 0 {
+			continue // empty padding row
+		}
+		leftBytes := row[:divIdx]
+		if strings.Contains(leftBytes, addedBgSGR) || strings.Contains(leftBytes, deletedBgSGR) {
+			t.Fatalf("row %d: diff bg leaked into left column bytes: %q", i, leftBytes)
+		}
+
+		// Every tinted row must terminate with a reset before the trailing
+		// newline so the next row's left column starts in a clean state.
+		if strings.Contains(row, addedBgSGR) || strings.Contains(row, deletedBgSGR) {
+			if !strings.HasSuffix(row, "\x1b[0m") {
+				t.Fatalf("row %d tinted but does not end with reset: %q", i, row)
+			}
+		}
+	}
+}
+
 func TestComputeGutterDigits(t *testing.T) {
 	t.Parallel()
 

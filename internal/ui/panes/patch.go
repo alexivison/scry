@@ -657,7 +657,7 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 
 	body := layers.prefix + visibleBody
 	if layers.bodyStyled {
-		body = layers.style.Render(layers.prefix) + visibleBody
+		body = layers.style.Render(layers.prefix) + applyRowBackground(visibleBody, layers.style)
 	}
 
 	if layers.gutter != "" {
@@ -678,6 +678,39 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 		return body
 	}
 	return layers.style.Render(body)
+}
+
+// applyRowBackground wraps a (possibly syntax-styled) body with the row's
+// background so the tint persists across any inner full-reset ANSI sequences
+// emitted by the syntax highlighter. Empty/no-bg inputs pass through.
+func applyRowBackground(body string, style lipgloss.Style) string {
+	if body == "" {
+		return body
+	}
+	bgPrefix := backgroundPrefix(style)
+	if bgPrefix == "" {
+		return body
+	}
+	const reset = "\x1b[0m"
+	// Re-emit the bg start after every inner reset so the tint stays active.
+	restored := strings.ReplaceAll(body, reset, reset+bgPrefix)
+	return bgPrefix + restored + reset
+}
+
+// backgroundPrefix probes lipgloss for the ANSI escape that activates only the
+// background of the given style. Returns "" when no background is set or the
+// active color profile is Ascii/no-color.
+func backgroundPrefix(style lipgloss.Style) string {
+	bg := style.GetBackground()
+	if bg == nil {
+		return ""
+	}
+	probe := lipgloss.NewStyle().Background(bg).Render(" ")
+	idx := strings.Index(probe, " ")
+	if idx <= 0 {
+		return ""
+	}
+	return probe[:idx]
 }
 
 func diffLineBodyWidth(layers diffLineLayers, width int) int {
@@ -885,10 +918,12 @@ var (
 			Bold(true)
 
 	addedStyle = lipgloss.NewStyle().
-			Foreground(theme.Added)
+			Foreground(theme.Added).
+			Background(theme.AddedBg)
 
 	deletedStyle = lipgloss.NewStyle().
-			Foreground(theme.Deleted)
+			Foreground(theme.Deleted).
+			Background(theme.DeletedBg)
 
 	contextStyle = lipgloss.NewStyle()
 

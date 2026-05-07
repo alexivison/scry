@@ -8,9 +8,11 @@ import "github.com/charmbracelet/lipgloss"
 // Semantic color tokens mapped to UI roles.
 var (
 	// Diff semantics.
-	Added      = lipgloss.Color("2") // green
-	Deleted    = lipgloss.Color("1") // red
-	HunkHeader = lipgloss.Color("7") // light gray
+	Added      = lipgloss.Color("2")       // green
+	Deleted    = lipgloss.Color("1")       // red
+	AddedBg    = lipgloss.Color("#0c1f10") // GitHub-subtle dark-green tint for added rows
+	DeletedBg  = lipgloss.Color("#1f0d0c") // GitHub-subtle dark-red tint for deleted rows
+	HunkHeader = lipgloss.Color("7")       // light gray
 
 	// Status semantics.
 	Clean = Added               // green — same hue as diff additions
