@@ -10,7 +10,7 @@ Scry does one thing well: show you what changed between two refs, with the same 
 
 | Tool | What it is | How Scry differs |
 |------|-----------|-----------------|
-| **lazygit / gitui / tig** | Full Git clients with staging, committing, rebasing | Scry is read-only by design. No risk of accidental operations. Purpose-built for review. |
+| **lazygit / gitui / tig** | Full Git clients with staging, committing, rebasing | Scry stays out of write-ops by default. The only destructive actions — opt-in `--commit` and per-file `X` discard — are gated behind explicit confirmation. Purpose-built for review. |
 | **delta / diff-so-fancy** | Diff renderers that enhance `git diff` output | Scry provides navigation, search, file-level workflow, and lazy loading. Not just a pager. |
 | **GitHub web UI** | Browser-based PR review | Scry works offline, in your terminal, with no context switch. |
 
@@ -89,6 +89,7 @@ scry --worktrees
 | `c` | Generate commit message (when `--commit`) |
 | `e` | Edit generated commit message |
 | `r` | Refresh / regenerate commit message |
+| `X` | Discard selected file's changes (modal y/N confirmation) |
 | `?` | Show help |
 | `q` | Quit |
 
@@ -103,7 +104,8 @@ scry --worktrees
 
 These are intentional omissions, not missing features:
 
-- No staging or rebasing — commit is opt-in via `--commit`
+- No staging, rebasing, cherry-picking, or conflict resolution. Commit is opt-in via `--commit`; per-file `X` discard is the only other write op and is gated behind a modal y/N confirmation.
+- No hunk-level or bulk discard
 - No inline PR comments or review thread management
 - No plugin system
 - No syntax-aware / AST diff mode

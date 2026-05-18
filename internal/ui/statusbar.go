@@ -35,6 +35,12 @@ func (m Model) viewStatusBar() string {
 			return m.renderErrorBar(ds.DeleteErr)
 		}
 	}
+	if m.State.DiscardErr != "" {
+		return m.renderErrorBar(m.State.DiscardErr)
+	}
+	if m.State.DiscardInFlight {
+		return m.renderBar(m.spinner.View()+" Discarding "+m.State.DiscardPath+"...", statusBarStyle)
+	}
 	if m.refreshErr != "" {
 		return m.renderErrorBar(m.refreshErr)
 	}

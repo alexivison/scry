@@ -96,4 +96,11 @@ type AppState struct {
 	// Worktree dashboard mode (v0.2).
 	WorktreeMode   bool
 	DashboardState DashboardState
+
+	// Discard confirmation state.
+	ConfirmDiscard   bool
+	DiscardPath      string
+	DiscardUntracked bool
+	DiscardInFlight  bool
+	DiscardErr       string
 }

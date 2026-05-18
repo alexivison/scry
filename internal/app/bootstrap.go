@@ -93,6 +93,7 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		ui.WithPatchLoader(patchSvc),
 		ui.WithMetadataLoader(metaSvc),
 		ui.WithCompareResolver(resolver, req),
+		ui.WithFileDiscarder(&fileDiscarderImpl{runner: boot.Runner, workdir: boot.Repo.WorktreeRoot}),
 	}
 	if cfg.Watch {
 		baseRef := cmp.WatchBaseRef // symbolic fallback from resolver (e.g. "origin/main")
@@ -321,6 +322,16 @@ func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath 
 		Files:       files,
 		PatchLoader: patchSvc,
 	}, nil
+}
+
+// fileDiscarderImpl implements ui.FileDiscarder via gitexec.DiscardFile.
+type fileDiscarderImpl struct {
+	runner  gitexec.GitRunner
+	workdir string
+}
+
+func (f *fileDiscarderImpl) Discard(ctx context.Context, path string, untracked bool) error {
+	return gitexec.DiscardFile(ctx, f.runner, f.workdir, path, untracked)
 }
 
 type previewLoaderImpl struct{}

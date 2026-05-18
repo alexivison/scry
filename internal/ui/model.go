@@ -41,6 +41,12 @@ type CompareReResolver interface {
 	Resolve(ctx context.Context, req model.CompareRequest) (model.ResolvedCompare, error)
 }
 
+// FileDiscarder restores a file to its committed state (tracked) or removes it
+// from disk (untracked). Path is repo-relative.
+type FileDiscarder interface {
+	Discard(ctx context.Context, path string, untracked bool) error
+}
+
 // WatchFingerprinter computes a repo state fingerprint for watch mode.
 type WatchFingerprinter interface {
 	Fingerprint(ctx context.Context, baseRef string, workingTree bool) (string, error)
@@ -107,6 +113,7 @@ type Model struct {
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
 	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
 	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
+	fileDiscarder     FileDiscarder     // optional discarder for "discard changes" action
 
 	spinner   spinner.Model // shared spinner for loading states
 	idlePulse bool          // toggles on spinner tick for idle screen pulse indicator
@@ -199,6 +206,11 @@ func WithCommitExecutor(ce CommitExecutor) ModelOption {
 	return func(m *Model) { m.commitExecutor = ce }
 }
 
+// WithFileDiscarder sets the FileDiscarder used to discard a file's changes.
+func WithFileDiscarder(d FileDiscarder) ModelOption {
+	return func(m *Model) { m.fileDiscarder = d }
+}
+
 // WithWatch sets the WatchFingerprinter and symbolic base ref for watch mode.
 func WithWatch(fp WatchFingerprinter, baseRef string) ModelOption {
 	return func(m *Model) {
@@ -246,6 +258,12 @@ type CommitEditedMsg struct {
 // pendingKeyTimeoutMsg fires when the gg chord timer expires.
 type pendingKeyTimeoutMsg struct {
 	Seq int
+}
+
+// FileDiscardedMsg is sent when an async discard operation completes.
+type FileDiscardedMsg struct {
+	Path string
+	Err  error
 }
 
 // Init implements tea.Model.
@@ -358,6 +376,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WorktreeRemovedMsg:
 		return m.handleWorktreeRemoved(msg)
 
+	case FileDiscardedMsg:
+		return m.handleFileDiscarded(msg)
+
 	case tea.KeyMsg:
 		if m.tooSmall {
 			if msg.String() == "q" {
@@ -366,8 +387,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Discard confirmation modal consumes y/n/Esc before any other handler.
+		if m.State.ConfirmDiscard {
+			return m.updateDiscardConfirm(msg)
+		}
 		// Clear transient status messages on any key press.
 		m.exportMsg = ""
+		m.State.DiscardErr = ""
 		// Clear pending multi-key buffer on global keys to prevent stale
 		// ] / [ / g from stealing a later keystroke.
 		switch msg.String() {
@@ -518,6 +544,8 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
 			review.ToggleFlag(&m.State, m.State.Files[m.State.SelectedFile].Path)
 		}
+	case "X":
+		return m.startDiscardConfirm()
 	case "M":
 		if idx, ok := review.NextFlaggedFile(m.State.Files, m.State.FlaggedFiles, m.State.SelectedFile); ok {
 			m.State.SelectedFile = idx
@@ -545,6 +573,9 @@ func (m Model) needsSpinner() bool {
 		return true
 	}
 	if m.State.RefreshInFlight {
+		return true
+	}
+	if m.State.DiscardInFlight {
 		return true
 	}
 	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
@@ -1510,6 +1541,10 @@ func (m Model) View() string {
 		base = m.viewFileList()
 	}
 
+	if m.State.ConfirmDiscard {
+		base = m.overlayDiscardConfirm(base)
+	}
+
 	var b strings.Builder
 	if m.showHelp {
 		b.WriteString(m.overlayHelp(base))
@@ -1683,8 +1718,8 @@ func (m Model) viewHelp() string {
 		"  v         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
-		"  m         toggle file flag",
-		"  M         jump to next flagged file",
+		"  m/M       toggle file flag / jump to next flag",
+		"  X         discard selected file's changes (confirm y/N)",
 	)
 	if m.State.WatchEnabled {
 		watchLine := fmt.Sprintf("  [watch]   auto-refresh every %s", m.State.WatchInterval)
