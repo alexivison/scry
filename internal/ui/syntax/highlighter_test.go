@@ -187,6 +187,21 @@ func TestHighlightSpanKeepsSearchMatchANSIValid(t *testing.T) {
 	}
 }
 
+func TestHighlightBackgroundAppliesBackgroundToEveryToken(t *testing.T) {
+	withLipglossProfile(t, termenv.TrueColor)
+
+	body := `func main() { return "ok" }`
+	highlighted := NewHighlighter("main.go", "", "", terminal.ColorTrueColor).
+		HighlightBackground(body, lipgloss.Color("#005F00"))
+
+	if ansi.Strip(highlighted) != body {
+		t.Fatalf("HighlightBackground() stripped = %q, want %q", ansi.Strip(highlighted), body)
+	}
+	if count := strings.Count(highlighted, "48;2;0;95;0"); count < 2 {
+		t.Fatalf("HighlightBackground() should apply background to multiple tokens, got %d occurrences: %q", count, highlighted)
+	}
+}
+
 func TestLineCacheHitsOnRepeatedRender(t *testing.T) {
 	t.Parallel()
 

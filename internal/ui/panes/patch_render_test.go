@@ -84,6 +84,48 @@ func TestPatchRenderSnapshotRepresentativeDiff(t *testing.T) {
 	}
 }
 
+func TestChangedLinesUseBrightFullWidthBackground(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	tests := []struct {
+		name   string
+		line   model.DiffLine
+		prefix string
+		bg     string
+	}{
+		{
+			name:   "added",
+			line:   model.DiffLine{Kind: model.LineAdded, NewNo: intP(1), Text: "new()"},
+			prefix: "+",
+			bg:     "48;2;0;95;0",
+		},
+		{
+			name:   "deleted",
+			line:   model.DiffLine{Kind: model.LineDeleted, OldNo: intP(1), Text: "old()"},
+			prefix: "-",
+			bg:     "48;2;139;0;0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderDiffLineHL(tc.line, 16, "", NoSearchMatch(), false, 4, model.LineModeScroll, 0)
+			if !strings.Contains(got, tc.bg) {
+				t.Fatalf("rendered line missing diff background %s: %q", tc.bg, got)
+			}
+			stripped := ansi.Strip(got)
+			if !strings.HasPrefix(stripped, tc.prefix+tc.line.Text) {
+				t.Fatalf("stripped line = %q, want prefix %q", stripped, tc.prefix+tc.line.Text)
+			}
+			if width := lipgloss.Width(stripped); width != 16 {
+				t.Fatalf("rendered line width = %d, want 16: %q", width, stripped)
+			}
+		})
+	}
+}
+
 func TestHunkSeparator_HorizontalRule(t *testing.T) {
 	t.Parallel()
 
