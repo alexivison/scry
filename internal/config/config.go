@@ -26,7 +26,7 @@ type Config struct {
 	CommitModel    string // from config file; default: ""
 	CommitAuto     bool   // --commit-auto (requires --commit)
 
-	NoDashboard      bool // --no-dashboard; forces diff mode even with multiple worktrees
+	NoDashboard      bool // --no-dashboard; forces diff mode regardless of cwd
 	GroupByDirectory bool // from config file; default: false
 }
 
@@ -74,7 +74,7 @@ func Parse(args []string, opts ...ParseOption) (Config, error) {
 	fs.BoolVar(&noWatch, "no-watch", false, "disable watch mode")
 	fs.BoolVar(&commit, "commit", false, "enable AI commit message generation")
 	fs.BoolVar(&commitAuto, "commit-auto", false, "skip confirmation and commit immediately (requires --commit)")
-	fs.BoolVar(&noDashboard, "no-dashboard", false, "force diff mode even with multiple worktrees")
+	fs.BoolVar(&noDashboard, "no-dashboard", false, "force diff mode regardless of cwd (overrides smart default)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -134,10 +134,22 @@ func Parse(args []string, opts ...ParseOption) (Config, error) {
 	}, nil
 }
 
-// ShouldUseDashboard decides whether to enter dashboard mode based on
-// worktree count and flag state.
-func (c Config) ShouldUseDashboard(worktreeCount int) bool {
+// ShouldUseDashboard decides whether to enter dashboard mode based on the
+// cwd's git context and the --no-dashboard override.
+//
+// Precedence:
+//  1. --no-dashboard forces diff.
+//  2. Smart default: a linked-worktree cwd shows that worktree's diff;
+//     a primary cwd with linked worktrees shows the dashboard; a primary
+//     cwd with no linked worktrees shows its own diff.
+//
+// worktreeCount is the total number of entries from `git worktree list`
+// (primary + linked).
+func (c Config) ShouldUseDashboard(isLinkedWorktree bool, worktreeCount int) bool {
 	if c.NoDashboard {
+		return false
+	}
+	if isLinkedWorktree {
 		return false
 	}
 	return worktreeCount > 1

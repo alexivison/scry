@@ -44,17 +44,21 @@ func Run(cfg config.Config) int {
 		return 128
 	}
 
-	// Auto-detect dashboard mode: a quick worktree list (no per-wt queries)
-	// determines the mode without blocking on expensive status/commit calls.
+	// Smart-default mode dispatch: linked-worktree cwd shows that worktree's
+	// diff; primary cwd with linked worktrees shows the dashboard; primary cwd
+	// alone shows its own diff. --no-dashboard forces diff mode. The worktree
+	// list is only enumerated when the count actually matters so detection
+	// failures fall through to the diff default rather than crashing.
+	isLinked := boot.Repo.IsLinkedWorktree
 	worktreeCount := 1
-	if !cfg.NoDashboard {
+	if !cfg.NoDashboard && !isLinked {
 		entries, err := gitexec.WorktreeList(ctx, boot.Runner)
 		if err == nil {
 			worktreeCount = len(entries)
 		}
 	}
 
-	if cfg.ShouldUseDashboard(worktreeCount) {
+	if cfg.ShouldUseDashboard(isLinked, worktreeCount) {
 		return runDashboard(ctx, cfg, boot, colorProfile)
 	}
 	return runDiff(ctx, cfg, boot, colorProfile)
