@@ -1,7 +1,7 @@
 # Scry Specification (v0.1)
 
 ## Project Overview
-`Scry` is a minimal, read-only terminal UI for reviewing Git branch diffs with pull-request semantics.
+`Scry` is a minimal, review-first terminal UI for inspecting Git branch diffs with pull-request semantics. Destructive ops are limited to opt-in `--commit` and per-file `X` discard, both gated behind explicit confirmation.
 
 The product goal is narrow and intentional: provide the fastest keyboard-only workflow to inspect what changed between two refs. It works in any terminal, with particular attention to tmux compatibility.
 
@@ -12,7 +12,8 @@ The product goal is narrow and intentional: provide the fastest keyboard-only wo
 - Provide deterministic, scriptable behavior with clear CLI flags and exit codes.
 
 ## Explicit Non-Goals (v0.1)
-- No staging, committing, rebasing, cherry-picking, or conflict resolution. *(v0.2 introduces opt-in AI-assisted commit via `--commit`; all other write operations remain non-goals.)*
+- No staging, rebasing, cherry-picking, or conflict resolution. *(v0.2 introduces opt-in AI-assisted commit via `--commit`. v0.3 adds per-file `X` discard, gated behind a modal y/N confirmation, for restoring a tracked file to HEAD or removing an untracked file. All other write operations remain non-goals.)*
+- No hunk-level or bulk discard. The `X` action operates on the currently selected file only.
 - No inline PR comments or code review thread management.
 - No plugin system.
 - No syntax-aware/AST diff mode by default.
@@ -760,6 +761,34 @@ v0.1 compares committed refs only (`@{upstream}...HEAD`). When the user has unco
 - `scry --head HEAD` preserves v0.1 committed-only behavior.
 - Refresh (`r`) re-reads the working tree for the latest changes.
 - No regression in three-dot/two-dot committed-ref comparisons.
+
+### Per-file Discard (`X`) — v0.3
+
+#### Objective
+Let the reviewer drop a single file's working-tree changes from the file-list pane without leaving scry, while keeping every destructive action gated behind an explicit confirmation.
+
+#### CLI
+- No new flag. The action is available in the default working-tree review mode and is hidden in `--worktrees` (worktree dashboard) and any non-working-tree compare (e.g. `--head <ref>`).
+
+#### Keybinding
+- `X` (shift-x) in the file-list pane: open the discard confirmation modal for the currently selected file.
+- `y` / `Y` confirms; `n` / `N` / `Esc` cancels. No other keys are accepted while the modal is open.
+
+#### Behavior
+1. **Selection guard**: requires a selected file and a working-tree compare (`ResolvedCompare.WorkingTree == true`). No-op otherwise.
+2. **Modal confirmation**: displays the file path and a "Changes will be reverted to HEAD." note for tracked files or "(untracked — file will be deleted)" for untracked files.
+3. **Execution** (via `gitexec.DiscardFile`):
+   - Tracked files: `git checkout HEAD -- <path>`.
+   - Untracked files: `os.Remove(<workdir>/<path>)`.
+4. **Post-op**: bump cache generation and run the shared metadata refresh so the file disappears (untracked) or its status clears (tracked).
+5. **Errors** surface as a full-width status-bar message (`discard failed: <git/fs error>`) and never crash the app.
+
+#### Acceptance criteria
+- `X` is no-op without a configured `FileDiscarder`, in `--worktrees`, or when not reviewing the working tree.
+- Confirmation modal blocks all other keys until resolved.
+- After a successful tracked-file discard, the file's status indicator clears (file leaves the modified list).
+- After a successful untracked-file discard, the file is removed from disk and the list.
+- Git or filesystem errors surface in the status bar with a `discard failed:` prefix.
 
 ### Roadmap Priority Order (v0.2)
 1. **Working tree diff mode** (default head = working tree).
