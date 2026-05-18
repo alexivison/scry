@@ -209,23 +209,29 @@ func TestShouldUseDashboard(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		worktreeCount int
-		noDashboard   bool
-		want          bool
+		name             string
+		isLinkedWorktree bool
+		worktreeCount    int
+		noDashboard      bool
+		want             bool
 	}{
-		{"single worktree", 1, false, false},
-		{"multiple worktrees, auto-detect", 2, false, true},
-		{"multiple worktrees, no-dashboard", 2, true, false},
+		// Smart default branches.
+		{"primary, no linked worktrees", false, 1, false, false},
+		{"primary, has linked worktrees", false, 2, false, true},
+		{"linked worktree cwd", true, 2, false, false},
+
+		// --no-dashboard override forces diff everywhere.
+		{"no-dashboard override from primary multi", false, 2, true, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := Config{NoDashboard: tt.noDashboard}
-			got := cfg.ShouldUseDashboard(tt.worktreeCount)
+			got := cfg.ShouldUseDashboard(tt.isLinkedWorktree, tt.worktreeCount)
 			if got != tt.want {
-				t.Errorf("ShouldUseDashboard(%d) = %v, want %v", tt.worktreeCount, got, tt.want)
+				t.Errorf("ShouldUseDashboard(linked=%v, count=%d) = %v, want %v",
+					tt.isLinkedWorktree, tt.worktreeCount, got, tt.want)
 			}
 		})
 	}

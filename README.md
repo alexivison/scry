@@ -31,7 +31,7 @@ Scry does one thing well: show you what changed between two refs, with the same 
 - **Idle screen**: shown when watch mode is active but no files have diverged yet; auto-transitions to file list on change
 - **AI commit messages** (`--commit`): generate conventional commit messages via Claude; confirm, edit, or regenerate before committing
 - **Auto-commit** (`--commit-auto`): skip confirmation and commit immediately after message generation (requires `--commit`)
-- **Worktree dashboard** (`--worktrees`): list all git worktrees with dirty state, branch, and latest commit; drill down into any worktree's diff
+- **Worktree dashboard**: list all git worktrees with dirty state, branch, and latest commit; drill down into any worktree's diff. Shown automatically when run from the primary repo with linked worktrees; use `--no-dashboard` to opt out
 
 ## Install
 
@@ -48,7 +48,11 @@ Download from [GitHub Releases](https://github.com/alexivison/scry/releases).
 ## Quick start
 
 ```bash
-# Review current branch against origin/main (default)
+# Smart default: linked-worktree cwd → that worktree's diff;
+# primary repo with linked worktrees → dashboard; primary alone → diff
+scry
+
+# Compare against an explicit base ref
 scry --base origin/main
 
 # Compare two specific refs
@@ -69,8 +73,8 @@ scry --base origin/main --commit
 # Auto-commit without confirmation prompt
 scry --base origin/main --commit --commit-auto
 
-# Worktree dashboard
-scry --worktrees
+# Force diff mode even when the smart default would pick the dashboard
+scry --no-dashboard
 ```
 
 ## Keymap

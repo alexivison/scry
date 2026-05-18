@@ -678,13 +678,21 @@ Track review progress per file for a compare range.
 - State survives app restart for same compare fingerprint.
 - State resets automatically when compare fingerprint changes.
 
-### Worktree Dashboard Mode (`--worktrees`) — v0.2
+### Worktree Dashboard Mode — v0.2
 
 #### Objective
-Provide a master-session view of all git worktrees in the repo. When launched with `--worktrees`, scry shows a dashboard listing every worktree with branch, dirty state, and last commit — instead of the normal file-list + diff view.
+Provide a master-session view of all git worktrees in the repo. The dashboard lists every worktree with branch, dirty state, and last commit, instead of the normal file-list + diff view.
+
+#### Mode dispatch
+Plain `scry` (no mode flag) auto-selects based on the cwd's git context:
+- Linked (non-primary) worktree cwd → that worktree's diff.
+- Primary cwd with one or more linked worktrees → dashboard.
+- Primary cwd with no linked worktrees → cwd's diff.
+
+Detection uses `internal/source.ResolveRepoContext`, which compares the canonicalized absolute paths of `git rev-parse --git-common-dir` and `git rev-parse --absolute-git-dir` to identify the linked-worktree case, and `git worktree list --porcelain` to count linked worktrees. Detection runs once at startup before the TUI launches; failures fall through to the diff default.
 
 #### CLI
-- `--worktrees` (bool): enter worktree dashboard mode.
+- `--no-dashboard` (bool): force diff mode regardless of cwd. There is no flag to force dashboard mode from inside a linked worktree.
 
 #### Discovery
 - `git worktree list --porcelain` to enumerate all worktrees.
@@ -798,7 +806,7 @@ Let the reviewer drop a single file's working-tree changes from the file-list pa
 5. PR resolver (`--pr`).
 6. Review queue mode.
 7. Split-pane layout with vim navigation.
-8. **Worktree dashboard mode** (`--worktrees`).
+8. **Worktree dashboard mode** (auto-selected from the primary worktree when linked worktrees exist).
 9. Noise gate profiles.
 10. Clipboard/export slice.
 11. Delta-since-last-review mode.
