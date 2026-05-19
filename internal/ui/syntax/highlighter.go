@@ -64,8 +64,9 @@ func (c *Cache) colorProfile() terminal.ColorProfile {
 
 // LineCache memoizes highlighted bodies by logical diff-line index.
 type LineCache struct {
-	highlighter *Highlighter
-	lines       map[int]string
+	highlighter     *Highlighter
+	lines           map[int]string
+	backgroundLines map[string]map[int]string
 }
 
 // NewLineCache creates a per-patch line highlighter.
@@ -92,6 +93,32 @@ func (lc *LineCache) HighlightLine(line int, body string) string {
 	return highlighted
 }
 
+// HighlightLineBackground returns a cached highlighted line with a background applied to every token.
+func (lc *LineCache) HighlightLineBackground(line int, body string, background lipgloss.Color) string {
+	if background == "" {
+		return lc.HighlightLine(line, body)
+	}
+	if lc == nil {
+		return body
+	}
+	key := string(background)
+	if lc.backgroundLines == nil {
+		lc.backgroundLines = make(map[string]map[int]string)
+	}
+	if lc.backgroundLines[key] == nil {
+		lc.backgroundLines[key] = make(map[int]string)
+	}
+	if highlighted, ok := lc.backgroundLines[key][line]; ok {
+		return highlighted
+	}
+	if lc.highlighter == nil {
+		return body
+	}
+	highlighted := lc.highlighter.HighlightBackground(body, background)
+	lc.backgroundLines[key][line] = highlighted
+	return highlighted
+}
+
 // HighlightLineSpan highlights a transient search span without caching it.
 func (lc *LineCache) HighlightLineSpan(line int, body string, start, end int) string {
 	if start < 0 || end <= start || end > len(body) {
@@ -101,6 +128,20 @@ func (lc *LineCache) HighlightLineSpan(line int, body string, start, end int) st
 		return body
 	}
 	return lc.highlighter.HighlightSpan(body, start, end)
+}
+
+// HighlightLineSpanBackground highlights a transient search span over a background.
+func (lc *LineCache) HighlightLineSpanBackground(line int, body string, start, end int, background lipgloss.Color) string {
+	if background == "" {
+		return lc.HighlightLineSpan(line, body, start, end)
+	}
+	if start < 0 || end <= start || end > len(body) {
+		return lc.HighlightLineBackground(line, body, background)
+	}
+	if lc == nil || lc.highlighter == nil {
+		return body
+	}
+	return lc.highlighter.HighlightSpanBackground(body, start, end, background)
 }
 
 // Highlighter wraps a coalesced Chroma lexer.
@@ -140,15 +181,25 @@ func HighlightLine(path, oldPath, sample, body string) string {
 
 // Highlight renders body text with Scry-owned styles.
 func (h *Highlighter) Highlight(body string) string {
-	return h.highlight(body, span{start: -1, end: -1})
+	return h.highlight(body, span{start: -1, end: -1}, "")
+}
+
+// HighlightBackground renders body text with a background applied to every token.
+func (h *Highlighter) HighlightBackground(body string, background lipgloss.Color) string {
+	return h.highlight(body, span{start: -1, end: -1}, background)
 }
 
 // HighlightSpan renders body text and reverses the provided raw byte span.
 func (h *Highlighter) HighlightSpan(body string, start, end int) string {
-	return h.highlight(body, span{start: start, end: end})
+	return h.highlight(body, span{start: start, end: end}, "")
 }
 
-func (h *Highlighter) highlight(body string, match span) string {
+// HighlightSpanBackground renders a reversed raw byte span over a token background.
+func (h *Highlighter) HighlightSpanBackground(body string, start, end int, background lipgloss.Color) string {
+	return h.highlight(body, span{start: start, end: end}, background)
+}
+
+func (h *Highlighter) highlight(body string, match span, background lipgloss.Color) string {
 	if body == "" || h == nil || h.profile == terminal.ColorNone || h.lexer == nil {
 		return body
 	}
@@ -165,6 +216,9 @@ func (h *Highlighter) highlight(body string, match span) string {
 			continue
 		}
 		style := styleFor(token.Type, h.profile)
+		if background != "" {
+			style = style.Background(background)
+		}
 		b.WriteString(renderToken(style, token.Value, offset, match))
 		offset += len(token.Value)
 	}

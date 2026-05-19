@@ -586,8 +586,15 @@ func (vp *PatchViewport) highlightBody(dl model.DiffLine, diffIndex int, match S
 	if vp.syntaxHighlighted == nil || !syntax.Highlightable(dl.Kind) {
 		return dl.Text
 	}
+	background, hasBackground := diffLineBackground(dl.Kind)
 	if vp.SearchQuery != "" && match.validForBody(dl.Text) {
+		if hasBackground {
+			return vp.syntaxHighlighted.HighlightLineSpanBackground(diffIndex, dl.Text, match.Start, match.End, background)
+		}
 		return vp.syntaxHighlighted.HighlightLineSpan(diffIndex, dl.Text, match.Start, match.End)
+	}
+	if hasBackground {
+		return vp.syntaxHighlighted.HighlightLineBackground(diffIndex, dl.Text, background)
 	}
 	return vp.syntaxHighlighted.HighlightLine(diffIndex, dl.Text)
 }
@@ -597,16 +604,18 @@ type diffLineLayers struct {
 	prefix string
 	body   string
 	style  lipgloss.Style
+	fill   bool
 
 	bodyStyled bool
 }
 
 func buildDiffLineLayers(dl model.DiffLine, gutterVisible bool, gutterDigits int) diffLineLayers {
-	prefix, style := diffLineStyle(dl.Kind)
+	prefix, style, fill := diffLineStyle(dl.Kind)
 	layers := diffLineLayers{
 		prefix: prefix,
 		body:   dl.Text,
 		style:  style,
+		fill:   fill,
 	}
 	if gutterVisible {
 		layers.gutter = formatGutter(dl.OldNo, dl.NewNo, gutterDigits)
@@ -643,6 +652,7 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 	}
 
 	visibleBody := layers.body
+	bodyPadding := ""
 	if width > 0 {
 		bodyWidth := diffLineBodyWidth(layers, width)
 		if bodyWidth <= 0 {
@@ -652,12 +662,16 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 				visibleBody = ansi.TruncateLeft(visibleBody, xOffset, "")
 			}
 			visibleBody = ansi.Truncate(visibleBody, bodyWidth, "")
+			bodyPadding = diffLinePadding(visibleBody, bodyWidth, layers.fill)
 		}
 	}
 
-	body := layers.prefix + visibleBody
+	body := layers.prefix + visibleBody + bodyPadding
 	if layers.bodyStyled {
 		body = layers.style.Render(layers.prefix) + visibleBody
+		if bodyPadding != "" {
+			body += layers.style.Render(bodyPadding)
+		}
 	}
 
 	if layers.gutter != "" {
@@ -678,6 +692,17 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 		return body
 	}
 	return layers.style.Render(body)
+}
+
+func diffLinePadding(body string, width int, fill bool) string {
+	if !fill {
+		return ""
+	}
+	padding := width - lipgloss.Width(lipgloss.NewStyle().Render(body))
+	if padding <= 0 {
+		return ""
+	}
+	return strings.Repeat(" ", padding)
 }
 
 func diffLineBodyWidth(layers diffLineLayers, width int) int {
@@ -720,16 +745,27 @@ func highlightSpan(line string, span SearchMatch, baseStyle lipgloss.Style) stri
 	return baseStyle.Render(line[:span.Start]) + hlStyle.Render(line[span.Start:span.End]) + baseStyle.Render(line[span.End:])
 }
 
-func diffLineStyle(kind model.LineKind) (string, lipgloss.Style) {
+func diffLineStyle(kind model.LineKind) (string, lipgloss.Style, bool) {
 	switch kind {
 	case model.LineAdded:
-		return "+", addedStyle
+		return "+", addedStyle, true
 	case model.LineDeleted:
-		return "-", deletedStyle
+		return "-", deletedStyle, true
 	case model.LineContext:
-		return " ", contextStyle
+		return " ", contextStyle, false
 	default:
-		return " ", contextStyle
+		return " ", contextStyle, false
+	}
+}
+
+func diffLineBackground(kind model.LineKind) (lipgloss.Color, bool) {
+	switch kind {
+	case model.LineAdded:
+		return theme.DiffAddedBg, true
+	case model.LineDeleted:
+		return theme.DiffDeletedBg, true
+	default:
+		return "", false
 	}
 }
 
@@ -885,10 +921,12 @@ var (
 			Bold(true)
 
 	addedStyle = lipgloss.NewStyle().
-			Foreground(theme.Added)
+			Foreground(theme.DiffLineText).
+			Background(theme.DiffAddedBg)
 
 	deletedStyle = lipgloss.NewStyle().
-			Foreground(theme.Deleted)
+			Foreground(theme.DiffLineText).
+			Background(theme.DiffDeletedBg)
 
 	contextStyle = lipgloss.NewStyle()
 
