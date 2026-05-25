@@ -98,6 +98,29 @@ func wrappedTwoHunkPatch() model.FilePatch {
 	}
 }
 
+func pairedChangeTwoHunkPatch() model.FilePatch {
+	return model.FilePatch{
+		Summary: model.FileSummary{Path: "pair.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{
+			{
+				Header:   "func first()",
+				OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1,
+				Lines: []model.DiffLine{
+					{Kind: model.LineDeleted, OldNo: intP(1), Text: "old()"},
+					{Kind: model.LineAdded, NewNo: intP(1), Text: "new()"},
+				},
+			},
+			{
+				Header:   "func second()",
+				OldStart: 10, OldLen: 1, NewStart: 10, NewLen: 1,
+				Lines: []model.DiffLine{
+					{Kind: model.LineContext, OldNo: intP(10), NewNo: intP(10), Text: "same()"},
+				},
+			},
+		},
+	}
+}
+
 func TestNewPatchViewport(t *testing.T) {
 	t.Parallel()
 
@@ -255,6 +278,28 @@ func TestSetLineModePreservesLogicalAnchorAndResetsScrollXOffset(t *testing.T) {
 	}
 	if vp.ScrollOffset != 1 {
 		t.Fatalf("ScrollOffset = %d, want logical anchor preserved across mode toggle", vp.ScrollOffset)
+	}
+}
+
+func TestSetDiffModePreservesHunkHeaderAnchor(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(pairedChangeTwoHunkPatch())
+	vp.Width = 80
+	vp.Height = 5
+	vp.CurrentHunk = 1
+	vp.ScrollOffset = vp.hunkLineOffset(1)
+
+	vp.SetDiffMode(model.PatchDiffModeSideBySide)
+
+	if vp.DiffMode != model.PatchDiffModeSideBySide {
+		t.Fatalf("DiffMode = %v, want PatchDiffModeSideBySide", vp.DiffMode)
+	}
+	if got, want := vp.ScrollOffset, vp.hunkLineOffset(1); got != want {
+		t.Fatalf("ScrollOffset = %d, want hunk header offset %d", got, want)
+	}
+	if vp.CurrentHunk != 1 {
+		t.Fatalf("CurrentHunk = %d, want 1", vp.CurrentHunk)
 	}
 }
 

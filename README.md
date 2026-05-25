@@ -18,7 +18,7 @@ Scry does one thing well: show you what changed between two refs, with the same 
 
 - Three-dot branch comparison (PR-style semantics by default)
 - File list with status indicators and line counts
-- Unified patch viewer with hunk navigation (`n`/`p`)
+- Unified and side-by-side patch viewer with hunk navigation (`n`/`p`)
 - Bidirectional search within patches (`/`, `Enter`, `N`)
 - Whitespace-ignore toggle (`W`)
 - Manual refresh (`r`)
@@ -88,6 +88,7 @@ scry --no-dashboard
 | `/` | Search in current patch |
 | `Enter` | Next search match |
 | `N` | Previous search match |
+| `s` | Toggle unified / side-by-side diff |
 | `W` | Toggle whitespace-ignore mode |
 | `Tab` | Toggle split/modal layout |
 | `c` | Generate commit message (when `--commit`) |

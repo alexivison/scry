@@ -1250,6 +1250,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.Height = m.height - 1
 	vp.GutterVisible = m.width >= 60
 	vp.LineMode = m.State.PatchLineMode
+	vp.DiffMode = m.State.PatchDiffMode
 	vp.XOffset = 0
 	if m.colorProfile != terminal.ColorNone {
 		if m.syntaxCache == nil {
@@ -1376,6 +1377,8 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.togglePatchLineMode()
 		}
+	case "s":
+		m.togglePatchDiffMode()
 	case "g":
 		m.pendingKey = 'g'
 		m.pendingKeySeq++
@@ -1436,12 +1439,27 @@ func (m *Model) togglePatchLineMode() {
 	}
 }
 
+func (m *Model) togglePatchDiffMode() {
+	if m.State.PatchDiffMode == model.PatchDiffModeSideBySide {
+		m.State.PatchDiffMode = model.PatchDiffModeUnified
+	} else {
+		m.State.PatchDiffMode = model.PatchDiffModeSideBySide
+	}
+	if m.patchViewport != nil {
+		m.patchViewport.SetDiffMode(m.State.PatchDiffMode)
+	}
+}
+
 func (m *Model) executeSearch(dir search.SearchDirection) {
 	if m.State.SearchQuery == "" || m.searchIndex == nil || m.patchViewport == nil {
 		return
 	}
 
 	currentDiff := m.patchViewport.ViewportLineToDiffLine(m.patchViewport.ScrollOffset)
+	if m.patchViewport.SearchMatch.Line >= 0 &&
+		m.patchViewport.DiffLineToViewportLine(m.patchViewport.SearchMatch.Line) == m.patchViewport.ScrollOffset {
+		currentDiff = m.patchViewport.SearchMatch.Line
+	}
 	onHeader := m.patchViewport.IsHunkHeader(m.patchViewport.ScrollOffset)
 	var from int
 	if dir == search.SearchNext {
@@ -1698,13 +1716,13 @@ func (m Model) viewHelp() string {
 		help = append(help, "  h/Esc     back to file list")
 	}
 	help = append(help,
-		"  n/p       next/previous hunk",
-		"  }/{       next/prev hunk (alias)",
+		"  n/p }/{   next/previous hunk",
 		"  gg        jump to top",
 		"  G         jump to bottom",
 		"  ctrl+d/u  half-page down/up",
 		"  ctrl+f/b  full page down/up",
 		"  w         wrap/scroll; left/right horizontal scroll",
+		"  s         unified/side-by-side diff",
 		"  0/Home    reset horizontal scroll",
 		"  ]c/[c     next/prev changed file",
 		"",

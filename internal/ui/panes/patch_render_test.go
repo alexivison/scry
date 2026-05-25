@@ -126,6 +126,62 @@ func TestChangedLinesUseBrightFullWidthBackground(t *testing.T) {
 	}
 }
 
+func TestSideBySideChangedCellsUseBrightFullWidthBackground(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	tests := []struct {
+		name   string
+		line   model.DiffLine
+		side   sideBySideSide
+		prefix string
+		bg     string
+	}{
+		{
+			name:   "added",
+			line:   model.DiffLine{Kind: model.LineAdded, NewNo: intP(1), Text: "new()"},
+			side:   sideNew,
+			prefix: "+",
+			bg:     "48;2;0;95;0",
+		},
+		{
+			name:   "deleted",
+			line:   model.DiffLine{Kind: model.LineDeleted, OldNo: intP(1), Text: "old()"},
+			side:   sideOld,
+			prefix: "-",
+			bg:     "48;2;139;0;0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vp := NewPatchViewport(model.FilePatch{})
+			vp.GutterVisible = false
+			vp.LineMode = model.LineModeScroll
+			cell := &sideBySideCell{
+				line:    patchLine{typ: lineTypeDiff, diff: tc.line, diffIndex: 0},
+				segment: fullBodySegment(tc.line.Text),
+			}
+
+			got := vp.renderSideBySideCell(cell, 16, tc.side)
+			if !strings.Contains(got, tc.bg) {
+				t.Fatalf("rendered side-by-side cell missing diff background %s: %q", tc.bg, got)
+			}
+			if !strings.HasSuffix(got, "\x1b[0m") {
+				t.Fatalf("rendered side-by-side cell should keep trailing padding inside the diff background: %q", got)
+			}
+			stripped := ansi.Strip(got)
+			if !strings.HasPrefix(stripped, tc.prefix+tc.line.Text) {
+				t.Fatalf("stripped cell = %q, want prefix %q", stripped, tc.prefix+tc.line.Text)
+			}
+			if width := lipgloss.Width(stripped); width != 16 {
+				t.Fatalf("rendered cell width = %d, want 16: %q", width, stripped)
+			}
+		})
+	}
+}
+
 func TestHunkSeparator_HorizontalRule(t *testing.T) {
 	t.Parallel()
 
@@ -284,6 +340,84 @@ func TestPatchViewportDefaultLineModeWrap(t *testing.T) {
 	if vp.LineMode != model.LineModeWrap {
 		t.Fatalf("LineMode = %v, want LineModeWrap", vp.LineMode)
 	}
+}
+
+func TestPatchViewportDefaultDiffModeUnified(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(threeHunkPatch())
+
+	if vp.DiffMode != model.PatchDiffModeUnified {
+		t.Fatalf("DiffMode = %v, want PatchDiffModeUnified", vp.DiffMode)
+	}
+}
+
+func TestSideBySideRenderingSplitsOldAndNewColumns(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(threeHunkPatch())
+	vp.DiffMode = model.PatchDiffModeSideBySide
+	vp.Width = 90
+	vp.Height = 20
+	vp.GutterVisible = true
+
+	output := ansi.Strip(vp.Render())
+	lines := strings.Split(output, "\n")
+
+	contextLine := findLineContaining(lines, "package main")
+	if contextLine == "" {
+		t.Fatalf("side-by-side output missing context line:\n%s", output)
+	}
+	if strings.Count(contextLine, "package main") != 2 {
+		t.Fatalf("context should render in both columns, got %q", contextLine)
+	}
+
+	changeLine := findLineContaining(lines, "old()")
+	if changeLine == "" || !strings.Contains(changeLine, "new()") {
+		t.Fatalf("adjacent delete/add should share a row, got:\n%s", output)
+	}
+	oldIdx := strings.Index(changeLine, "old()")
+	newIdx := strings.Index(changeLine, "new()")
+	if oldIdx < 0 || newIdx < 0 || newIdx <= oldIdx {
+		t.Fatalf("deleted content should be left of added content, got %q", changeLine)
+	}
+	if dashIdx := strings.Index(changeLine, "-"); dashIdx < 0 || dashIdx > oldIdx {
+		t.Fatalf("deleted side should include '-' prefix before old content, got %q", changeLine)
+	}
+	if plusIdx := strings.Index(changeLine, "+"); plusIdx < 0 || plusIdx > newIdx {
+		t.Fatalf("added side should include '+' prefix before new content, got %q", changeLine)
+	}
+	for _, want := range []string{"  11 │", "  12 │"} {
+		if !strings.Contains(changeLine, want) {
+			t.Fatalf("side-by-side change line missing line number %q: %q", want, changeLine)
+		}
+	}
+}
+
+func TestSideBySideDiffLineMappingFindsPairedAddedLine(t *testing.T) {
+	t.Parallel()
+
+	vp := NewPatchViewport(threeHunkPatch())
+	vp.DiffMode = model.PatchDiffModeSideBySide
+	vp.Width = 90
+	vp.Height = 20
+	vp.GutterVisible = true
+
+	if got, want := vp.DiffLineToViewportLine(5), 6; got != want {
+		t.Fatalf("DiffLineToViewportLine(added paired line) = %d, want %d", got, want)
+	}
+	if got, ok := vp.ScrollOffsetForDiffLine(5, 0); !ok || got != 6 {
+		t.Fatalf("ScrollOffsetForDiffLine(added paired line) = %d, %v; want 6, true", got, ok)
+	}
+}
+
+func findLineContaining(lines []string, needle string) string {
+	for _, line := range lines {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestWrapRenderingContinuationRowsAlignWithBody(t *testing.T) {
