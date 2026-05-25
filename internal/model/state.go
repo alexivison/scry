@@ -29,6 +29,14 @@ const (
 	LineModeScroll
 )
 
+// PatchDiffMode controls whether a patch is rendered as unified or side-by-side.
+type PatchDiffMode int
+
+const (
+	PatchDiffModeUnified PatchDiffMode = iota
+	PatchDiffModeSideBySide
+)
+
 // LoadStatus tracks the lifecycle of an async patch load.
 type LoadStatus string
 
@@ -75,6 +83,7 @@ type AppState struct {
 	FocusPane        Pane
 	Layout           LayoutMode
 	PatchLineMode    LineMode
+	PatchDiffMode    PatchDiffMode
 
 	// Watch mode state (v0.2).
 	WatchEnabled    bool

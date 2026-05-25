@@ -443,6 +443,16 @@ func TestNewModelDefaultsPatchLineModeWrap(t *testing.T) {
 	}
 }
 
+func TestNewModelDefaultsPatchDiffModeUnified(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+
+	if m.State.PatchDiffMode != model.PatchDiffModeUnified {
+		t.Fatalf("PatchDiffMode = %v, want PatchDiffModeUnified", m.State.PatchDiffMode)
+	}
+}
+
 func TestPatchWrapToggleKey(t *testing.T) {
 	t.Parallel()
 
@@ -483,6 +493,39 @@ func TestPatchWrapToggleKey(t *testing.T) {
 	}
 }
 
+func TestPatchDiffModeToggleKey(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 80
+	m.height = 20
+	m.State.FocusPane = model.PanePatch
+	m.State.PatchDiffMode = model.PatchDiffModeUnified
+	m.patchViewport = panes.NewPatchViewport(samplePatch())
+	m.patchViewport.Width = 80
+	m.patchViewport.Height = 10
+
+	updated, _ := m.Update(keyMsg('s'))
+	m = updated.(Model)
+
+	if m.State.PatchDiffMode != model.PatchDiffModeSideBySide {
+		t.Fatalf("PatchDiffMode = %v, want PatchDiffModeSideBySide", m.State.PatchDiffMode)
+	}
+	if m.patchViewport.DiffMode != model.PatchDiffModeSideBySide {
+		t.Fatalf("viewport DiffMode = %v, want PatchDiffModeSideBySide", m.patchViewport.DiffMode)
+	}
+
+	updated, _ = m.Update(keyMsg('s'))
+	m = updated.(Model)
+
+	if m.State.PatchDiffMode != model.PatchDiffModeUnified {
+		t.Fatalf("PatchDiffMode = %v, want PatchDiffModeUnified", m.State.PatchDiffMode)
+	}
+	if m.patchViewport.DiffMode != model.PatchDiffModeUnified {
+		t.Fatalf("viewport DiffMode = %v, want PatchDiffModeUnified", m.patchViewport.DiffMode)
+	}
+}
+
 func TestApplyPatchResultAppliesLineModeAndResetsXOffset(t *testing.T) {
 	t.Parallel()
 
@@ -502,6 +545,23 @@ func TestApplyPatchResultAppliesLineModeAndResetsXOffset(t *testing.T) {
 	}
 	if got := m.patchViewport.XOffset; got != 0 {
 		t.Fatalf("XOffset = %d, want reset on patch load", got)
+	}
+}
+
+func TestApplyPatchResultAppliesDiffMode(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	m.State.PatchDiffMode = model.PatchDiffModeSideBySide
+
+	patch := samplePatch()
+	m.applyPatchResult(model.PatchLoadState{Status: model.LoadLoaded, Patch: &patch})
+
+	if m.patchViewport == nil {
+		t.Fatal("patchViewport is nil")
+	}
+	if got := m.patchViewport.DiffMode; got != model.PatchDiffModeSideBySide {
+		t.Fatalf("DiffMode = %v, want persisted %v", got, model.PatchDiffModeSideBySide)
 	}
 }
 
