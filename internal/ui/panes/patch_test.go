@@ -250,37 +250,6 @@ func TestPrevHunkUsesVisualRowsInWrapMode(t *testing.T) {
 	}
 }
 
-func TestSetLineModePreservesLogicalAnchorAndResetsScrollXOffset(t *testing.T) {
-	t.Parallel()
-
-	vp := NewPatchViewport(wrappedTwoHunkPatch())
-	vp.Width = 24
-	vp.Height = 5
-	vp.GutterVisible = true
-	vp.ScrollOffset = 2 // continuation row for the first diff line
-	vp.XOffset = 8
-
-	vp.SetLineMode(model.LineModeScroll)
-
-	if vp.LineMode != model.LineModeScroll {
-		t.Fatalf("LineMode = %v, want LineModeScroll", vp.LineMode)
-	}
-	if vp.XOffset != 0 {
-		t.Fatalf("XOffset = %d, want reset to 0 when entering scroll mode", vp.XOffset)
-	}
-	if vp.ScrollOffset != 1 {
-		t.Fatalf("ScrollOffset = %d, want first row of same logical diff line", vp.ScrollOffset)
-	}
-
-	vp.SetLineMode(model.LineModeWrap)
-	if vp.LineMode != model.LineModeWrap {
-		t.Fatalf("LineMode = %v, want LineModeWrap", vp.LineMode)
-	}
-	if vp.ScrollOffset != 1 {
-		t.Fatalf("ScrollOffset = %d, want logical anchor preserved across mode toggle", vp.ScrollOffset)
-	}
-}
-
 func TestSetDiffModePreservesHunkHeaderAnchor(t *testing.T) {
 	t.Parallel()
 

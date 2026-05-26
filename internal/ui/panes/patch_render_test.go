@@ -52,7 +52,7 @@ func TestStyledBodyDoesNotOwnDiffPrefix(t *testing.T) {
 	dl := model.DiffLine{Kind: model.LineAdded, NewNo: intP(7), Text: `return "ok"`}
 	styledBody := "\x1b[32mreturn\x1b[0m \"ok\""
 
-	got := renderDiffLineBodyHL(dl, styledBody, true, 0, "", NoSearchMatch(), false, 4, model.LineModeScroll, 0)
+	got := renderDiffLineBodyHL(dl, styledBody, true, 0, "", NoSearchMatch(), false, 4, model.LineModeWrap, 0)
 	if stripped, want := ansi.Strip(got), `+return "ok"`; stripped != want {
 		t.Fatalf("renderDiffLineBodyHL() stripped = %q, want %q", stripped, want)
 	}
@@ -111,7 +111,7 @@ func TestChangedLinesUseBrightFullWidthBackground(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderDiffLineHL(tc.line, 16, "", NoSearchMatch(), false, 4, model.LineModeScroll, 0)
+			got := renderDiffLineHL(tc.line, 16, "", NoSearchMatch(), false, 4, model.LineModeWrap, 0)
 			if !strings.Contains(got, tc.bg) {
 				t.Fatalf("rendered line missing diff background %s: %q", tc.bg, got)
 			}
@@ -158,7 +158,7 @@ func TestSideBySideChangedCellsUseBrightFullWidthBackground(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			vp := NewPatchViewport(model.FilePatch{})
 			vp.GutterVisible = false
-			vp.LineMode = model.LineModeScroll
+			vp.LineMode = model.LineModeWrap
 			cell := &sideBySideCell{
 				line:    patchLine{typ: lineTypeDiff, diff: tc.line, diffIndex: 0},
 				segment: fullBodySegment(tc.line.Text),
@@ -478,140 +478,6 @@ func TestWrapSearchHighlightOnContinuationRow(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "\x1b[7") {
 		t.Fatalf("continuation row should contain reversed search highlight: %q", lines[1])
-	}
-}
-
-func TestScrollModeKeepsOneLogicalLinePerRenderedRow(t *testing.T) {
-	t.Parallel()
-
-	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
-	vp.LineMode = model.LineModeScroll
-	vp.Width = 24
-	vp.Height = 3
-	vp.GutterVisible = true
-
-	if got, want := vp.TotalLines(), 2; got != want {
-		t.Fatalf("TotalLines() = %d, want %d in scroll mode", got, want)
-	}
-
-	output := ansi.Strip(vp.Render())
-	if strings.Contains(output, "bcdefghijkl") {
-		t.Fatalf("scroll mode should truncate instead of rendering continuation rows:\n%s", output)
-	}
-}
-
-func TestHorizontalScrollClampsXOffset(t *testing.T) {
-	t.Parallel()
-
-	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
-	vp.LineMode = model.LineModeScroll
-	vp.Width = 24
-	vp.Height = 1
-	vp.ScrollOffset = 1
-
-	if got, want := vp.MaxXOffset(), 11; got != want {
-		t.Fatalf("MaxXOffset() = %d, want %d", got, want)
-	}
-
-	vp.ScrollRight()
-	if got, want := vp.XOffset, 8; got != want {
-		t.Fatalf("after first ScrollRight XOffset = %d, want %d", got, want)
-	}
-
-	vp.ScrollRight()
-	if got, want := vp.XOffset, 11; got != want {
-		t.Fatalf("after second ScrollRight XOffset = %d, want clamped max %d", got, want)
-	}
-
-	vp.ScrollRight()
-	if got, want := vp.XOffset, 11; got != want {
-		t.Fatalf("after third ScrollRight XOffset = %d, want still clamped max %d", got, want)
-	}
-
-	vp.ScrollLeft()
-	if got, want := vp.XOffset, 3; got != want {
-		t.Fatalf("after ScrollLeft XOffset = %d, want %d", got, want)
-	}
-
-	vp.ScrollLeft()
-	if got := vp.XOffset; got != 0 {
-		t.Fatalf("after second ScrollLeft XOffset = %d, want clamped zero", got)
-	}
-}
-
-func TestHorizontalScrollKeepsGutterAndPrefixFixed(t *testing.T) {
-	t.Parallel()
-
-	vp := NewPatchViewport(singleLinePatch("0123456789abcdefghijkl"))
-	vp.LineMode = model.LineModeScroll
-	vp.Width = 24
-	vp.Height = 1
-	vp.ScrollOffset = 1
-	before := ansi.Strip(vp.Render())
-
-	vp.XOffset = 8
-	after := ansi.Strip(vp.Render())
-
-	beforePrefix := before[:strings.Index(before, "+")+1]
-	afterPrefix := after[:strings.Index(after, "+")+1]
-	if afterPrefix != beforePrefix {
-		t.Fatalf("fixed gutter/prefix moved\nbefore: %q\nafter:  %q", before, after)
-	}
-	if strings.Contains(after, "01234567") {
-		t.Fatalf("scrolled body still contains skipped left text: %q", after)
-	}
-	if !strings.Contains(after, "89abcdefghi") {
-		t.Fatalf("scrolled body = %q, want visible body starting at offset 8", after)
-	}
-}
-
-func TestHorizontalScrollPreservesANSIBodySequences(t *testing.T) {
-	t.Parallel()
-
-	styledBody := "\x1b[31m0123456789abcdef\x1b[0m"
-	vp := NewPatchViewport(singleLinePatch(styledBody))
-	vp.LineMode = model.LineModeScroll
-	vp.Width = 22
-	vp.Height = 1
-	vp.ScrollOffset = 1
-	vp.XOffset = 8
-
-	got := vp.Render()
-	stripped := ansi.Strip(got)
-	if !strings.Contains(got, "\x1b[") {
-		t.Fatalf("rendered line lost ANSI escapes: %q", got)
-	}
-	if strings.Contains(stripped, "01234567") {
-		t.Fatalf("rendered line still contains skipped left body: %q", stripped)
-	}
-	if !strings.Contains(stripped, "89abcdef") {
-		t.Fatalf("rendered line = %q, want ANSI body truncated from left", stripped)
-	}
-	if w := lipgloss.Width(got); w > vp.Width {
-		t.Fatalf("rendered width = %d, want <= %d: %q", w, vp.Width, got)
-	}
-}
-
-func TestHorizontalScrollPreservesStyledBodySearchSequences(t *testing.T) {
-	t.Parallel()
-
-	dl := model.DiffLine{Kind: model.LineAdded, NewNo: intP(1), Text: "0123456789abcdefghijkl"}
-	styledBody := "\x1b[31m0123456789\x1b[0m\x1b[7mabc\x1b[0mdefghijkl"
-	match := SearchMatch{Line: 0, Start: 10, End: 13}
-
-	got := renderDiffLineBodyHL(dl, styledBody, true, 14, "abc", match, false, 4, model.LineModeScroll, 8)
-	stripped := ansi.Strip(got)
-	if !strings.Contains(got, "\x1b[7m") {
-		t.Fatalf("rendered line lost styled search span: %q", got)
-	}
-	if strings.Contains(stripped, "01234567") {
-		t.Fatalf("rendered line still contains skipped left body: %q", stripped)
-	}
-	if !strings.Contains(stripped, "+89abcdefghi") {
-		t.Fatalf("rendered line = %q, want styled body cropped after diff prefix", stripped)
-	}
-	if w := lipgloss.Width(got); w > 14 {
-		t.Fatalf("rendered width = %d, want <= 14: %q", w, got)
 	}
 }
 

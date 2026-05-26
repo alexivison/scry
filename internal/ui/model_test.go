@@ -118,7 +118,7 @@ func samplePatch() model.FilePatch {
 	}
 }
 
-func horizontalScrollPatch() model.FilePatch {
+func longWrappedPatch() model.FilePatch {
 	return model.FilePatch{
 		Summary: model.FileSummary{Path: "long.go", Status: model.StatusModified},
 		Hunks: []model.Hunk{{
@@ -388,51 +388,6 @@ func TestUpdateKeyEnter(t *testing.T) {
 	}
 }
 
-func TestPatchHorizontalScrollKeys(t *testing.T) {
-	t.Parallel()
-
-	m := NewModel(sampleState())
-	m.width = 24
-	m.height = 5
-	m.State.FocusPane = model.PanePatch
-	m.patchViewport = panes.NewPatchViewport(horizontalScrollPatch())
-	m.patchViewport.LineMode = model.LineModeScroll
-	m.patchViewport.Width = 24
-	m.patchViewport.Height = 1
-	m.patchViewport.ScrollOffset = 1
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = updated.(Model)
-	if got, want := m.patchViewport.XOffset, 8; got != want {
-		t.Fatalf("right XOffset = %d, want %d", got, want)
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = updated.(Model)
-	if got, want := m.patchViewport.XOffset, 11; got != want {
-		t.Fatalf("second right XOffset = %d, want clamped max %d", got, want)
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m = updated.(Model)
-	if got, want := m.patchViewport.XOffset, 3; got != want {
-		t.Fatalf("left XOffset = %d, want %d", got, want)
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
-	m = updated.(Model)
-	if got := m.patchViewport.XOffset; got != 0 {
-		t.Fatalf("home XOffset = %d, want reset to zero", got)
-	}
-
-	m.patchViewport.XOffset = 8
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
-	m = updated.(Model)
-	if got := m.patchViewport.XOffset; got != 0 {
-		t.Fatalf("0 XOffset = %d, want reset to zero", got)
-	}
-}
-
 func TestNewModelDefaultsPatchLineModeWrap(t *testing.T) {
 	t.Parallel()
 
@@ -450,46 +405,6 @@ func TestNewModelDefaultsPatchDiffModeUnified(t *testing.T) {
 
 	if m.State.PatchDiffMode != model.PatchDiffModeUnified {
 		t.Fatalf("PatchDiffMode = %v, want PatchDiffModeUnified", m.State.PatchDiffMode)
-	}
-}
-
-func TestPatchWrapToggleKey(t *testing.T) {
-	t.Parallel()
-
-	m := NewModel(sampleState())
-	m.width = 24
-	m.height = 5
-	m.State.FocusPane = model.PanePatch
-	m.State.PatchLineMode = model.LineModeWrap
-	m.patchViewport = panes.NewPatchViewport(horizontalScrollPatch())
-	m.patchViewport.Width = 24
-	m.patchViewport.Height = 3
-	m.patchViewport.ScrollOffset = 2 // continuation row for the first diff line
-	m.patchViewport.XOffset = 8
-
-	updated, _ := m.Update(keyMsg('w'))
-	m = updated.(Model)
-
-	if m.State.PatchLineMode != model.LineModeScroll {
-		t.Fatalf("PatchLineMode = %v, want LineModeScroll", m.State.PatchLineMode)
-	}
-	if m.patchViewport.LineMode != model.LineModeScroll {
-		t.Fatalf("viewport LineMode = %v, want LineModeScroll", m.patchViewport.LineMode)
-	}
-	if m.patchViewport.XOffset != 0 {
-		t.Fatalf("XOffset = %d, want 0 after toggling to scroll", m.patchViewport.XOffset)
-	}
-	if m.patchViewport.ScrollOffset != 1 {
-		t.Fatalf("ScrollOffset = %d, want first row of same logical line", m.patchViewport.ScrollOffset)
-	}
-
-	updated, _ = m.Update(keyMsg('w'))
-	m = updated.(Model)
-	if m.State.PatchLineMode != model.LineModeWrap {
-		t.Fatalf("PatchLineMode = %v, want LineModeWrap", m.State.PatchLineMode)
-	}
-	if m.patchViewport.LineMode != model.LineModeWrap {
-		t.Fatalf("viewport LineMode = %v, want LineModeWrap", m.patchViewport.LineMode)
 	}
 }
 
@@ -526,15 +441,13 @@ func TestPatchDiffModeToggleKey(t *testing.T) {
 	}
 }
 
-func TestApplyPatchResultAppliesLineModeAndResetsXOffset(t *testing.T) {
+func TestApplyPatchResultAppliesLineMode(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
 	m.State.PatchLineMode = model.LineModeWrap
-	m.patchViewport = panes.NewPatchViewport(samplePatch())
-	m.patchViewport.XOffset = 16
 
-	patch := horizontalScrollPatch()
+	patch := longWrappedPatch()
 	m.applyPatchResult(model.PatchLoadState{Status: model.LoadLoaded, Patch: &patch})
 
 	if m.patchViewport == nil {
@@ -542,9 +455,6 @@ func TestApplyPatchResultAppliesLineModeAndResetsXOffset(t *testing.T) {
 	}
 	if got := m.patchViewport.LineMode; got != model.LineModeWrap {
 		t.Fatalf("LineMode = %v, want persisted %v", got, model.LineModeWrap)
-	}
-	if got := m.patchViewport.XOffset; got != 0 {
-		t.Fatalf("XOffset = %d, want reset on patch load", got)
 	}
 }
 
@@ -756,6 +666,22 @@ func TestToggleCompareBasisCyclesThroughHeadDirty(t *testing.T) {
 		if m.State.Compare.Basis != want {
 			t.Fatalf("Compare.Basis = %q, want %q", m.State.Compare.Basis, want)
 		}
+	}
+}
+
+func TestToggleCompareBasisFromPatchPane(t *testing.T) {
+	t.Parallel()
+
+	um := enterAndLoad(t, modelWithLoader())
+	if um.State.FocusPane != model.PanePatch {
+		t.Fatalf("expected PanePatch, got %q", um.State.FocusPane)
+	}
+
+	updated, _ := um.Update(keyMsg('b'))
+	um = updated.(Model)
+
+	if um.State.CompareBasis != model.CompareBasisLocalTrunk {
+		t.Fatalf("CompareBasis = %q, want %q", um.State.CompareBasis, model.CompareBasisLocalTrunk)
 	}
 }
 
@@ -1109,7 +1035,7 @@ func TestDirectionalSearchStoresLogicalLineMatch(t *testing.T) {
 func TestDirectionalSearchWrappedLineScrollsToFirstVisualRow(t *testing.T) {
 	t.Parallel()
 
-	patch := horizontalScrollPatch()
+	patch := longWrappedPatch()
 	loader := &mockPatchLoader{patches: map[string]model.FilePatch{"main.go": patch}}
 	m := NewModel(sampleState(), WithPatchLoader(loader))
 	m.width = 24
@@ -2499,7 +2425,7 @@ func TestRefreshPreservesScrollForUnchangedPatch(t *testing.T) {
 func TestRefreshPreservesWrappedLogicalAnchorAcrossWidthChange(t *testing.T) {
 	t.Parallel()
 
-	patch := horizontalScrollPatch()
+	patch := longWrappedPatch()
 	loader := &mockPatchLoader{patches: map[string]model.FilePatch{"main.go": patch}}
 	metaLoader := &mockMetadataLoader{files: sampleFiles()}
 	m := NewModel(sampleState(), WithPatchLoader(loader), WithMetadataLoader(metaLoader))

@@ -338,7 +338,6 @@ func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 		m.State.Files = nil
 		m.State.SelectedFile = -1
 		// Clear freshness state so stale generations from a previous worktree don't leak.
-		// FlaggedFiles are session-scoped bookmarks — intentionally preserved across drill-downs.
 		m.State.FileChangeGen = make(map[string]int)
 	}
 

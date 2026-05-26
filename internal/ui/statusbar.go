@@ -47,9 +47,6 @@ func (m Model) viewStatusBar() string {
 	if m.searchNotFound != "" {
 		return m.renderErrorBar(m.searchNotFound)
 	}
-	if m.exportMsg != "" {
-		return m.renderBar(m.exportMsg, statusBarStyle)
-	}
 
 	sep := segmentSepStyle.Render(" │ ")
 	minimal := m.widthTierNow() <= terminal.WidthMinimal

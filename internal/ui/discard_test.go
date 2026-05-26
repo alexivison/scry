@@ -148,6 +148,64 @@ func TestDiscard_UntrackedFile_FlagsUntracked(t *testing.T) {
 	}
 }
 
+func TestDiscard_FromPatchPane_OpensConfirm(t *testing.T) {
+	t.Parallel()
+
+	disc := &mockDiscarder{}
+	state := discardState()
+	state.FocusPane = model.PanePatch
+	m := NewModel(state, WithFileDiscarder(disc), WithMetadataLoader(&mockMetadataLoader{}))
+	m.width = 80
+	m.height = 30
+
+	updated, _ := m.Update(keyMsg('X'))
+	um := updated.(Model)
+
+	if !um.State.ConfirmDiscard {
+		t.Fatal("X from patch pane should open discard confirmation")
+	}
+	if um.State.DiscardPath != "main.go" {
+		t.Errorf("DiscardPath = %q, want %q", um.State.DiscardPath, "main.go")
+	}
+}
+
+func TestDiscard_UntrackedFileInWorktreeDrillDown_ConfirmExecutes(t *testing.T) {
+	t.Parallel()
+
+	disc := &mockDiscarder{}
+	state := discardState()
+	state.WorktreeMode = true
+	state.DashboardState.DrillDown = true
+	state.FocusPane = model.PaneFiles
+	state.SelectedFile = 1 // junk.txt (untracked)
+	m := NewModel(state, WithFileDiscarder(disc), WithMetadataLoader(&mockMetadataLoader{}))
+	m.width = 80
+	m.height = 30
+
+	updated, _ := m.Update(keyMsg('X'))
+	um := updated.(Model)
+
+	if !um.State.ConfirmDiscard {
+		t.Fatal("X should open discard confirmation in worktree drill-down")
+	}
+	if !um.State.DiscardUntracked {
+		t.Fatal("DiscardUntracked should be true for untracked drill-down file")
+	}
+
+	updated2, cmd := um.Update(keyMsg('y'))
+	_ = updated2
+	if cmd == nil {
+		t.Fatal("expected async discard command")
+	}
+	msgs := execAndCollect(cmd)
+	if _, ok := findMsg[FileDiscardedMsg](msgs); !ok {
+		t.Fatalf("expected FileDiscardedMsg in %+v", msgs)
+	}
+	if len(disc.calls) != 1 || disc.calls[0].path != "junk.txt" || !disc.calls[0].untracked {
+		t.Errorf("discarder calls = %+v, want one untracked junk.txt", disc.calls)
+	}
+}
+
 func TestDiscard_CancelWithN(t *testing.T) {
 	t.Parallel()
 
@@ -239,7 +297,7 @@ func TestDiscard_WithoutDiscarder_NoOp(t *testing.T) {
 	}
 }
 
-func TestDiscard_BlockedInWorktreeMode(t *testing.T) {
+func TestDiscard_BlockedInTopLevelWorktreeDashboard(t *testing.T) {
 	t.Parallel()
 
 	disc := &mockDiscarder{}

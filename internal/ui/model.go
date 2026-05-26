@@ -88,7 +88,6 @@ type Model struct {
 	searchIndex    *search.Index // built when patch is loaded
 	searchNotFound string        // "Pattern not found: <query>" message
 	refreshErr     string        // shown in status bar when metadata reload fails
-	exportMsg      string        // shown in status bar after ctrl+e export
 	fileListScroll int           // scroll offset for file list in split mode
 
 	// Scroll preservation state: saved before refresh, restored if content unchanged.
@@ -150,9 +149,6 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	}
 	if state.FileChangeGen == nil {
 		state.FileChangeGen = make(map[string]int)
-	}
-	if state.FlaggedFiles == nil {
-		state.FlaggedFiles = make(map[string]bool)
 	}
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -392,7 +388,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDiscardConfirm(msg)
 		}
 		// Clear transient status messages on any key press.
-		m.exportMsg = ""
 		m.State.DiscardErr = ""
 		// Clear pending multi-key buffer on global keys to prevent stale
 		// ] / [ / g from stealing a later keystroke.
@@ -428,23 +423,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "b" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleCompareBasis()
 		}
-		if msg.String() == "v" && !m.showHelp &&
+		if msg.String() == "s" && !m.showHelp &&
+			m.State.FocusPane != model.PaneSearch &&
+			m.State.FocusPane != model.PaneCommit &&
+			m.State.FocusPane != model.PaneIdle &&
+			m.State.FocusPane != model.PaneDashboard {
+			m.togglePatchDiffMode()
+			return m, nil
+		}
+		if msg.String() == "o" && !m.showHelp &&
 			m.State.FocusPane != model.PaneSearch &&
 			m.State.FocusPane != model.PaneCommit &&
 			m.State.FocusPane != model.PaneIdle &&
 			m.State.FocusPane != model.PaneDashboard {
 			return m.openInNeovim()
 		}
+		if msg.String() == "X" && !m.showHelp &&
+			m.State.FocusPane != model.PaneSearch &&
+			m.State.FocusPane != model.PaneCommit &&
+			m.State.FocusPane != model.PaneIdle &&
+			m.State.FocusPane != model.PaneDashboard {
+			return m.startDiscardConfirm()
+		}
 		// Tab toggles layout (except during help/search/commit).
 		if msg.Type == tea.KeyTab && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleLayout()
-		}
-		// ctrl+e exports flagged files (except help/search/commit/idle).
-		if msg.Type == tea.KeyCtrlE && !m.showHelp &&
-			m.State.FocusPane != model.PaneSearch &&
-			m.State.FocusPane != model.PaneCommit &&
-			m.State.FocusPane != model.PaneIdle {
-			return m.exportFlaggedFiles()
 		}
 		if m.showHelp {
 			return m.updateHelp(msg)
@@ -540,19 +543,19 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.State.FocusPane = model.PanePatch
 			return m.selectFile()
 		}
-	case "m":
-		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-			review.ToggleFlag(&m.State, m.State.Files[m.State.SelectedFile].Path)
+	case "/":
+		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil && m.searchIndex != nil {
+			m.State.FocusPane = model.PaneSearch
+			m.searchInput = ""
+			m.searchNotFound = ""
 		}
-	case "X":
-		return m.startDiscardConfirm()
-	case "M":
-		if idx, ok := review.NextFlaggedFile(m.State.Files, m.State.FlaggedFiles, m.State.SelectedFile); ok {
-			m.State.SelectedFile = idx
-			m.syncFileListScroll()
-			if m.State.Layout == model.LayoutSplit {
-				return m.selectFile()
-			}
+	case "n", "}":
+		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil {
+			m.patchViewport.NextHunk()
+		}
+	case "p", "{":
+		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil {
+			m.patchViewport.PrevHunk()
 		}
 	case "c":
 		if m.State.CommitEnabled && m.commitProvider != nil {
@@ -685,7 +688,7 @@ func (m Model) jumpChangedFile(forward bool) (tea.Model, tea.Cmd) {
 	}
 	m.State.SelectedFile = idx
 	m.syncFileListScroll()
-	if m.State.Layout == model.LayoutSplit {
+	if m.State.Layout == model.LayoutSplit || m.State.FocusPane == model.PanePatch {
 		return m.selectFile()
 	}
 	return m, nil
@@ -1103,31 +1106,6 @@ func (m Model) toggleCompareBasis() (tea.Model, tea.Cmd) {
 	return m.startRefresh()
 }
 
-// exportFlaggedFiles copies flagged file paths to the system clipboard.
-func (m Model) exportFlaggedFiles() (tea.Model, tea.Cmd) {
-	m.exportMsg = ""
-
-	// Collect flagged paths in file-list order for deterministic output.
-	var paths []string
-	for _, f := range m.State.Files {
-		if m.State.FlaggedFiles[f.Path] {
-			paths = append(paths, f.Path)
-		}
-	}
-	if len(paths) == 0 {
-		m.exportMsg = "No flagged files"
-		return m, nil
-	}
-
-	text := terminal.FormatPaths(paths)
-	if err := terminal.CopyToClipboard(text); err != nil {
-		m.exportMsg = fmt.Sprintf("Export failed: %v", err)
-		return m, nil
-	}
-	m.exportMsg = fmt.Sprintf("Copied %d flagged paths to clipboard", len(paths))
-	return m, nil
-}
-
 func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) {
 	if review.IsStaleGeneration(msg.Gen, m.State.CacheGeneration) {
 		return m, nil
@@ -1171,7 +1149,6 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 
 	// Track per-file freshness before updating the file list.
 	review.UpdateFileChangeGen(&m.State, m.State.Files, msg.Files)
-	review.PruneFlags(&m.State, msg.Files)
 
 	// Selectively invalidate cache: preserve unchanged files, evict changed/removed.
 	review.SelectiveInvalidate(&m.State, m.State.Files, msg.Files)
@@ -1329,20 +1306,29 @@ func buildFallback(summary model.FileSummary, err error) string {
 }
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Handle gg chord in patch pane.
-	if m.pendingKey == 'g' && msg.String() == "g" {
-		m.pendingKey = 0
-		if m.patchViewport != nil {
-			m.patchViewport.ScrollToTop()
-		}
-		return m, nil
-	}
+	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
+		pending := m.pendingKey
 		m.pendingKey = 0
+		switch {
+		case pending == 'g' && msg.String() == "g":
+			if m.patchViewport != nil {
+				m.patchViewport.ScrollToTop()
+			}
+			return m, nil
+		case (pending == ']' || pending == '[') && msg.String() == "c":
+			return m.jumpChangedFile(pending == ']')
+		}
 		// Fall through to normal handling.
 	}
 
 	switch msg.String() {
+	case "]", "[":
+		if len(msg.Runes) > 0 {
+			m.pendingKey = msg.Runes[0]
+			m.pendingKeySeq++
+		}
+		return m, m.pendingKeyTimeout()
 	case "esc", "h":
 		m.State.FocusPane = model.PaneFiles
 		if m.State.Layout != model.LayoutSplit {
@@ -1361,24 +1347,12 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollUp()
 		}
-	case "right":
-		if m.patchViewport != nil {
-			m.patchViewport.ScrollRight()
-		}
-	case "left":
-		if m.patchViewport != nil {
-			m.patchViewport.ScrollLeft()
-		}
-	case "home", "0":
-		if m.patchViewport != nil {
-			m.patchViewport.ResetXOffset()
-		}
-	case "w":
-		if m.patchViewport != nil {
-			m.togglePatchLineMode()
-		}
 	case "s":
 		m.togglePatchDiffMode()
+	case "c":
+		if m.State.CommitEnabled && m.commitProvider != nil {
+			return m.startCommitGeneration()
+		}
 	case "g":
 		m.pendingKey = 'g'
 		m.pendingKeySeq++
@@ -1426,17 +1400,6 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = true
 	}
 	return m, nil
-}
-
-func (m *Model) togglePatchLineMode() {
-	if m.State.PatchLineMode == model.LineModeWrap {
-		m.State.PatchLineMode = model.LineModeScroll
-	} else {
-		m.State.PatchLineMode = model.LineModeWrap
-	}
-	if m.patchViewport != nil {
-		m.patchViewport.SetLineMode(m.State.PatchLineMode)
-	}
 }
 
 func (m *Model) togglePatchDiffMode() {
@@ -1721,9 +1684,7 @@ func (m Model) viewHelp() string {
 		"  G         jump to bottom",
 		"  ctrl+d/u  half-page down/up",
 		"  ctrl+f/b  full page down/up",
-		"  w         wrap/scroll; left/right horizontal scroll",
 		"  s         unified/side-by-side diff",
-		"  0/Home    reset horizontal scroll",
 		"  ]c/[c     next/prev changed file",
 		"",
 		"Search",
@@ -1733,10 +1694,9 @@ func (m Model) viewHelp() string {
 		"Actions",
 		"  r         refresh",
 		fmt.Sprintf("  b         cycle diff basis (current: %s)", m.State.CompareBasis.Label()),
-		"  v         open file in nvim",
+		"  o         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
-		"  m/M       toggle file flag / jump to next flag",
 		"  X         discard selected file's changes (confirm y/N)",
 	)
 	if m.State.WatchEnabled {
@@ -1841,12 +1801,11 @@ func (m Model) showFooter() bool {
 	return ht >= terminal.HeightFooterVisible
 }
 
-// freshnessOpts returns the FileListOpts for freshness and flag rendering.
+// freshnessOpts returns the FileListOpts for freshness rendering.
 func (m Model) freshnessOpts() panes.FileListOpts {
 	return panes.FileListOpts{
 		ChangeGen:        m.State.FileChangeGen,
 		CurrentGen:       m.State.CacheGeneration,
-		FlaggedFiles:     m.State.FlaggedFiles,
 		GroupByDirectory: m.State.GroupByDirectory,
 	}
 }

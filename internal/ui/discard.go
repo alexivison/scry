@@ -12,7 +12,7 @@ import (
 
 // startDiscardConfirm opens the discard confirmation modal for the selected file.
 // No-op when the discarder is unconfigured, the view is not in working-tree mode,
-// the worktree dashboard is active, or no file is selected.
+// the top-level worktree dashboard is active, or no file is selected.
 func (m Model) startDiscardConfirm() (tea.Model, tea.Cmd) {
 	if m.fileDiscarder == nil {
 		return m, nil
@@ -20,7 +20,7 @@ func (m Model) startDiscardConfirm() (tea.Model, tea.Cmd) {
 	if !m.State.Compare.WorkingTree {
 		return m, nil
 	}
-	if m.State.WorktreeMode {
+	if m.State.WorktreeMode && !m.State.DashboardState.DrillDown {
 		return m, nil
 	}
 	if m.State.SelectedFile < 0 || m.State.SelectedFile >= len(m.State.Files) {

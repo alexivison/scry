@@ -635,12 +635,11 @@ func TestDashboardTickSkipsDuringDrillDown(t *testing.T) {
 
 // --- Drill-down state isolation tests ---
 
-func TestDashboardDrillDownClearsFreshnessPreservesFlags(t *testing.T) {
+func TestDashboardDrillDownClearsFreshness(t *testing.T) {
 	t.Parallel()
 
 	state := dashboardState()
-	// Simulate leftover flags and freshness from a previous drill-down.
-	state.FlaggedFiles = map[string]bool{"main.go": true, "util.go": true}
+	// Simulate leftover freshness from a previous drill-down.
 	state.FileChangeGen = map[string]int{"main.go": 3, "util.go": 2}
 	state.DashboardState.SelectedIdx = 1
 
@@ -656,26 +655,22 @@ func TestDashboardDrillDownClearsFreshnessPreservesFlags(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	// Drill into worktree — should clear freshness but preserve session-scoped flags.
+	// Drill into worktree — should clear freshness.
 	updated, _ := m.Update(keyMsg('l'))
 	um := updated.(Model)
 
-	if len(um.State.FlaggedFiles) != 2 {
-		t.Errorf("FlaggedFiles should be preserved on drill-down (session-scoped), got %v", um.State.FlaggedFiles)
-	}
 	if len(um.State.FileChangeGen) != 0 {
 		t.Errorf("FileChangeGen should be cleared on fresh drill-down, got %v", um.State.FileChangeGen)
 	}
 }
 
-func TestDashboardDrillDownRefreshPreservesFlagsAndFreshness(t *testing.T) {
+func TestDashboardDrillDownRefreshPreservesFreshness(t *testing.T) {
 	t.Parallel()
 
 	state := dashboardState()
 	state.DashboardState.DrillDown = true // already drilled down (refresh path)
 	state.DashboardState.SelectedIdx = 0
 	state.FocusPane = model.PaneFiles
-	state.FlaggedFiles = map[string]bool{"main.go": true}
 	state.FileChangeGen = map[string]int{"main.go": 3}
 	state.Files = []model.FileSummary{{Path: "main.go", Status: model.StatusModified}}
 	state.SelectedFile = 0
@@ -697,10 +692,7 @@ func TestDashboardDrillDownRefreshPreservesFlagsAndFreshness(t *testing.T) {
 	updated, _ := m.startDrillDown(wt)
 	um := updated.(Model)
 
-	// Refresh should preserve existing flags and freshness.
-	if !um.State.FlaggedFiles["main.go"] {
-		t.Error("FlaggedFiles should be preserved on drill-down refresh")
-	}
+	// Refresh should preserve existing freshness.
 	if um.State.FileChangeGen["main.go"] != 3 {
 		t.Errorf("FileChangeGen should be preserved on refresh, got %d", um.State.FileChangeGen["main.go"])
 	}
