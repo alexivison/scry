@@ -88,6 +88,19 @@ func TestDashboardPreview_CacheHitOnReselect(t *testing.T) {
 	}
 }
 
+func TestDashboardPreview_SnapshotKeyIncludesHeadDirtyBasis(t *testing.T) {
+	t.Parallel()
+
+	wt := dashboardWorktrees()[0]
+	upstream := WorktreeSnapshotKey(wt, model.CompareBasisUpstream)
+	local := WorktreeSnapshotKey(wt, model.CompareBasisLocalTrunk)
+	headDirty := WorktreeSnapshotKey(wt, model.CompareBasisHeadDirty)
+
+	if headDirty == upstream || headDirty == local {
+		t.Fatalf("HEAD/dirty snapshot key should be distinct, got upstream=%q local=%q headDirty=%q", upstream, local, headDirty)
+	}
+}
+
 func TestDashboardPreview_RenderInSplitView(t *testing.T) {
 	t.Parallel()
 

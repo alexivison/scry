@@ -65,12 +65,16 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 
 	// Working tree mode: when head is omitted, diff base against working tree.
 	if req.HeadRef == "" {
+		diffRange := baseSHA
+		if br.diffRange != "" {
+			diffRange = br.diffRange
+		}
 		return model.ResolvedCompare{
 			Repo:         req.Repo,
 			BaseRef:      baseSHA,
 			Basis:        normalizeBasis(req.Basis),
 			WorkingTree:  true,
-			DiffRange:    baseSHA,
+			DiffRange:    diffRange,
 			WatchBaseRef: br.watchRef,
 		}, nil
 	}
@@ -109,21 +113,28 @@ func (cr *CompareResolver) Resolve(ctx context.Context, req model.CompareRequest
 // watch-mode fingerprinting. watchRef is non-empty only when a fallback was
 // used (upstream returns a symbolic ref that git can re-resolve each tick).
 type baseResult struct {
-	ref      string // resolved ref or SHA to use as base
-	watchRef string // symbolic fallback name for watch fingerprinting (e.g. "origin/main")
+	ref       string // resolved ref or SHA to use as base
+	diffRange string // optional range string to pass to git diff in working-tree mode
+	watchRef  string // symbolic fallback name for watch fingerprinting (e.g. "origin/main")
 }
 
 // resolveBase resolves the base ref. If empty, it tries @{upstream} first,
 // then falls back to merge-base of the effective head and the default branch.
 // headRef is the explicit --head value; when empty, HEAD is used for merge-base.
 func (cr *CompareResolver) resolveBase(ctx context.Context, baseRef, headRef string, basis model.CompareBasis) (baseResult, error) {
+	normalized := normalizeBasis(basis)
+	if normalized == model.CompareBasisHeadDirty && headRef == "" {
+		return baseResult{ref: "HEAD", diffRange: "HEAD"}, nil
+	}
 	if baseRef != "" {
 		return baseResult{ref: baseRef}, nil
 	}
 
-	switch normalizeBasis(basis) {
+	switch normalized {
 	case model.CompareBasisLocalTrunk:
 		return cr.resolveLocalTrunkBase(ctx, headRef)
+	case model.CompareBasisHeadDirty:
+		return baseResult{ref: "HEAD"}, nil
 	default:
 		return cr.resolveUpstreamBase(ctx, headRef)
 	}
@@ -133,6 +144,8 @@ func normalizeBasis(basis model.CompareBasis) model.CompareBasis {
 	switch basis {
 	case model.CompareBasisLocalTrunk:
 		return model.CompareBasisLocalTrunk
+	case model.CompareBasisHeadDirty:
+		return model.CompareBasisHeadDirty
 	default:
 		return model.CompareBasisUpstream
 	}

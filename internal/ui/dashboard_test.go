@@ -23,8 +23,8 @@ func dashboardWorktrees() []model.WorktreeInfo {
 
 func dashboardState() model.AppState {
 	return model.AppState{
-		FocusPane:      model.PaneDashboard,
-		WorktreeMode:   true,
+		FocusPane:    model.PaneDashboard,
+		WorktreeMode: true,
 		DashboardState: model.DashboardState{
 			Worktrees:   dashboardWorktrees(),
 			SelectedIdx: 0,
@@ -111,6 +111,7 @@ func TestDashboardDrillDown(t *testing.T) {
 
 	state := dashboardState()
 	state.DashboardState.SelectedIdx = 1
+	state.CompareBasis = model.CompareBasisHeadDirty
 	provider := &mockDrillDownProvider{
 		result: DrillDownResult{
 			Compare: model.ResolvedCompare{BaseRef: "abc", WorkingTree: true, DiffRange: "abc"},
@@ -144,6 +145,9 @@ func TestDashboardDrillDown(t *testing.T) {
 	}
 	if len(ddMsg.Result.Files) != 1 {
 		t.Errorf("files len = %d, want 1", len(ddMsg.Result.Files))
+	}
+	if len(provider.bases) != 1 || provider.bases[0] != model.CompareBasisHeadDirty {
+		t.Fatalf("drill-down basis = %v, want [%q]", provider.bases, model.CompareBasisHeadDirty)
 	}
 }
 
@@ -793,9 +797,9 @@ func TestReconcileActivityNewWorktree(t *testing.T) {
 // --- V3-T18: Worktree Deletion Tests ---
 
 type mockRemover struct {
-	removedPath string
+	removedPath  string
 	removedForce bool
-	err         error
+	err          error
 }
 
 func (r *mockRemover) Remove(_ context.Context, path string, force bool) error {
