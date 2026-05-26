@@ -434,7 +434,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // WorktreeSnapshotKey returns a cache key for a worktree's mutable state.
 func WorktreeSnapshotKey(wt model.WorktreeInfo, basis model.CompareBasis) string {
-	if basis != model.CompareBasisLocalTrunk {
+	if basis != model.CompareBasisLocalTrunk && basis != model.CompareBasisHeadDirty {
 		basis = model.CompareBasisUpstream
 	}
 	return fmt.Sprintf("%s|%s|%v|%d|%s", wt.Path, wt.CommitHash, wt.Dirty, wt.ChangedFiles, basis)

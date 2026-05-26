@@ -424,7 +424,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleWhitespace()
 		}
-		// b toggles the compare basis from any diff/dashboard pane (except help/search/commit).
+		// b cycles the compare basis from any diff/dashboard pane (except help/search/commit).
 		if msg.String() == "b" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleCompareBasis()
 		}
@@ -1078,11 +1078,7 @@ func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) toggleCompareBasis() (tea.Model, tea.Cmd) {
-	if m.State.CompareBasis == model.CompareBasisLocalTrunk {
-		m.State.CompareBasis = model.CompareBasisUpstream
-	} else {
-		m.State.CompareBasis = model.CompareBasisLocalTrunk
-	}
+	m.State.CompareBasis = m.State.CompareBasis.Next()
 	m.State.Compare.Basis = m.State.CompareBasis
 	m.compareRequest.Basis = m.State.CompareBasis
 	m.refreshErr = ""
@@ -1281,6 +1277,10 @@ func (m *Model) restoreSavedPatchScroll() {
 func (m *Model) syncWatchBaseRef(cmp model.ResolvedCompare) {
 	if cmp.WatchBaseRef != "" {
 		m.watchBaseRef = cmp.WatchBaseRef
+		return
+	}
+	if cmp.Basis == model.CompareBasisHeadDirty {
+		m.watchBaseRef = "HEAD"
 		return
 	}
 	if m.compareRequest.BaseRef != "" {
@@ -1699,7 +1699,7 @@ func (m Model) viewHelp() string {
 			"  l/Enter   drill into worktree diff",
 			"",
 			"Actions",
-			fmt.Sprintf("  b         toggle diff basis (current: %s)", m.State.CompareBasis.Label()),
+			fmt.Sprintf("  b         cycle diff basis (current: %s)", m.State.CompareBasis.Label()),
 			"  ?/Esc     close help",
 			"  q         quit",
 		}, "\n")
@@ -1732,7 +1732,7 @@ func (m Model) viewHelp() string {
 		"",
 		"Actions",
 		"  r         refresh",
-		fmt.Sprintf("  b         toggle diff basis (current: %s)", m.State.CompareBasis.Label()),
+		fmt.Sprintf("  b         cycle diff basis (current: %s)", m.State.CompareBasis.Label()),
 		"  v         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",

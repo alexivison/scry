@@ -2,6 +2,8 @@ package diff
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -162,9 +164,9 @@ func TestListFiles(t *testing.T) {
 		},
 		"working tree mode uses base-only range": {
 			runner: routeGit(map[string]string{
-				"diff --name-status -z -M aaa111":          "M\x00main.go\x00",
-				"diff --numstat -z -M aaa111":              "10\t5\tmain.go\x00",
-				"ls-files --others --exclude-standard -z":  "",
+				"diff --name-status -z -M aaa111":         "M\x00main.go\x00",
+				"diff --numstat -z -M aaa111":             "10\t5\tmain.go\x00",
+				"ls-files --others --exclude-standard -z": "",
 			}),
 			compare: &model.ResolvedCompare{DiffRange: "aaa111", WorkingTree: true},
 			want: []model.FileSummary{
@@ -252,5 +254,46 @@ func TestListFilesPreservesOrder(t *testing.T) {
 		if got[i].Path != want {
 			t.Errorf("path[%d] = %q, want %q", i, got[i].Path, want)
 		}
+	}
+}
+
+func TestListFilesHeadDirtyWorkingTreeIncludesUntracked(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "scratch.txt", "one\ntwo\n")
+	runner := routeGit(map[string]string{
+		"diff --name-status -z -M HEAD":           "M\x00main.go\x00",
+		"diff --numstat -z -M HEAD":               "10\t5\tmain.go\x00",
+		"ls-files --others --exclude-standard -z": "scratch.txt\x00",
+	})
+	svc := &MetadataService{Runner: &mockRunner{fn: runner}}
+	got, err := svc.ListFiles(context.Background(), model.ResolvedCompare{
+		Repo:        model.RepoContext{WorktreeRoot: root},
+		DiffRange:   "HEAD",
+		WorkingTree: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []model.FileSummary{
+		{Path: "main.go", Status: model.StatusModified, Additions: 10, Deletions: 5},
+		{Path: "scratch.txt", Status: model.StatusUntracked, Additions: 2},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d\n  got:  %+v\n  want: %+v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] =\n  got  %+v\n  want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func writeFile(t *testing.T, root, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, path), []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }

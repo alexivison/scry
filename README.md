@@ -21,6 +21,7 @@ Scry does one thing well: show you what changed between two refs, with the same 
 - Unified and side-by-side patch viewer with hunk navigation (`n`/`p`)
 - Bidirectional search within patches (`/`, `Enter`, `N`)
 - Whitespace-ignore toggle (`W`)
+- Compare basis cycling (`b`): upstream, local trunk, or HEAD/dirty worktree
 - Manual refresh (`r`)
 - Lazy patch loading for responsive large diffs
 - Graceful handling of binary files, submodules, and oversized patches
@@ -90,6 +91,7 @@ scry --no-dashboard
 | `N` | Previous search match |
 | `s` | Toggle unified / side-by-side diff |
 | `W` | Toggle whitespace-ignore mode |
+| `b` | Cycle compare basis |
 | `Tab` | Toggle split/modal layout |
 | `c` | Generate commit message (when `--commit`) |
 | `e` | Edit generated commit message |

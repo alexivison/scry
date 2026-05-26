@@ -374,6 +374,31 @@ func TestCompareResolverResolve(t *testing.T) {
 				WatchBaseRef: "refs/heads/main",
 			},
 		},
+		"head dirty working tree uses HEAD as base": {
+			req: model.CompareRequest{
+				Repo:    stubRepo,
+				BaseRef: "",
+				Basis:   model.CompareBasisHeadDirty,
+				HeadRef: "",
+				Mode:    model.CompareThreeDot,
+			},
+			runner: func(_ context.Context, args ...string) (string, error) {
+				key := strings.Join(args, " ")
+				switch key {
+				case "rev-parse --verify HEAD":
+					return "head111\n", nil
+				default:
+					return "", gitErr(1, "unexpected: "+key)
+				}
+			},
+			want: model.ResolvedCompare{
+				Repo:        stubRepo,
+				BaseRef:     "head111",
+				Basis:       model.CompareBasisHeadDirty,
+				WorkingTree: true,
+				DiffRange:   "HEAD",
+			},
+		},
 		"local trunk basis returns error when branch missing": {
 			req: model.CompareRequest{
 				Repo:    stubRepo,

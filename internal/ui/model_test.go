@@ -736,6 +736,50 @@ func TestViewStatusBarWorkingTree(t *testing.T) {
 	}
 }
 
+func TestToggleCompareBasisCyclesThroughHeadDirty(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 100
+	m.height = 30
+
+	for _, want := range []model.CompareBasis{
+		model.CompareBasisLocalTrunk,
+		model.CompareBasisHeadDirty,
+		model.CompareBasisUpstream,
+	} {
+		updated, _ := m.Update(keyMsg('b'))
+		m = updated.(Model)
+		if m.State.CompareBasis != want {
+			t.Fatalf("CompareBasis = %q, want %q", m.State.CompareBasis, want)
+		}
+		if m.State.Compare.Basis != want {
+			t.Fatalf("Compare.Basis = %q, want %q", m.State.Compare.Basis, want)
+		}
+	}
+}
+
+func TestStatusAndHelpShowHeadDirtyBasis(t *testing.T) {
+	t.Parallel()
+
+	state := sampleState()
+	state.CompareBasis = model.CompareBasisHeadDirty
+	state.Compare.Basis = model.CompareBasisHeadDirty
+	m := NewModel(state)
+	m.width = 100
+	m.height = 30
+
+	if bar := m.viewStatusBar(); !strings.Contains(bar, "basis: HEAD/dirty") {
+		t.Fatalf("status bar should show HEAD/dirty basis, got:\n%s", bar)
+	}
+
+	updated, _ := m.Update(keyMsg('?'))
+	um := updated.(Model)
+	if view := um.View(); !strings.Contains(view, "current: HEAD/dirty") {
+		t.Fatalf("help should show HEAD/dirty basis, got:\n%s", view)
+	}
+}
+
 func TestViewHelpOverlay(t *testing.T) {
 	t.Parallel()
 
