@@ -739,9 +739,6 @@ V2-T0, V2-T1, V2-T2, V2-T3.
 
 ### Optional Integrations
 
-#### Clipboard/export slice
-- Export selected file/hunk/context as structured markdown or plain text for external tools.
-
 #### tmux session launcher
 - See [docs/integrations/tmux-session.md](docs/integrations/tmux-session.md).
 
@@ -776,10 +773,10 @@ v0.1 compares committed refs only (`@{upstream}...HEAD`). When the user has unco
 Let the reviewer drop a single file's working-tree changes from the file-list pane without leaving scry, while keeping every destructive action gated behind an explicit confirmation.
 
 #### CLI
-- No new flag. The action is available in the default working-tree review mode and is hidden in `--worktrees` (worktree dashboard) and any non-working-tree compare (e.g. `--head <ref>`).
+- No new flag. The action is available in working-tree review mode, including worktree drill-down, and is hidden in the top-level worktree dashboard and any non-working-tree compare (e.g. `--head <ref>`).
 
 #### Keybinding
-- `X` (shift-x) in the file-list pane: open the discard confirmation modal for the currently selected file.
+- `X` (shift-x) in the file-list or patch pane: open the discard confirmation modal for the currently selected file.
 - `y` / `Y` confirms; `n` / `N` / `Esc` cancels. No other keys are accepted while the modal is open.
 
 #### Behavior
@@ -792,7 +789,7 @@ Let the reviewer drop a single file's working-tree changes from the file-list pa
 5. **Errors** surface as a full-width status-bar message (`discard failed: <git/fs error>`) and never crash the app.
 
 #### Acceptance criteria
-- `X` is no-op without a configured `FileDiscarder`, in `--worktrees`, or when not reviewing the working tree.
+- `X` is no-op without a configured `FileDiscarder`, in the top-level worktree dashboard, or when not reviewing the working tree.
 - Confirmation modal blocks all other keys until resolved.
 - After a successful tracked-file discard, the file's status indicator clears (file leaves the modified list).
 - After a successful untracked-file discard, the file is removed from disk and the list.
@@ -808,7 +805,6 @@ Let the reviewer drop a single file's working-tree changes from the file-list pa
 7. Split-pane layout with vim navigation.
 8. **Worktree dashboard mode** (auto-selected from the primary worktree when linked worktrees exist).
 9. Noise gate profiles.
-10. Clipboard/export slice.
-11. Delta-since-last-review mode.
-12. Changed symbols jump list.
-13. Trust overlay.
+10. Delta-since-last-review mode.
+11. Changed symbols jump list.
+12. Trust overlay.

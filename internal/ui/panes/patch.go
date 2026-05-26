@@ -20,7 +20,7 @@ type PatchViewport struct {
 	ScrollOffset int // line index at top of viewport
 	LineMode     model.LineMode
 	DiffMode     model.PatchDiffMode
-	XOffset      int // horizontal body-column offset in scroll mode
+	XOffset      int // body-column offset used by non-wrapping layout
 	Width        int
 	Height       int
 
@@ -34,7 +34,7 @@ type PatchViewport struct {
 	syntaxHighlighted *syntax.LineCache
 }
 
-const horizontalScrollStep = 8
+const bodyOffsetStep = 8
 
 type lineType int
 
@@ -258,30 +258,30 @@ func (vp *PatchViewport) ScrollToBottom() {
 	vp.SyncCurrentHunk()
 }
 
-// ScrollRight moves the visible code body right by the fixed horizontal step.
+// ScrollRight moves the visible code body right by the fixed offset step.
 func (vp *PatchViewport) ScrollRight() {
 	if vp.LineMode != model.LineModeScroll {
 		return
 	}
-	vp.XOffset += horizontalScrollStep
+	vp.XOffset += bodyOffsetStep
 	vp.ClampXOffset()
 }
 
-// ScrollLeft moves the visible code body left by the fixed horizontal step.
+// ScrollLeft moves the visible code body left by the fixed offset step.
 func (vp *PatchViewport) ScrollLeft() {
 	if vp.LineMode != model.LineModeScroll {
 		return
 	}
-	vp.XOffset -= horizontalScrollStep
+	vp.XOffset -= bodyOffsetStep
 	vp.ClampXOffset()
 }
 
-// ResetXOffset returns horizontal scroll to the beginning of the code body.
+// ResetXOffset returns the body-column offset to the beginning.
 func (vp *PatchViewport) ResetXOffset() {
 	vp.XOffset = 0
 }
 
-// ClampXOffset constrains horizontal scroll to the currently visible body range.
+// ClampXOffset constrains the body-column offset to the currently visible range.
 func (vp *PatchViewport) ClampXOffset() {
 	if vp.LineMode != model.LineModeScroll {
 		return
@@ -295,7 +295,7 @@ func (vp *PatchViewport) ClampXOffset() {
 	}
 }
 
-// MaxXOffset returns the largest useful horizontal body offset for visible rows.
+// MaxXOffset returns the largest useful body offset for visible rows.
 func (vp *PatchViewport) MaxXOffset() int {
 	if vp.LineMode != model.LineModeScroll || vp.Width <= 0 {
 		return 0
@@ -372,7 +372,7 @@ func (vp *PatchViewport) SyncCurrentHunk() {
 	vp.CurrentHunk = 0
 }
 
-// SetLineMode switches between wrap and horizontal-scroll layout while keeping
+// SetLineMode switches line layout while keeping
 // the same logical diff line at the top of the viewport when possible.
 func (vp *PatchViewport) SetLineMode(mode model.LineMode) {
 	if vp.LineMode == mode {

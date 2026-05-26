@@ -93,6 +93,7 @@ scry --no-dashboard
 | `W` | Toggle whitespace-ignore mode |
 | `b` | Cycle compare basis |
 | `Tab` | Toggle split/modal layout |
+| `o` | Open selected file in nvim |
 | `c` | Generate commit message (when `--commit`) |
 | `e` | Edit generated commit message |
 | `r` | Refresh / regenerate commit message |

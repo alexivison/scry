@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestKeyVFromPatchUsesCurrentLine(t *testing.T) {
+func TestKeyOFromPatchUsesCurrentLine(t *testing.T) {
 	prevBuilder := buildEditorCommand
 	defer func() { buildEditorCommand = prevBuilder }()
 
@@ -36,10 +36,10 @@ func TestKeyVFromPatchUsesCurrentLine(t *testing.T) {
 	m.patchViewport.CurrentHunk = 1
 	m.patchViewport.ScrollOffset = 4
 
-	updated, cmd := m.Update(keyMsg('v'))
+	updated, cmd := m.Update(keyMsg('o'))
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("v should return an ExecProcess cmd")
+		t.Fatal("o should return an ExecProcess cmd")
 	}
 	for _, msg := range execAndCollect(cmd) {
 		updated, _ = m.Update(msg)
@@ -57,18 +57,18 @@ func TestKeyVFromPatchUsesCurrentLine(t *testing.T) {
 	}
 }
 
-func TestKeyVMissingFileSetsError(t *testing.T) {
+func TestKeyOMissingFileSetsError(t *testing.T) {
 	m := NewModel(sampleState())
 	m.width = 100
 	m.height = 30
 	m.State.Compare.Repo.WorktreeRoot = t.TempDir()
 	m.State.Files[m.State.SelectedFile].Path = "missing.go"
 
-	updated, cmd := m.Update(keyMsg('v'))
+	updated, cmd := m.Update(keyMsg('o'))
 	m = updated.(Model)
 
 	if cmd != nil {
-		t.Fatal("v should not launch editor for a missing file")
+		t.Fatal("o should not launch editor for a missing file")
 	}
 	if m.refreshErr == "" {
 		t.Fatal("missing file should set a visible error message")

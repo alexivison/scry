@@ -28,19 +28,15 @@ var (
 	freshnessHotStyle  = lipgloss.NewStyle().Foreground(theme.Added).Bold(true)
 	freshnessWarmStyle = lipgloss.NewStyle().Foreground(theme.Muted)
 
-	// Flag marker.
-	flagStyle = lipgloss.NewStyle().Foreground(theme.Dirty).Bold(true)
-
 	// Directory header style.
 	dirHeaderStyle = lipgloss.NewStyle().Foreground(theme.ChromeFaint)
 )
 
 // FileListOpts holds optional parameters for file list rendering.
 type FileListOpts struct {
-	ChangeGen        map[string]int  // per-file last-change generation (nil to disable)
-	CurrentGen       int             // current CacheGeneration for freshness calculation
-	FlaggedFiles     map[string]bool // session-scoped bookmarks
-	GroupByDirectory bool            // when true, group files by directory with dim headers
+	ChangeGen        map[string]int // per-file last-change generation (nil to disable)
+	CurrentGen       int            // current CacheGeneration for freshness calculation
+	GroupByDirectory bool           // when true, group files by directory with dim headers
 }
 
 // RenderFileList renders a scrollable file list constrained to the given dimensions.
@@ -121,8 +117,7 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 				tier = review.ComputeFreshness(gen, o.CurrentGen)
 			}
 		}
-		flagged := o.FlaggedFiles[files[i].Path]
-		line := renderFileEntry(files[i], i, selectedIdx, width, tier, flagged)
+		line := renderFileEntry(files[i], i, selectedIdx, width, tier)
 		if !active {
 			line = fileDimStyle.Render(line)
 		}
@@ -145,14 +140,14 @@ func EnsureVisible(selectedIdx, scrollOffset, height, total int) int {
 	return scrollOffset
 }
 
-func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier, flagged bool) string {
+func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier) string {
 	selected := idx == selectedIdx
 	path := f.Path
 	if f.OldPath != "" {
 		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
 	}
 
-	marker := prefixMarker(tier, flagged, selected)
+	marker := prefixMarker(tier)
 
 	prefix := "  "
 	if selected {
@@ -181,11 +176,8 @@ func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier revi
 	return prefix + marker + " " + icon + "  " + textStyle.Render(paddedPath) + " " + counts
 }
 
-// prefixMarker returns a styled single-character prefix: flag takes priority over freshness.
-func prefixMarker(tier review.FreshnessTier, flagged, _ bool) string {
-	if flagged {
-		return flagStyle.Render("⚑")
-	}
+// prefixMarker returns a styled single-character freshness prefix.
+func prefixMarker(tier review.FreshnessTier) string {
 	switch tier {
 	case review.FreshnessHot:
 		return freshnessHotStyle.Render("●")

@@ -183,6 +183,169 @@ func TestSplitModeH_PreservesViewport(t *testing.T) {
 	})
 }
 
+func splitModelWithLoadedPatch(t *testing.T) Model {
+	t.Helper()
+
+	loader := &mockPatchLoader{patches: map[string]model.FilePatch{
+		"main.go": samplePatch(),
+		"new.go":  samplePatch(),
+		"old.go":  samplePatch(),
+	}}
+	m := NewModel(splitState(), WithPatchLoader(loader))
+	m.width = 120
+	m.height = 30
+	m = enterAndLoad(t, m)
+	m, _ = sendKey(m, "h")
+	if m.State.FocusPane != model.PaneFiles {
+		t.Fatalf("FocusPane = %q, want %q", m.State.FocusPane, model.PaneFiles)
+	}
+	if m.patchViewport == nil {
+		t.Fatal("expected loaded patch viewport")
+	}
+	return m
+}
+
+func TestFileListFocusSharedPatchShortcuts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("s toggles visible split patch", func(t *testing.T) {
+		t.Parallel()
+
+		m := splitModelWithLoadedPatch(t)
+		m, _ = sendKey(m, "s")
+
+		if m.State.PatchDiffMode != model.PatchDiffModeSideBySide {
+			t.Fatalf("PatchDiffMode = %v, want side-by-side", m.State.PatchDiffMode)
+		}
+		if m.patchViewport.DiffMode != model.PatchDiffModeSideBySide {
+			t.Fatalf("viewport DiffMode = %v, want side-by-side", m.patchViewport.DiffMode)
+		}
+		if m.State.FocusPane != model.PaneFiles {
+			t.Fatalf("FocusPane = %q, want files", m.State.FocusPane)
+		}
+	})
+
+	t.Run("slash enters search when split patch is loaded", func(t *testing.T) {
+		t.Parallel()
+
+		m := splitModelWithLoadedPatch(t)
+		m, _ = sendKey(m, "/")
+
+		if m.State.FocusPane != model.PaneSearch {
+			t.Fatalf("FocusPane = %q, want search", m.State.FocusPane)
+		}
+		if m.searchInput != "" {
+			t.Fatalf("searchInput = %q, want empty", m.searchInput)
+		}
+	})
+
+	t.Run("slash no-ops without loaded split patch", func(t *testing.T) {
+		t.Parallel()
+
+		m := NewModel(splitState(), WithPatchLoader(&mockPatchLoader{}))
+		m.width = 120
+		m.height = 30
+		m, _ = sendKey(m, "/")
+
+		if m.State.FocusPane != model.PaneFiles {
+			t.Fatalf("FocusPane = %q, want files", m.State.FocusPane)
+		}
+	})
+
+	t.Run("hunk navigation drives visible split patch", func(t *testing.T) {
+		t.Parallel()
+
+		m := splitModelWithLoadedPatch(t)
+		m, _ = sendKey(m, "n")
+		if m.patchViewport.CurrentHunk != 1 {
+			t.Fatalf("after n CurrentHunk = %d, want 1", m.patchViewport.CurrentHunk)
+		}
+		m, _ = sendKey(m, "p")
+		if m.patchViewport.CurrentHunk != 0 {
+			t.Fatalf("after p CurrentHunk = %d, want 0", m.patchViewport.CurrentHunk)
+		}
+		m, _ = sendKey(m, "}")
+		if m.patchViewport.CurrentHunk != 1 {
+			t.Fatalf("after } CurrentHunk = %d, want 1", m.patchViewport.CurrentHunk)
+		}
+		m, _ = sendKey(m, "{")
+		if m.patchViewport.CurrentHunk != 0 {
+			t.Fatalf("after { CurrentHunk = %d, want 0", m.patchViewport.CurrentHunk)
+		}
+	})
+}
+
+func TestFileListFocusSPersistsForNextPatchLoad(t *testing.T) {
+	t.Parallel()
+
+	m := modelWithLoader()
+	m.State.Layout = model.LayoutModal
+	m, _ = sendKey(m, "s")
+	if m.State.PatchDiffMode != model.PatchDiffModeSideBySide {
+		t.Fatalf("PatchDiffMode = %v, want side-by-side", m.State.PatchDiffMode)
+	}
+	if m.patchViewport != nil {
+		t.Fatal("patchViewport should still be nil before selecting a file")
+	}
+
+	m = enterAndLoad(t, m)
+	if m.patchViewport == nil {
+		t.Fatal("expected patch viewport after loading")
+	}
+	if m.patchViewport.DiffMode != model.PatchDiffModeSideBySide {
+		t.Fatalf("viewport DiffMode = %v, want persisted side-by-side", m.patchViewport.DiffMode)
+	}
+}
+
+func TestPatchFocusChangedFileJumps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("]c selects and loads next changed file", func(t *testing.T) {
+		t.Parallel()
+
+		m := splitModelWithLoadedPatch(t)
+		m.State.FocusPane = model.PanePatch
+		m.State.CacheGeneration = 5
+		m.State.FileChangeGen = map[string]int{"new.go": 5}
+
+		m, cmd := sendKey(m, "]")
+		if cmd == nil {
+			t.Fatal("] should start pending key timeout")
+		}
+		m, cmd = sendKey(m, "c")
+
+		if m.State.SelectedFile != 1 {
+			t.Fatalf("SelectedFile = %d, want 1", m.State.SelectedFile)
+		}
+		if cmd == nil {
+			t.Fatal("]c from patch focus should load the newly selected file")
+		}
+	})
+
+	t.Run("[c selects and loads previous changed file", func(t *testing.T) {
+		t.Parallel()
+
+		m := splitModelWithLoadedPatch(t)
+		m.State.FocusPane = model.PanePatch
+		m.State.SelectedFile = 1
+		m.State.CacheGeneration = 5
+		m.State.FileChangeGen = map[string]int{"main.go": 5}
+
+		m, cmd := sendKey(m, "[")
+		if cmd == nil {
+			t.Fatal("[ should start pending key timeout")
+		}
+		m, cmd = sendKey(m, "c")
+
+		if m.State.SelectedFile != 0 {
+			t.Fatalf("SelectedFile = %d, want 0", m.State.SelectedFile)
+		}
+		if cmd == nil {
+			t.Fatal("[c from patch focus should load the newly selected file")
+		}
+	})
+}
+
 func TestSplitModeJK_AutoLoadsPatch(t *testing.T) {
 	t.Parallel()
 

@@ -94,7 +94,7 @@ func TestCommitUI_CKeyIgnoredWhenNoProvider(t *testing.T) {
 	}
 }
 
-func TestCommitUI_CKeyIgnoredFromPatchPane(t *testing.T) {
+func TestCommitUI_CKeyTriggersGenerationFromPatchPane(t *testing.T) {
 	t.Parallel()
 
 	provider := &mockCommitProvider{message: "feat: add feature"}
@@ -104,11 +104,16 @@ func TestCommitUI_CKeyIgnoredFromPatchPane(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m, _ = sendKey(m, "c")
+	m, cmd := sendKey(m, "c")
 
-	// c should not be handled in patch pane — only from file list
-	if m.State.FocusPane == model.PaneCommit {
-		t.Error("c should not trigger commit from patch pane")
+	if m.State.FocusPane != model.PaneCommit {
+		t.Errorf("FocusPane = %q, want %q", m.State.FocusPane, model.PaneCommit)
+	}
+	if !m.State.CommitState.InFlight {
+		t.Error("CommitState.InFlight = false, want true")
+	}
+	if cmd == nil {
+		t.Fatal("expected async Cmd for commit generation from patch pane")
 	}
 }
 

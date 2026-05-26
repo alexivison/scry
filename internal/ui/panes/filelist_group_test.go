@@ -60,24 +60,19 @@ func TestRenderFileListUngrouped_NoHeaders(t *testing.T) {
 	}
 }
 
-func TestRenderFileListGrouped_FreshnessAndFlagsWork(t *testing.T) {
+func TestRenderFileListGrouped_FreshnessWorks(t *testing.T) {
 	t.Parallel()
 
 	opts := FileListOpts{
 		GroupByDirectory: true,
 		ChangeGen:        map[string]int{"cmd/main.go": 5},
 		CurrentGen:       5,
-		FlaggedFiles:     map[string]bool{"internal/app.go": true},
 	}
 	output, _ := RenderFileList(groupTestFiles(), 0, 0, 60, 20, true, opts)
 
 	// Freshness marker (●) should appear for hot file.
 	if !strings.Contains(output, "●") {
 		t.Error("grouped output should show freshness marker for hot file")
-	}
-	// Flag marker (⚑) should appear for flagged file.
-	if !strings.Contains(output, "⚑") {
-		t.Error("grouped output should show flag marker for flagged file")
 	}
 }
 
