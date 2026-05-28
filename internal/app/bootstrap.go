@@ -322,9 +322,10 @@ func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath 
 
 	patchSvc := &diff.PatchService{Runner: runner}
 	return ui.DrillDownResult{
-		Compare:     cmp,
-		Files:       files,
-		PatchLoader: patchSvc,
+		Compare:       cmp,
+		Files:         files,
+		PatchLoader:   patchSvc,
+		FileDiscarder: &fileDiscarderImpl{runner: runner, workdir: repo.WorktreeRoot},
 	}, nil
 }
 

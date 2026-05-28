@@ -206,6 +206,50 @@ func TestDiscard_UntrackedFileInWorktreeDrillDown_ConfirmExecutes(t *testing.T) 
 	}
 }
 
+// TestDiscard_DrillDownWiresUpDiscarder verifies that the FileDiscarder
+// carried on a DrillDownResult replaces the model's discarder, so a worktree
+// drill-down inherits per-worktree discard capability.
+func TestDiscard_DrillDownWiresUpDiscarder(t *testing.T) {
+	t.Parallel()
+
+	disc := &mockDiscarder{}
+	state := model.AppState{
+		WorktreeMode: true,
+		DashboardState: model.DashboardState{
+			DrillDown:       true,
+			DrillGeneration: 1,
+		},
+		FocusPane: model.PaneFiles,
+		Patches:   make(map[string]model.PatchLoadState),
+	}
+	m := NewModel(state)
+	m.width = 80
+	m.height = 30
+
+	files := []model.FileSummary{
+		{Path: "main.go", Status: model.StatusModified, Additions: 1, Deletions: 1},
+	}
+	updated, _ := m.Update(DrillDownLoadedMsg{
+		Result: DrillDownResult{
+			Compare:       model.ResolvedCompare{BaseRef: "abc", WorkingTree: true, DiffRange: "abc"},
+			Files:         files,
+			FileDiscarder: disc,
+		},
+		Generation: 1,
+	})
+	um := updated.(Model)
+
+	if um.fileDiscarder != FileDiscarder(disc) {
+		t.Fatalf("fileDiscarder should be set from DrillDownResult, got %T", um.fileDiscarder)
+	}
+
+	updated2, _ := um.Update(keyMsg('X'))
+	um2 := updated2.(Model)
+	if !um2.State.ConfirmDiscard {
+		t.Fatal("X should open discard confirmation after drill-down wires up discarder")
+	}
+}
+
 func TestDiscard_CancelWithN(t *testing.T) {
 	t.Parallel()
 
