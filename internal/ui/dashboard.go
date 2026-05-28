@@ -24,9 +24,10 @@ type WorktreeLoader interface {
 
 // DrillDownResult holds the resolved data for a worktree drill-down.
 type DrillDownResult struct {
-	Compare     model.ResolvedCompare
-	Files       []model.FileSummary
-	PatchLoader PatchLoader
+	Compare       model.ResolvedCompare
+	Files         []model.FileSummary
+	PatchLoader   PatchLoader
+	FileDiscarder FileDiscarder
 }
 
 // DrillDownProvider creates the diff context for a specific worktree.
@@ -386,6 +387,7 @@ func (m Model) handleDrillDownLoaded(msg DrillDownLoadedMsg) (tea.Model, tea.Cmd
 	m.State.Files = msg.Result.Files
 	m.State.Patches = make(map[string]model.PatchLoadState)
 	m.patchLoader = msg.Result.PatchLoader
+	m.fileDiscarder = msg.Result.FileDiscarder
 
 	// Reconcile selection: match by path, fallback to clamped index.
 	review.ReconcileSelection(&m.State, prevPath)
