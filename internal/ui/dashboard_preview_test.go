@@ -6,7 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/ui/panes"
 )
 
 type mockPreviewLoader struct {
@@ -25,6 +29,54 @@ func previewFiles() []model.FileSummary {
 		{Path: "main.go", Status: model.StatusModified, Additions: 10, Deletions: 5},
 		{Path: "new.go", Status: model.StatusAdded, Additions: 30, Deletions: 0},
 		{Path: "old.go", Status: model.StatusDeleted, Additions: 0, Deletions: 20},
+	}
+}
+
+func previewTreeFiles() []model.FileSummary {
+	return []model.FileSummary{
+		{Path: "cmd/scry/main.go", Status: model.StatusModified, Additions: 10, Deletions: 5},
+		{Path: "cmd/scry/run.go", Status: model.StatusAdded, Additions: 30},
+		{Path: "internal/app/bootstrap.go", Status: model.StatusModified, Additions: 2, Deletions: 1},
+		{Path: "internal/model/state.go", Status: model.StatusModified, Additions: 4},
+		{Path: "internal/ui/dashboard.go", Status: model.StatusModified, Additions: 8, Deletions: 3},
+		{Path: "internal/ui/panes/preview.go", Status: model.StatusModified, Additions: 6},
+		{Path: "README.md", Status: model.StatusDeleted, Deletions: 12},
+	}
+}
+
+func TestDashboardPreview_VisibleBeforeFilesLoad(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	m := NewModel(state, WithPreviewLoader(&mockPreviewLoader{files: previewFiles()}))
+	m.width = 120
+	m.height = 30
+
+	output := ansi.Strip(m.View())
+
+	if !strings.Contains(output, "Preview") {
+		t.Fatalf("wide dashboard should render preview pane before files load, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Loading preview") {
+		t.Fatalf("empty pending preview should show loading placeholder, got:\n%s", output)
+	}
+}
+
+func TestDashboardPreview_LoadsAfterWideWindowSize(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	m := NewModel(state, WithPreviewLoader(&mockPreviewLoader{files: previewFiles()}))
+
+	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("wide window size should trigger initial preview load")
+	}
+	m = deepDrain(t, m, cmd)
+	if len(m.State.DashboardState.PreviewFiles) == 0 {
+		t.Fatal("preview files should be populated after wide resize load")
 	}
 }
 
@@ -108,13 +160,42 @@ func TestDashboardPreview_RenderInSplitView(t *testing.T) {
 	m := NewModel(state)
 	m.width = 120
 	m.height = 30
-	m.State.DashboardState.PreviewFiles = previewFiles()
+	m.State.DashboardState.PreviewFiles = previewTreeFiles()
+
+	output := ansi.Strip(m.View())
+
+	if !strings.Contains(output, "├─ [-] cmd/") || !strings.Contains(output, "│ └─ [-] scry/") {
+		t.Fatalf("preview should use tree-style directory rows, got:\n%s", output)
+	}
+	if !strings.Contains(output, "preview.go") {
+		t.Fatalf("preview should show more than five files when height allows, got:\n%s", output)
+	}
+	if !strings.Contains(output, "+10 -5") {
+		t.Fatalf("preview should keep per-file counts, got:\n%s", output)
+	}
+}
+
+func TestDashboardPreview_HeaderShowsAggregateCounts(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	m := NewModel(state)
+	m.width = 120
+	m.height = 30
+	m.State.DashboardState.PreviewFiles = previewTreeFiles()
 
 	output := m.View()
+	header := strings.Split(ansi.Strip(output), "\n")[0]
+	counts := panes.RenderCounts(model.FileSummary{Additions: 60, Deletions: 21}, false)
 
-	// Preview should show file names and +/- counts.
-	if !strings.Contains(output, "main.go") {
-		t.Error("preview should show main.go")
+	if !strings.Contains(header, "Preview") {
+		t.Fatalf("preview header missing title, got:\n%s", output)
+	}
+	if !strings.HasSuffix(header, "+60 -21") {
+		t.Fatalf("preview header should right-align aggregate counts, got header %q", header)
+	}
+	if !strings.Contains(output, counts) {
+		t.Fatalf("preview header should preserve styled aggregate counts, got:\n%s", output)
 	}
 }
 

@@ -310,6 +310,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tooSmall = false
 			m.sizeErr = ""
 		}
+		if m.State.WorktreeMode && m.State.FocusPane == model.PaneDashboard && !m.State.DashboardState.DrillDown {
+			if cmd := m.maybeLoadPreview(); cmd != nil {
+				return m, cmd
+			}
+		}
 		return m, nil
 
 	case PatchLoadedMsg:
@@ -1227,6 +1232,8 @@ func (m Model) toggleCompareBasis() (tea.Model, tea.Cmd) {
 		}
 
 		m.State.DashboardState.PreviewFiles = nil
+		m.State.DashboardState.PreviewSnap = ""
+		m.State.DashboardState.PreviewErr = ""
 		if cmd := m.maybeLoadPreview(); cmd != nil {
 			return m, cmd
 		}

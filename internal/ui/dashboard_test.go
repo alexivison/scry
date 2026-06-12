@@ -774,15 +774,65 @@ func TestReconcileActivityUpdatesOnNewCommit(t *testing.T) {
 func TestReconcileActivityNewWorktree(t *testing.T) {
 	t.Parallel()
 
-	old := []model.WorktreeInfo{}
+	past := time.Now().Add(-5 * time.Minute)
+	old := []model.WorktreeInfo{
+		{Path: "/main", Branch: "main", CommitHash: "abc", LastActivityAt: past},
+	}
 	new := []model.WorktreeInfo{
+		{Path: "/main", Branch: "main", CommitHash: "abc"},
 		{Path: "/new", Branch: "feat", CommitHash: "xyz"},
 	}
 	before := time.Now()
 	reconcileActivity(old, new)
 
-	if new[0].LastActivityAt.Before(before) {
+	if new[0].LastActivityAt != past {
+		t.Errorf("existing worktree LastActivityAt = %v, want %v", new[0].LastActivityAt, past)
+	}
+	if new[1].LastActivityAt.Before(before) {
 		t.Error("new worktree should get current time as LastActivityAt")
+	}
+}
+
+func TestReconcileActivityFirstLoadLeavesActivityBlank(t *testing.T) {
+	t.Parallel()
+
+	old := []model.WorktreeInfo{}
+	new := []model.WorktreeInfo{
+		{Path: "/main", Branch: "main", CommitHash: "abc"},
+		{Path: "/feature", Branch: "feature", CommitHash: "def", Dirty: true, ChangedFiles: 2},
+	}
+	reconcileActivity(old, new)
+
+	for _, wt := range new {
+		if !wt.LastActivityAt.IsZero() {
+			t.Fatalf("first load should not initialize activity timer for %s: %v", wt.Path, wt.LastActivityAt)
+		}
+	}
+}
+
+func TestReconcileActivityPreservesStableTimesWhenFreshMetadataMissing(t *testing.T) {
+	t.Parallel()
+
+	stablePast := time.Now().Add(-15 * time.Minute)
+	changedPast := time.Now().Add(-30 * time.Minute)
+	old := []model.WorktreeInfo{
+		{Path: "/stable", Branch: "same-name", CommitHash: "aaa1111", Dirty: false, ChangedFiles: 0, LastActivityAt: stablePast},
+		{Path: "/changed", Branch: "same-name", CommitHash: "bbb2222", Dirty: false, ChangedFiles: 0, LastActivityAt: changedPast},
+	}
+	new := []model.WorktreeInfo{
+		// Commit metadata can be absent in fresh loader output; that alone is
+		// not activity and should not reset every timer.
+		{Path: "/stable", Branch: "same-name", Dirty: false, ChangedFiles: 0},
+		{Path: "/changed", Branch: "same-name", CommitHash: "ccc3333", Dirty: false, ChangedFiles: 0},
+	}
+	before := time.Now()
+	reconcileActivity(old, new)
+
+	if new[0].LastActivityAt != stablePast {
+		t.Errorf("stable LastActivityAt = %v, want %v", new[0].LastActivityAt, stablePast)
+	}
+	if new[1].LastActivityAt.Before(before) {
+		t.Errorf("changed LastActivityAt = %v, want fresh timestamp after %v", new[1].LastActivityAt, before)
 	}
 }
 

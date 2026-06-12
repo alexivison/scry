@@ -317,6 +317,8 @@ func (m Model) handleWorktreeRemoved(msg WorktreeRemovedMsg) (tea.Model, tea.Cmd
 	}
 	// Clear stale preview from the deleted worktree.
 	ds.PreviewFiles = nil
+	ds.PreviewSnap = ""
+	ds.PreviewErr = ""
 
 	// Schedule a refresh to get authoritative state and reload preview.
 	return m.handleDashboardTick()
@@ -458,9 +460,14 @@ func (m *Model) maybeLoadPreview() tea.Cmd {
 	ds := &m.State.DashboardState
 	if m.width < 100 {
 		ds.PreviewFiles = nil // clear stale preview at narrow width
+		ds.PreviewSnap = ""
+		ds.PreviewErr = ""
 		return nil
 	}
 	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) {
+		ds.PreviewFiles = nil
+		ds.PreviewSnap = ""
+		ds.PreviewErr = ""
 		return nil
 	}
 	wt := ds.Worktrees[ds.SelectedIdx]
@@ -470,12 +477,16 @@ func (m *Model) maybeLoadPreview() tea.Cmd {
 	if ds.PreviewCache != nil {
 		if entry, ok := ds.PreviewCache[snap]; ok {
 			ds.PreviewFiles = entry.Files
+			ds.PreviewSnap = snap
+			ds.PreviewErr = ""
 			return nil
 		}
 	}
 
 	// Cache miss: clear stale preview and fire async load.
 	ds.PreviewFiles = nil
+	ds.PreviewSnap = ""
+	ds.PreviewErr = ""
 	loader := m.previewLoader
 	path := wt.Path
 	basis := m.State.CompareBasis
@@ -489,15 +500,18 @@ func (m *Model) maybeLoadPreview() tea.Cmd {
 func (m Model) handlePreviewLoaded(msg PreviewLoadedMsg) (tea.Model, tea.Cmd) {
 	ds := &m.State.DashboardState
 	if msg.Err != nil {
-		ds.PreviewFiles = nil
+		if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
+			currentSnap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx], m.State.CompareBasis)
+			if msg.Snap == currentSnap {
+				ds.PreviewFiles = nil
+				ds.PreviewSnap = msg.Snap
+				ds.PreviewErr = msg.Err.Error()
+			}
+		}
 		return m, nil
 	}
 
-	// Limit to top 5 files.
 	files := msg.Files
-	if len(files) > 5 {
-		files = files[:5]
-	}
 
 	// Store in cache.
 	if ds.PreviewCache == nil {
@@ -516,6 +530,8 @@ func (m Model) handlePreviewLoaded(msg PreviewLoadedMsg) (tea.Model, tea.Cmd) {
 		currentSnap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx], m.State.CompareBasis)
 		if msg.Snap == currentSnap {
 			ds.PreviewFiles = files
+			ds.PreviewSnap = msg.Snap
+			ds.PreviewErr = ""
 		}
 	}
 	return m, nil
@@ -531,22 +547,38 @@ func reconcileActivity(old, new []model.WorktreeInfo) {
 
 	now := time.Now()
 	for i := range new {
+		loadedActivity := new[i].LastActivityAt
 		prev, existed := oldByPath[new[i].Path]
 		if !existed {
+			if len(old) == 0 {
+				new[i].LastActivityAt = loadedActivity
+				continue
+			}
 			// New worktree — mark as active now.
-			new[i].LastActivityAt = now
+			if loadedActivity.IsZero() {
+				new[i].LastActivityAt = now
+			}
 			continue
 		}
 		// Carry forward previous activity timestamp.
 		new[i].LastActivityAt = prev.LastActivityAt
 
 		// Detect state changes: dirty/clean transition, count change, new commit.
-		if new[i].Dirty != prev.Dirty ||
-			new[i].ChangedFiles != prev.ChangedFiles ||
-			new[i].CommitHash != prev.CommitHash {
-			new[i].LastActivityAt = now
+		if worktreeActivityChanged(prev, new[i]) {
+			if loadedActivity.IsZero() {
+				new[i].LastActivityAt = now
+			} else {
+				new[i].LastActivityAt = loadedActivity
+			}
 		}
 	}
+}
+
+func worktreeActivityChanged(prev, next model.WorktreeInfo) bool {
+	if next.Dirty != prev.Dirty || next.ChangedFiles != prev.ChangedFiles {
+		return true
+	}
+	return prev.CommitHash != "" && next.CommitHash != "" && next.CommitHash != prev.CommitHash
 }
 
 func (m Model) viewDashboard() string {
@@ -558,7 +590,7 @@ func (m Model) viewDashboard() string {
 
 	// Render the base dashboard (list or split view).
 	var base string
-	showPreview := m.width >= 100 && len(ds.PreviewFiles) > 0
+	showPreview := m.dashboardPreviewVisible()
 	if showPreview {
 		base = m.viewDashboardSplit(outerHeight)
 	} else {
@@ -598,6 +630,14 @@ func (m Model) viewDashboard() string {
 	return base
 }
 
+func (m Model) dashboardPreviewVisible() bool {
+	if m.width < 100 {
+		return false
+	}
+	ds := m.State.DashboardState
+	return m.previewLoader != nil || len(ds.PreviewFiles) > 0 || ds.PreviewSnap != "" || ds.PreviewErr != ""
+}
+
 // viewDashboardSplit renders the dashboard with a side preview pane.
 func (m Model) viewDashboardSplit(outerHeight int) string {
 	ds := m.State.DashboardState
@@ -620,13 +660,66 @@ func (m Model) viewDashboardSplit(outerHeight int) string {
 	listInnerW, listInnerH := panes.UnboxedSectionDimensions(listW, outerHeight)
 	previewInnerW, previewInnerH := panes.UnboxedSectionDimensions(previewW, outerHeight)
 
-	listContent := panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, listInnerW, listInnerH)
-	previewContent := panes.RenderPreview(ds.PreviewFiles, previewInnerW, previewInnerH)
+	var listContent string
+	if len(ds.Worktrees) == 0 && m.State.RefreshInFlight {
+		listContent = "Loading worktrees..."
+	} else {
+		listContent = panes.RenderDashboard(ds.Worktrees, ds.SelectedIdx, ds.ScrollOffset, listInnerW, listInnerH)
+	}
+	previewContent := m.dashboardPreviewContent(previewInnerW, previewInnerH)
+	previewMeta := m.dashboardPreviewMeta()
 
 	left := panes.UnboxedSection(listContent, "Worktrees", meta, listW, outerHeight, true)
-	right := panes.UnboxedSection(previewContent, "Preview", "", previewW, outerHeight, false)
+	right := panes.UnboxedSection(previewContent, "Preview", previewMeta, previewW, outerHeight, false)
 
 	return panes.JoinColumns(left, right, listW, previewW)
+}
+
+func (m Model) dashboardPreviewMeta() string {
+	ds := m.State.DashboardState
+	if ds.PreviewErr != "" || !m.dashboardPreviewFilesCurrent() {
+		return ""
+	}
+	counts := aggregateFileCounts(ds.PreviewFiles, model.FileFilterAll)
+	return panes.RenderCounts(counts, false)
+}
+
+func (m Model) dashboardPreviewContent(width, height int) string {
+	ds := m.State.DashboardState
+	if len(ds.Worktrees) == 0 {
+		if m.State.RefreshInFlight {
+			return "Loading worktrees..."
+		}
+		return "No worktree selected."
+	}
+	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) {
+		return "Select a worktree."
+	}
+
+	snap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx], m.State.CompareBasis)
+	if len(ds.PreviewFiles) > 0 && (ds.PreviewSnap == "" || ds.PreviewSnap == snap) {
+		return panes.RenderPreview(ds.PreviewFiles, width, height)
+	}
+	if ds.PreviewSnap == snap {
+		if ds.PreviewErr != "" {
+			return fmt.Sprintf("Preview failed: %s", ds.PreviewErr)
+		}
+		return panes.RenderPreview(ds.PreviewFiles, width, height)
+	}
+	if m.previewLoader != nil {
+		return "Loading preview..."
+	}
+	return "No preview available."
+}
+
+func (m Model) dashboardPreviewFilesCurrent() bool {
+	ds := m.State.DashboardState
+	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) {
+		return false
+	}
+
+	snap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx], m.State.CompareBasis)
+	return ds.PreviewSnap == snap || (ds.PreviewSnap == "" && len(ds.PreviewFiles) > 0)
 }
 
 // dashboardFooter returns the footer text for the worktree pane.
