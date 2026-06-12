@@ -14,13 +14,14 @@ import (
 
 // LinesPerEntry is the number of terminal lines each worktree entry occupies.
 const LinesPerEntry = 2
+const worktreeRowHPad = 1
 
 var (
-	cleanStyle    = lipgloss.NewStyle().Foreground(theme.Clean)
-	dirtyStyle    = lipgloss.NewStyle().Foreground(theme.Dirty)
-	hashStyle     = lipgloss.NewStyle().Foreground(theme.Muted)
-	staleStyle    = lipgloss.NewStyle().Foreground(theme.Error)
-	selectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.BrightText).Background(theme.SelectedBg)
+	cleanStyle     = lipgloss.NewStyle().Foreground(theme.Clean)
+	dirtyStyle     = lipgloss.NewStyle().Foreground(theme.Dirty)
+	hashStyle      = lipgloss.NewStyle().Foreground(theme.Muted)
+	staleStyle     = lipgloss.NewStyle().Foreground(theme.Error)
+	selectedStyle  = lipgloss.NewStyle().Bold(true).Background(theme.SelectedBg)
 	separatorStyle = lipgloss.NewStyle().Foreground(theme.ChromeFaint)
 
 	// textStyle is the default style for non-selected text (file paths, branch names).
@@ -71,7 +72,7 @@ func RenderDashboard(worktrees []model.WorktreeInfo, selectedIdx, scrollOffset, 
 
 // renderWorktreeEntry returns two lines for a worktree entry:
 //
-//	Line 1: [prefix][status] [branch]              [count]
+//	Line 1: [status] [branch]              [count]
 //	Line 2: [indent][staleness] [hash] [subject]   [activity]
 func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, truncStyle lipgloss.Style) (string, string) {
 	selected := idx == selectedIdx
@@ -86,21 +87,13 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, tru
 		status = cleanStyle.Render("●")
 	}
 
-	prefix := "  "
-	if selected {
-		prefix = "> "
-	}
-
-	// --- Primary line: [prefix][status] [branch] ... [count] ---
+	// --- Primary line: [status] [branch] ... [count] ---
 	// Fall back to path basename for bare/detached worktrees with no branch.
 	branch := wt.Branch
 	if branch == "" {
 		branch = filepath.Base(wt.Path)
 	}
 	branchStyle := textStyle
-	if selected {
-		branchStyle = selectedStyle
-	}
 
 	countStr := ""
 	countPlain := ""
@@ -113,9 +106,11 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, tru
 		countStr = dirtyStyle.Render(countPlain)
 	}
 
-	// Budget: prefix(2) + status(1) + space(1) + branch + gap(2) + count
-	countWidth := len(countPlain)
-	branchBudget := width - 2 - 1 - 1 - 2 - countWidth
+	contentWidth := worktreeRowContentWidth(width)
+
+	// Budget: status(1) + space(1) + branch + gap(2) + count
+	countWidth := lipgloss.Width(countPlain)
+	branchBudget := contentWidth - 1 - 1 - 2 - countWidth
 	if branchBudget < 5 {
 		branchBudget = 5
 	}
@@ -125,18 +120,14 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, tru
 
 	var primary string
 	if countStr != "" {
-		gap := branchBudget - lipgloss.Width(branch)
-		if gap < 2 {
-			gap = 2
-		}
-		primary = prefix + status + " " + branchStyle.Render(branch) + strings.Repeat(" ", gap) + countStr
+		primary = alignRight(status+" "+branchStyle.Render(branch), countStr, contentWidth)
 	} else {
-		primary = prefix + status + " " + branchStyle.Render(branch)
+		primary = status + " " + branchStyle.Render(branch)
 	}
-	primary = truncStyle.Render(primary)
+	primary = renderWorktreeLine(primary, width, selected, truncStyle)
 
 	// --- Secondary line: [indent][staleness] [hash] [subject] ... [activity] ---
-	indent := "    " // align with branch text (prefix + status + space)
+	indent := "  " // align with branch text (status + space)
 
 	// Staleness badge from git commit age.
 	stalenessLabel, stalenessStyle := StalenessBadge(wt.HeadCommittedAt)
@@ -152,9 +143,9 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, tru
 	commitHash := hashStyle.Render(wt.CommitHash)
 	commitHashWidth := lipgloss.Width(wt.CommitHash)
 
-	// Budget: indent(4) + staleness + space(1) + hash + space(1) + subject + gap(2) + activity
-	activityWidth := len(activityPlain)
-	subjectBudget := width - 4 - stalenessWidth - 1 - commitHashWidth - 1 - 2 - activityWidth
+	// Budget: indent(2) + staleness + space(1) + hash + space(1) + subject + gap(2) + activity
+	activityWidth := lipgloss.Width(activityPlain)
+	subjectBudget := contentWidth - 2 - stalenessWidth - 1 - commitHashWidth - 1 - 2 - activityWidth
 	if subjectBudget < 5 {
 		subjectBudget = 5
 	}
@@ -166,17 +157,54 @@ func renderWorktreeEntry(wt model.WorktreeInfo, idx, selectedIdx, width int, tru
 
 	var secondary string
 	if activityPlain != "" {
-		gap := subjectBudget - lipgloss.Width(subject)
-		if gap < 2 {
-			gap = 2
-		}
-		secondary = indent + staleness + " " + commitHash + " " + subject + strings.Repeat(" ", gap) + activity
+		secondary = alignRight(indent+staleness+" "+commitHash+" "+subject, activity, contentWidth)
 	} else {
 		secondary = indent + staleness + " " + commitHash + " " + subject
 	}
-	secondary = truncStyle.Render(secondary)
+	secondary = renderWorktreeLine(secondary, width, selected, truncStyle)
 
 	return primary, secondary
+}
+
+func renderWorktreeLine(line string, width int, selected bool, truncStyle lipgloss.Style) string {
+	contentWidth := worktreeRowContentWidth(width)
+	line = padOrTruncate(line, contentWidth)
+	if contentWidth < width {
+		rightPad := width - contentWidth - worktreeRowHPad
+		if rightPad < 0 {
+			rightPad = 0
+		}
+		line = strings.Repeat(" ", worktreeRowHPad) + line + strings.Repeat(" ", rightPad)
+	}
+	if selected {
+		return renderSelectedWorktreeLine(line)
+	}
+	return truncStyle.Render(line)
+}
+
+func renderSelectedWorktreeLine(line string) string {
+	prefix := stylePrefix(selectedStyle)
+	if prefix == "" {
+		return selectedStyle.Render(line)
+	}
+	return prefix + strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+prefix) + "\x1b[0m"
+}
+
+func stylePrefix(style lipgloss.Style) string {
+	const marker = "x"
+	rendered := style.Render(marker)
+	idx := strings.Index(rendered, marker)
+	if idx < 0 {
+		return ""
+	}
+	return rendered[:idx]
+}
+
+func worktreeRowContentWidth(width int) int {
+	if width <= worktreeRowHPad*2 {
+		return width
+	}
+	return width - worktreeRowHPad*2
 }
 
 // RelativeTime formats a timestamp as a relative duration string (e.g. "3s ago", "2m ago").

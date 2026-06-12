@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
 	"github.com/alexivison/scry/internal/model"
 )
 
@@ -90,7 +94,7 @@ func TestRenderDashboard(t *testing.T) {
 				}
 			},
 		},
-		"selected entry uses accent color not reverse video": {
+		"selected entry uses full-row highlight not reverse video": {
 			worktrees: sampleWorktrees(),
 			selected:  1,
 			scroll:    0,
@@ -103,15 +107,19 @@ func TestRenderDashboard(t *testing.T) {
 				if len(lines) < 5 {
 					t.Fatal("expected at least 5 lines")
 				}
-				// Line 3 should have the > prefix and branch name
-				if !strings.Contains(lines[3], ">") {
-					t.Error("selected primary line missing '>' prefix")
+				plainPrimary := ansi.Strip(lines[3])
+				plainSecondary := ansi.Strip(lines[4])
+				if strings.Contains(plainPrimary, ">") || strings.Contains(plainSecondary, ">") {
+					t.Errorf("selected lines should not render cursor gutter, got %q / %q", plainPrimary, plainSecondary)
+				}
+				if !strings.HasPrefix(plainPrimary, " ● feature") {
+					t.Errorf("selected primary line should shift left, got %q", plainPrimary)
 				}
 				if !strings.Contains(lines[3], "feature") {
 					t.Error("selected primary line missing branch name")
 				}
 				// Should NOT contain reverse video escape (ESC[7m)
-				if strings.Contains(lines[3], "\x1b[7m") {
+				if strings.Contains(lines[3], "\x1b[7m") || strings.Contains(lines[4], "\x1b[7m") {
 					t.Error("selected line should not use reverse video")
 				}
 			},
@@ -284,6 +292,52 @@ func TestRenderDashboardShowsStaleness(t *testing.T) {
 	}
 }
 
+func TestRenderDashboardSelectionHasNoGutterAndSpansRows(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	wts := []model.WorktreeInfo{
+		{Path: "/p", Branch: "main", CommitHash: "abc", Subject: "initial", Dirty: true, ChangedFiles: 3},
+		{Path: "/p2", Branch: "feature", CommitHash: "def", Subject: "feature", Dirty: false},
+	}
+	const width = 54
+	output := RenderDashboard(wts, 0, 0, width, 10)
+	rawLines := strings.Split(output, "\n")
+	plainLines := strings.Split(ansi.Strip(output), "\n")
+
+	if strings.Contains(plainLines[0], ">") || strings.Contains(plainLines[1], ">") {
+		t.Fatalf("selected worktree should not render cursor gutter, got:\n%s", ansi.Strip(output))
+	}
+	if !strings.HasPrefix(plainLines[0], " ● main") {
+		t.Fatalf("primary row should keep one-cell left padding after gutter removal, got %q", plainLines[0])
+	}
+	if !strings.HasPrefix(plainLines[1], "   -- abc initial") {
+		t.Fatalf("secondary row should keep one-cell row padding and align under branch text, got %q", plainLines[1])
+	}
+	if !strings.HasSuffix(plainLines[0], " ") || !strings.HasSuffix(strings.TrimRight(plainLines[0], " "), "3 files") {
+		t.Fatalf("primary row should keep one-cell right padding after count, got %q", plainLines[0])
+	}
+	for i := 0; i < 2; i++ {
+		if got := lipgloss.Width(rawLines[i]); got != width {
+			t.Fatalf("selected line %d width = %d, want %d: %q", i, got, width, plainLines[i])
+		}
+		if !strings.Contains(rawLines[i], "48;5;237") {
+			t.Fatalf("selected line %d should carry selected background across the row, got raw %q", i, rawLines[i])
+		}
+	}
+	reappliedBg := "\x1b[0m" + stylePrefix(selectedStyle)
+	if !strings.Contains(rawLines[0], reappliedBg) || !strings.Contains(rawLines[1], reappliedBg) {
+		t.Fatalf("selected rows should reapply background after colored segments, got raw primary %q secondary %q", rawLines[0], rawLines[1])
+	}
+	if !strings.Contains(rawLines[0], "38;5;3") && !strings.Contains(rawLines[0], "[33m") {
+		t.Fatalf("selected primary row should preserve dirty status/count foreground, got raw %q", rawLines[0])
+	}
+	if !strings.Contains(rawLines[1], "38;5;8") && !strings.Contains(rawLines[1], "[90m") {
+		t.Fatalf("selected secondary row should preserve muted hash/activity foreground, got raw %q", rawLines[1])
+	}
+}
+
 func TestRelativeTime(t *testing.T) {
 	t.Parallel()
 
@@ -326,14 +380,14 @@ func TestStalenessBadge(t *testing.T) {
 		age  time.Duration
 		want string
 	}{
-		"hours":      {age: 6 * time.Hour, want: "6h"},
-		"days":       {age: 3 * 24 * time.Hour, want: "3d"},
-		"one week":   {age: 7 * 24 * time.Hour, want: "1w"},
-		"two weeks":  {age: 14 * 24 * time.Hour, want: "2w"},
-		"months":     {age: 90 * 24 * time.Hour, want: "3mo"},
-		"sub-hour":   {age: 30 * time.Minute, want: "30m"},
-		"future":     {age: -5 * time.Minute, want: "0m"},
-		"zero":       {age: 0, want: "--"},
+		"hours":     {age: 6 * time.Hour, want: "6h"},
+		"days":      {age: 3 * 24 * time.Hour, want: "3d"},
+		"one week":  {age: 7 * 24 * time.Hour, want: "1w"},
+		"two weeks": {age: 14 * 24 * time.Hour, want: "2w"},
+		"months":    {age: 90 * 24 * time.Hour, want: "3mo"},
+		"sub-hour":  {age: 30 * time.Minute, want: "30m"},
+		"future":    {age: -5 * time.Minute, want: "0m"},
+		"zero":      {age: 0, want: "--"},
 	}
 
 	for name, tc := range tests {

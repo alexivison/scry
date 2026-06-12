@@ -4,13 +4,13 @@ import "time"
 
 // WorktreeInfo holds the display state for a single worktree in the dashboard.
 type WorktreeInfo struct {
-	Path           string    // absolute path
-	Branch         string    // short branch name (e.g. "main", "feature")
-	CommitHash     string    // short commit hash
-	Subject        string    // first line of commit message
-	Dirty          bool      // true if worktree has uncommitted changes
-	Bare           bool      // true if bare worktree
-	ChangedFiles   int       // number of changed files from git status
+	Path            string    // absolute path
+	Branch          string    // short branch name (e.g. "main", "feature")
+	CommitHash      string    // short commit hash
+	Subject         string    // first line of commit message
+	Dirty           bool      // true if worktree has uncommitted changes
+	Bare            bool      // true if bare worktree
+	ChangedFiles    int       // number of changed files from git status
 	HeadCommittedAt time.Time // committer date of HEAD commit (git-based staleness)
 	LastActivityAt  time.Time // updated when snapshot state changes (dirty, count, commit)
 }
@@ -35,6 +35,8 @@ type DashboardState struct {
 	// Preview pane state.
 	PreviewCache map[string]PreviewEntry // cache key (snap) → preview data
 	PreviewFiles []FileSummary           // current selection's preview (for rendering)
+	PreviewSnap  string                  // snapshot key for PreviewFiles/PreviewErr
+	PreviewErr   string                  // current selection's preview load error
 
 	// Deletion state.
 	ConfirmDelete  bool   // true when awaiting deletion confirmation

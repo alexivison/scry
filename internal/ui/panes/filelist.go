@@ -44,6 +44,7 @@ type FileListOpts struct {
 	Collapsed        map[string]bool
 	Cursor           int
 	UseCursor        bool
+	HideCursor       bool
 }
 
 // FileTreeRowKind identifies whether a visible file tree row is a directory or file.
@@ -118,7 +119,7 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 				tier = review.ComputeFreshness(gen, o.CurrentGen)
 			}
 		}
-		line := renderFileTreeRow(files, row, i == proj.Cursor, width, tier)
+		line := renderFileTreeRow(files, row, !o.HideCursor && i == proj.Cursor, width, tier)
 		if !active {
 			line = fileDimStyle.Render(line)
 		}
