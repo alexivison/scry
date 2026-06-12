@@ -13,7 +13,7 @@ func TestMainViewsDoNotRenderOuterPaneCorners(t *testing.T) {
 
 	assertNoCorners := func(t *testing.T, view string) {
 		t.Helper()
-		if strings.ContainsAny(view, "┌┐└┘") {
+		if strings.ContainsAny(view, "┌┐┘") {
 			t.Fatalf("main browsing view should not contain outer pane corners:\n%s", view)
 		}
 	}

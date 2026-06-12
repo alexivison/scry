@@ -518,9 +518,11 @@ func TestSplitView_ActivePaneIndicator(t *testing.T) {
 		m.height = 30
 		m.State.FocusPane = model.PaneFiles
 		output := m.View()
-		// The selected file should have the cursor prefix ">"
-		if !strings.Contains(output, ">") {
-			t.Error("active file list should show cursor >")
+		if strings.Contains(output, ">") {
+			t.Error("active file list should not show cursor >")
+		}
+		if !strings.Contains(output, "main.go") {
+			t.Error("active file list should show selected file")
 		}
 	})
 }

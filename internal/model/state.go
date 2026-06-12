@@ -47,6 +47,39 @@ const (
 	LoadFailed  LoadStatus = "failed"
 )
 
+// FileFilter controls which changed files are visible in the file tree.
+type FileFilter int
+
+const (
+	FileFilterAll FileFilter = iota
+	FileFilterTests
+	FileFilterNonTests
+)
+
+// Next returns the next file filter in the in-app cycle.
+func (f FileFilter) Next() FileFilter {
+	switch f {
+	case FileFilterAll:
+		return FileFilterNonTests
+	case FileFilterNonTests:
+		return FileFilterTests
+	default:
+		return FileFilterAll
+	}
+}
+
+// Label returns the footer label for the file filter.
+func (f FileFilter) Label() string {
+	switch f {
+	case FileFilterTests:
+		return "Tests"
+	case FileFilterNonTests:
+		return "Non-tests"
+	default:
+		return "All"
+	}
+}
+
 // PatchLoadState holds the result of loading a single file's patch.
 type PatchLoadState struct {
 	Status      LoadStatus
@@ -72,18 +105,21 @@ type CommitState struct {
 
 // AppState is the top-level UI state threaded through the Bubble Tea model.
 type AppState struct {
-	Compare          ResolvedCompare
-	CompareBasis     CompareBasis
-	Files            []FileSummary
-	SelectedFile     int // Index into Files. -1 when Files is empty.
-	Patches          map[string]PatchLoadState
-	CacheGeneration  int
-	IgnoreWhitespace bool
-	SearchQuery      string
-	FocusPane        Pane
-	Layout           LayoutMode
-	PatchLineMode    LineMode
-	PatchDiffMode    PatchDiffMode
+	Compare           ResolvedCompare
+	CompareBasis      CompareBasis
+	Files             []FileSummary
+	SelectedFile      int // Index into Files. -1 when the tree cursor is not on a file.
+	FileFilter        FileFilter
+	FileTreeCollapsed map[string]bool // directory path -> collapsed
+	FileTreeCursor    int             // Index into visible file tree rows.
+	Patches           map[string]PatchLoadState
+	CacheGeneration   int
+	IgnoreWhitespace  bool
+	SearchQuery       string
+	FocusPane         Pane
+	Layout            LayoutMode
+	PatchLineMode     LineMode
+	PatchDiffMode     PatchDiffMode
 
 	// Watch mode state (v0.2).
 	WatchEnabled    bool

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/alexivison/scry/internal/model"
 )
 
@@ -26,8 +28,12 @@ func TestRenderFileList_Basic(t *testing.T) {
 	if !strings.Contains(output, "main.go") {
 		t.Error("output should contain main.go")
 	}
-	if !strings.Contains(output, ">") {
-		t.Error("output should show selection cursor >")
+	plain := ansi.Strip(output)
+	if strings.Contains(plain, ">") {
+		t.Error("output should not show a left selection cursor >")
+	}
+	if !strings.Contains(plain, "M main.go") {
+		t.Error("selected row should show status icon adjacent to main.go")
 	}
 }
 
