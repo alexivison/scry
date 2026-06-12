@@ -107,35 +107,28 @@ func renderSectionHeader(title, meta string, width int, active bool) string {
 		return padOrTruncate(leftPad+titleStyle.Render(title), width)
 	}
 
-	minTitleWidth := availableWidth / 3
-	if minTitleWidth < 1 {
-		minTitleWidth = 1
+	metaWidth := lipgloss.Width(meta)
+	if metaWidth >= availableWidth {
+		meta = fitSectionHeaderText(meta, availableWidth)
+		return padOrTruncate(leftPad+renderSectionMeta(meta), width)
 	}
-	maxMetaWidth := availableWidth - minTitleWidth - 1
-	if maxMetaWidth < 0 {
-		maxMetaWidth = 0
-	}
-	meta = fitSectionHeaderText(meta, maxMetaWidth)
-	titleWidth := availableWidth - lipgloss.Width(meta)
-	if meta != "" {
-		titleWidth--
-	}
-	if titleWidth < 1 {
-		titleWidth = 1
-		meta = ""
-	}
+
+	titleWidth := availableWidth - metaWidth - 1
 	title = fitSectionHeaderText(title, titleWidth)
 
 	header := leftPad + titleStyle.Render(title)
-	if meta == "" {
-		return padOrTruncate(header, width)
-	}
-
-	gap := width - inset - lipgloss.Width(title) - lipgloss.Width(meta)
+	gap := width - inset - lipgloss.Width(title) - metaWidth
 	if gap < 1 {
 		gap = 1
 	}
-	return header + strings.Repeat(" ", gap) + sectionMetaStyle.Render(meta)
+	return header + strings.Repeat(" ", gap) + renderSectionMeta(meta)
+}
+
+func renderSectionMeta(meta string) string {
+	if strings.Contains(meta, "\x1b[") {
+		return meta
+	}
+	return sectionMetaStyle.Render(meta)
 }
 
 func fitSectionHeaderText(text string, maxWidth int) string {

@@ -131,16 +131,6 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	if state.Compare.Basis == "" {
 		state.Compare.Basis = state.CompareBasis
 	}
-	if len(state.Files) == 0 {
-		state.SelectedFile = -1
-	} else {
-		if state.SelectedFile < 0 {
-			state.SelectedFile = 0
-		}
-		if state.SelectedFile >= len(state.Files) {
-			state.SelectedFile = len(state.Files) - 1
-		}
-	}
 	if state.FocusPane == "" {
 		state.FocusPane = model.PaneFiles
 	}
@@ -150,6 +140,10 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	if state.FileChangeGen == nil {
 		state.FileChangeGen = make(map[string]int)
 	}
+	if state.FileTreeCollapsed == nil {
+		state.FileTreeCollapsed = make(map[string]bool)
+	}
+	reconcileFileTreeToSelection(&state)
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(theme.Accent)
@@ -477,15 +471,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.syncFileTreeCursorFromSelectedFile()
+
 	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
 		pending := m.pendingKey
 		m.pendingKey = 0
 		switch {
 		case pending == 'g' && msg.String() == "g":
-			m.State.SelectedFile = 0
+			m.setFileTreeCursor(0)
 			m.syncFileListScroll()
-			if m.State.Layout == model.LayoutSplit {
+			if m.State.Layout == model.LayoutSplit && m.State.SelectedFile >= 0 {
 				return m.selectFile()
 			}
 			return m, nil
@@ -507,29 +503,18 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingKeySeq++
 		return m, m.pendingKeyTimeout()
 	case "G":
-		if len(m.State.Files) > 0 {
-			m.State.SelectedFile = len(m.State.Files) - 1
+		rows := m.fileTreeRows()
+		if len(rows) > 0 {
+			m.setFileTreeCursor(len(rows) - 1)
 			m.syncFileListScroll()
-			if m.State.Layout == model.LayoutSplit {
+			if m.State.Layout == model.LayoutSplit && m.State.SelectedFile >= 0 {
 				return m.selectFile()
 			}
 		}
 	case "j", "down":
-		if m.State.SelectedFile < len(m.State.Files)-1 {
-			m.State.SelectedFile++
-			m.syncFileListScroll()
-			if m.State.Layout == model.LayoutSplit {
-				return m.selectFile()
-			}
-		}
+		return m.moveFileTreeCursor(1)
 	case "k", "up":
-		if m.State.SelectedFile > 0 {
-			m.State.SelectedFile--
-			m.syncFileListScroll()
-			if m.State.Layout == model.LayoutSplit {
-				return m.selectFile()
-			}
-		}
+		return m.moveFileTreeCursor(-1)
 	case "ctrl+d":
 		return m.fileListHalfPageDown()
 	case "ctrl+u":
@@ -538,11 +523,12 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.fileListPageDown()
 	case "ctrl+b":
 		return m.fileListPageUp()
-	case "l", "enter":
-		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-			m.State.FocusPane = model.PanePatch
-			return m.selectFile()
-		}
+	case "h", "left":
+		return m.collapseFileTreeRow()
+	case "l", "right", "enter":
+		return m.activateFileTreeRow()
+	case "t":
+		return m.cycleFileFilter()
 	case "/":
 		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil && m.searchIndex != nil {
 			m.State.FocusPane = model.PaneSearch
@@ -599,6 +585,178 @@ func (m Model) pendingKeyTimeout() tea.Cmd {
 	}
 }
 
+func reconcileFileTreeToSelection(state *model.AppState) {
+	if state.FileTreeCollapsed == nil {
+		state.FileTreeCollapsed = make(map[string]bool)
+	}
+	if len(state.Files) == 0 {
+		state.SelectedFile = -1
+		state.FileTreeCursor = 0
+		return
+	}
+	if state.SelectedFile >= len(state.Files) {
+		state.SelectedFile = len(state.Files) - 1
+	}
+	if state.SelectedFile >= 0 {
+		if cursor, ok := panes.FileTreeCursorForFile(state.Files, state.FileFilter, state.FileTreeCollapsed, state.SelectedFile); ok {
+			state.FileTreeCursor = cursor
+		}
+	}
+	proj := panes.ProjectFileTree(state.Files, state.FileFilter, state.FileTreeCollapsed, state.FileTreeCursor)
+	state.FileTreeCursor = proj.Cursor
+	state.SelectedFile = proj.SelectedFile
+}
+
+func (m Model) fileTreeProjection() panes.FileTreeProjection {
+	return panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.FileTreeCursor)
+}
+
+func (m Model) fileTreeRows() []panes.FileTreeRow {
+	return m.fileTreeProjection().Rows
+}
+
+func (m Model) currentFileTreeRow() (panes.FileTreeRow, bool) {
+	proj := m.fileTreeProjection()
+	if len(proj.Rows) == 0 || proj.Cursor < 0 || proj.Cursor >= len(proj.Rows) {
+		return panes.FileTreeRow{}, false
+	}
+	return proj.Rows[proj.Cursor], true
+}
+
+func (m *Model) setFileTreeCursor(cursor int) {
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor)
+	m.State.FileTreeCursor = proj.Cursor
+	m.State.SelectedFile = proj.SelectedFile
+	if proj.SelectedFile < 0 {
+		m.clearPatchView()
+	}
+}
+
+func (m *Model) syncFileTreeCursorFromSelectedFile() {
+	if m.State.SelectedFile < 0 || m.State.SelectedFile >= len(m.State.Files) {
+		return
+	}
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile && row.FileIndex == m.State.SelectedFile {
+		return
+	}
+	if cursor, ok := panes.FileTreeCursorForFile(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.SelectedFile); ok {
+		m.State.FileTreeCursor = cursor
+	}
+}
+
+func (m *Model) setFileTreeCursorByPath(path string, fallback int) {
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, fallback)
+	cursor := proj.Cursor
+	if path != "" {
+		for i, row := range proj.Rows {
+			if row.Path == path {
+				cursor = i
+				break
+			}
+		}
+	}
+	m.setFileTreeCursor(cursor)
+}
+
+func (m *Model) clearPatchView() {
+	m.patchViewport = nil
+	m.patchErr = ""
+	m.patchFallback = ""
+	m.searchIndex = nil
+	m.State.SearchQuery = ""
+	m.searchNotFound = ""
+}
+
+func (m Model) moveFileTreeCursor(delta int) (tea.Model, tea.Cmd) {
+	proj := m.fileTreeProjection()
+	if len(proj.Rows) == 0 {
+		m.setFileTreeCursor(0)
+		return m, nil
+	}
+	cursor := proj.Cursor + delta
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(proj.Rows) {
+		cursor = len(proj.Rows) - 1
+	}
+	m.setFileTreeCursor(cursor)
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit && m.State.SelectedFile >= 0 {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+func (m Model) activateFileTreeRow() (tea.Model, tea.Cmd) {
+	row, ok := m.currentFileTreeRow()
+	if !ok {
+		return m, nil
+	}
+	if row.Kind == panes.FileTreeRowDir {
+		delete(m.State.FileTreeCollapsed, row.Path)
+		m.setFileTreeCursorByPath(row.Path, m.State.FileTreeCursor)
+		m.syncFileListScroll()
+		return m, nil
+	}
+	if row.FileIndex >= 0 && row.FileIndex < len(m.State.Files) {
+		m.State.FocusPane = model.PanePatch
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+func (m Model) collapseFileTreeRow() (tea.Model, tea.Cmd) {
+	row, ok := m.currentFileTreeRow()
+	if !ok {
+		return m, nil
+	}
+	switch row.Kind {
+	case panes.FileTreeRowDir:
+		if m.State.FileTreeCollapsed == nil {
+			m.State.FileTreeCollapsed = make(map[string]bool)
+		}
+		m.State.FileTreeCollapsed[row.Path] = true
+		m.setFileTreeCursorByPath(row.Path, m.State.FileTreeCursor)
+	case panes.FileTreeRowFile:
+		parent := parentDir(row.Path)
+		if parent == "" {
+			return m, nil
+		}
+		if m.State.FileTreeCollapsed == nil {
+			m.State.FileTreeCollapsed = make(map[string]bool)
+		}
+		m.State.FileTreeCollapsed[parent] = true
+		m.setFileTreeCursorByPath(parent, m.State.FileTreeCursor)
+	}
+	m.syncFileListScroll()
+	return m, nil
+}
+
+func (m Model) cycleFileFilter() (tea.Model, tea.Cmd) {
+	prevPath := ""
+	prevCursor := m.State.FileTreeCursor
+	if row, ok := m.currentFileTreeRow(); ok {
+		prevPath = row.Path
+	}
+
+	m.State.FileFilter = m.State.FileFilter.Next()
+	m.setFileTreeCursorByPath(prevPath, prevCursor)
+	m.syncFileListScroll()
+	if m.State.Layout == model.LayoutSplit && m.State.SelectedFile >= 0 {
+		return m.selectFile()
+	}
+	return m, nil
+}
+
+func parentDir(path string) string {
+	idx := strings.LastIndex(path, "/")
+	if idx < 0 {
+		return ""
+	}
+	return path[:idx]
+}
+
 // fileListInnerHeight returns the visible row count for the file list pane.
 func (m Model) fileListInnerHeight() int {
 	outerH := m.height - 1 // status bar
@@ -612,15 +770,7 @@ func (m Model) fileListHalfPageDown() (tea.Model, tea.Cmd) {
 	if half < 1 {
 		half = 1
 	}
-	m.State.SelectedFile += half
-	if m.State.SelectedFile >= len(m.State.Files) {
-		m.State.SelectedFile = len(m.State.Files) - 1
-	}
-	m.syncFileListScroll()
-	if m.State.Layout == model.LayoutSplit {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.moveFileTreeCursor(half)
 }
 
 // fileListHalfPageUp moves selection half a page up in the file list.
@@ -629,15 +779,7 @@ func (m Model) fileListHalfPageUp() (tea.Model, tea.Cmd) {
 	if half < 1 {
 		half = 1
 	}
-	m.State.SelectedFile -= half
-	if m.State.SelectedFile < 0 {
-		m.State.SelectedFile = 0
-	}
-	m.syncFileListScroll()
-	if m.State.Layout == model.LayoutSplit {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.moveFileTreeCursor(-half)
 }
 
 // fileListPageDown moves selection one full page down in the file list.
@@ -646,15 +788,7 @@ func (m Model) fileListPageDown() (tea.Model, tea.Cmd) {
 	if page < 1 {
 		page = 1
 	}
-	m.State.SelectedFile += page
-	if m.State.SelectedFile >= len(m.State.Files) {
-		m.State.SelectedFile = len(m.State.Files) - 1
-	}
-	m.syncFileListScroll()
-	if m.State.Layout == model.LayoutSplit {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.moveFileTreeCursor(page)
 }
 
 // fileListPageUp moves selection one full page up in the file list.
@@ -663,15 +797,7 @@ func (m Model) fileListPageUp() (tea.Model, tea.Cmd) {
 	if page < 1 {
 		page = 1
 	}
-	m.State.SelectedFile -= page
-	if m.State.SelectedFile < 0 {
-		m.State.SelectedFile = 0
-	}
-	m.syncFileListScroll()
-	if m.State.Layout == model.LayoutSplit {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.moveFileTreeCursor(-page)
 }
 
 // jumpChangedFile navigates to the next (forward=true) or previous hot/warm file.
@@ -686,7 +812,11 @@ func (m Model) jumpChangedFile(forward bool) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	m.State.SelectedFile = idx
+	cursor, ok := panes.FileTreeCursorForFile(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, idx)
+	if !ok {
+		return m, nil
+	}
+	m.setFileTreeCursor(cursor)
 	m.syncFileListScroll()
 	if m.State.Layout == model.LayoutSplit || m.State.FocusPane == model.PanePatch {
 		return m.selectFile()
@@ -1161,6 +1291,7 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	}
 	m.State.Files = msg.Files
 	review.ReconcileSelection(&m.State, selectedPath)
+	reconcileFileTreeToSelection(&m.State)
 	review.CompleteRefresh(&m.State)
 
 	// Selected file was evicted for reload; clear viewport.
@@ -1556,9 +1687,9 @@ func (m Model) viewFileList() string {
 	)
 	meta := ""
 	if m.showFooter() {
-		meta = fmt.Sprintf("%d files", len(m.State.Files))
+		meta = m.fileListFooter()
 	}
-	return panes.UnboxedSection(content, "Files", meta, m.width, outerHeight, true)
+	return panes.UnboxedSection(content, m.fileListTitle(), meta, m.width, outerHeight, true)
 }
 
 func (m Model) viewPatch() string {
@@ -1674,7 +1805,7 @@ func (m Model) viewHelp() string {
 		"  l/Enter   select file / focus patch",
 	}
 	if m.State.WorktreeMode {
-		help = append(help, "  h/Esc     back to dashboard")
+		help = append(help, "  Esc       back to dashboard")
 	} else {
 		help = append(help, "  h/Esc     back to file list")
 	}
@@ -1684,6 +1815,7 @@ func (m Model) viewHelp() string {
 		"  G         jump to bottom",
 		"  ctrl+d/u  half-page down/up",
 		"  ctrl+f/b  full page down/up",
+		"  t         cycle file filter",
 		"  s         unified/side-by-side diff",
 		"  ]c/[c     next/prev changed file",
 		"",
@@ -1807,7 +1939,42 @@ func (m Model) freshnessOpts() panes.FileListOpts {
 		ChangeGen:        m.State.FileChangeGen,
 		CurrentGen:       m.State.CacheGeneration,
 		GroupByDirectory: m.State.GroupByDirectory,
+		Filter:           m.State.FileFilter,
+		Collapsed:        m.State.FileTreeCollapsed,
+		Cursor:           m.State.FileTreeCursor,
+		UseCursor:        true,
 	}
+}
+
+func (m Model) fileListFooter() string {
+	counts := aggregateFileCounts(m.State.Files, m.State.FileFilter)
+	return panes.RenderCounts(counts, false)
+}
+
+func (m Model) fileListTitle() string {
+	proj := m.fileTreeProjection()
+	return fmt.Sprintf("Files %d/%d (%s)", proj.FilteredFiles, proj.TotalFiles, fileFilterHeaderLabel(m.State.FileFilter))
+}
+
+func fileFilterHeaderLabel(filter model.FileFilter) string {
+	if filter == model.FileFilterNonTests {
+		return "Non-Tests"
+	}
+	return filter.Label()
+}
+
+func aggregateFileCounts(files []model.FileSummary, filter model.FileFilter) model.FileSummary {
+	proj := panes.ProjectFileTree(files, filter, nil, 0)
+	var counts model.FileSummary
+	for _, row := range proj.Rows {
+		if row.Kind != panes.FileTreeRowFile {
+			continue
+		}
+		file := files[row.FileIndex]
+		counts.Additions += file.Additions
+		counts.Deletions += file.Deletions
+	}
+	return counts
 }
 
 // patchScrollLine returns the inner row index for the scroll indicator,
@@ -1865,8 +2032,9 @@ func (m *Model) syncFileListScroll() {
 		splitWidth = 1
 	}
 	_, innerH := panes.UnboxedSectionDimensions(fileListWidth(splitWidth), outerHeight)
+	proj := m.fileTreeProjection()
 	m.fileListScroll = panes.EnsureVisible(
-		m.State.SelectedFile, m.fileListScroll, innerH, len(m.State.Files),
+		proj.Cursor, m.fileListScroll, innerH, len(proj.Rows),
 	)
 }
 
@@ -1929,10 +2097,10 @@ func (m Model) viewSplit() string {
 	fileMeta := ""
 	patchMeta := ""
 	if m.showFooter() {
-		fileMeta = fmt.Sprintf("%d files", len(m.State.Files))
+		fileMeta = m.fileListFooter()
 		patchMeta = m.patchFooter()
 	}
-	left := panes.UnboxedSection(leftContent, "Files", fileMeta, flOuterWidth, outerHeight, filesActive)
+	left := panes.UnboxedSection(leftContent, m.fileListTitle(), fileMeta, flOuterWidth, outerHeight, filesActive)
 	right := panes.UnboxedSection(rightContent, m.patchTitle(), patchMeta, patchOuterWidth, outerHeight, !filesActive)
 
 	return panes.JoinColumns(left, right, flOuterWidth, patchOuterWidth)

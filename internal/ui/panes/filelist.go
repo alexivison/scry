@@ -2,6 +2,7 @@ package panes
 
 import (
 	"fmt"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -29,7 +30,9 @@ var (
 	freshnessWarmStyle = lipgloss.NewStyle().Foreground(theme.Muted)
 
 	// Directory header style.
-	dirHeaderStyle = lipgloss.NewStyle().Foreground(theme.ChromeFaint)
+	dirHeaderStyle           = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+	treeConnectorStyle       = lipgloss.NewStyle().Foreground(theme.Muted)
+	treeConnectorSelectStyle = treeConnectorStyle.Background(theme.SelectedBg)
 )
 
 // FileListOpts holds optional parameters for file list rendering.
@@ -37,6 +40,44 @@ type FileListOpts struct {
 	ChangeGen        map[string]int // per-file last-change generation (nil to disable)
 	CurrentGen       int            // current CacheGeneration for freshness calculation
 	GroupByDirectory bool           // when true, group files by directory with dim headers
+	Filter           model.FileFilter
+	Collapsed        map[string]bool
+	Cursor           int
+	UseCursor        bool
+}
+
+// FileTreeRowKind identifies whether a visible file tree row is a directory or file.
+type FileTreeRowKind int
+
+const (
+	FileTreeRowDir FileTreeRowKind = iota
+	FileTreeRowFile
+)
+
+// FileTreeRow is a visible row in the projected file tree.
+type FileTreeRow struct {
+	Kind          FileTreeRowKind
+	Path          string
+	Depth         int
+	FileIndex     int
+	Collapsed     bool
+	Last          bool
+	Continuations []bool
+}
+
+// FileTreeProjection is the visible tree plus cursor-derived selection data.
+type FileTreeProjection struct {
+	Rows          []FileTreeRow
+	Cursor        int
+	SelectedFile  int
+	FilteredFiles int
+	TotalFiles    int
+}
+
+type fileTreeNode struct {
+	path  string
+	dirs  map[string]*fileTreeNode
+	files []int
 }
 
 // RenderFileList renders a scrollable file list constrained to the given dimensions.
@@ -52,78 +93,223 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 		o = opts[0]
 	}
 
-	// When grouping, sort files by directory and remap selectedIdx
-	// so the cursor follows the originally-selected file.
-	if o.GroupByDirectory {
-		var selectedPath string
-		if selectedIdx >= 0 && selectedIdx < len(files) {
-			selectedPath = files[selectedIdx].Path
-		}
-		files = sortByDirectory(files)
-		if selectedPath != "" {
-			for i, f := range files {
-				if f.Path == selectedPath {
-					selectedIdx = i
-					break
-				}
-			}
-		}
+	cursor := o.Cursor
+	if !o.UseCursor {
+		cursor, _ = FileTreeCursorForFile(files, o.Filter, o.Collapsed, selectedIdx)
 	}
 
-	// Ensure selected item is visible.
-	// When grouping, reduce effective height to account for directory headers.
-	effectiveHeight := height
-	if o.GroupByDirectory {
-		headerCount := countHeadersInRange(files, scrollOffset, scrollOffset+height)
-		if headerCount > 0 {
-			effectiveHeight = height - headerCount
-			if effectiveHeight < 1 {
-				effectiveHeight = 1
-			}
-		}
+	proj := ProjectFileTree(files, o.Filter, o.Collapsed, cursor)
+	if len(proj.Rows) == 0 {
+		return EmptyFileListMessage(o.Filter), 0
 	}
-	scrollOffset = EnsureVisible(selectedIdx, scrollOffset, effectiveHeight, len(files))
 
-	// Determine visible window.
+	scrollOffset = EnsureVisible(proj.Cursor, scrollOffset, height, len(proj.Rows))
 	end := scrollOffset + height
-	if end > len(files) {
-		end = len(files)
-	}
-
-	// Initialize lastDir from the file before scrollOffset for consistent header logic.
-	lastDir := ""
-	if o.GroupByDirectory && scrollOffset > 0 {
-		lastDir = fileDir(files[scrollOffset-1].Path)
+	if end > len(proj.Rows) {
+		end = len(proj.Rows)
 	}
 
 	lines := make([]string, 0, end-scrollOffset)
 	for i := scrollOffset; i < end; i++ {
-		// Insert directory header when grouping is enabled and directory changes.
-		if o.GroupByDirectory {
-			dir := fileDir(files[i].Path)
-			if dir != lastDir {
-				lastDir = dir
-				if dir != "" && len(lines) < height {
-					lines = append(lines, dirHeaderStyle.Render("  "+dir))
-				}
-			}
-		}
-		if len(lines) >= height {
-			break
-		}
 		tier := review.FreshnessCold
-		if o.ChangeGen != nil {
-			if gen, ok := o.ChangeGen[files[i].Path]; ok {
+		row := proj.Rows[i]
+		if row.Kind == FileTreeRowFile && o.ChangeGen != nil {
+			if gen, ok := o.ChangeGen[files[row.FileIndex].Path]; ok {
 				tier = review.ComputeFreshness(gen, o.CurrentGen)
 			}
 		}
-		line := renderFileEntry(files[i], i, selectedIdx, width, tier)
+		line := renderFileTreeRow(files, row, i == proj.Cursor, width, tier)
 		if !active {
 			line = fileDimStyle.Render(line)
 		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n"), scrollOffset
+}
+
+// ProjectFileTree builds visible directory and file rows from the flat file list.
+func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collapsed map[string]bool, cursor int) FileTreeProjection {
+	root := &fileTreeNode{dirs: make(map[string]*fileTreeNode)}
+	filtered := 0
+	for i, file := range files {
+		if !includeFile(file.Path, filter) {
+			continue
+		}
+		filtered++
+		root.addFile(file.Path, i)
+	}
+
+	rows := make([]FileTreeRow, 0, filtered)
+	root.appendRows(&rows, files, collapsed, nil)
+
+	if len(rows) == 0 {
+		return FileTreeProjection{
+			Rows:          nil,
+			Cursor:        0,
+			SelectedFile:  -1,
+			FilteredFiles: filtered,
+			TotalFiles:    len(files),
+		}
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(rows) {
+		cursor = len(rows) - 1
+	}
+
+	selectedFile := -1
+	if rows[cursor].Kind == FileTreeRowFile {
+		selectedFile = rows[cursor].FileIndex
+	}
+
+	return FileTreeProjection{
+		Rows:          rows,
+		Cursor:        cursor,
+		SelectedFile:  selectedFile,
+		FilteredFiles: filtered,
+		TotalFiles:    len(files),
+	}
+}
+
+// FileTreeCursorForFile returns the visible row cursor for a file index.
+func FileTreeCursorForFile(files []model.FileSummary, filter model.FileFilter, collapsed map[string]bool, fileIndex int) (int, bool) {
+	if fileIndex < 0 || fileIndex >= len(files) {
+		return 0, false
+	}
+	proj := ProjectFileTree(files, filter, collapsed, 0)
+	for i, row := range proj.Rows {
+		if row.Kind == FileTreeRowFile && row.FileIndex == fileIndex {
+			return i, true
+		}
+	}
+	return proj.Cursor, false
+}
+
+// EmptyFileListMessage returns the empty-state text for the current filter.
+func EmptyFileListMessage(filter model.FileFilter) string {
+	switch filter {
+	case model.FileFilterTests:
+		return "No test files changed."
+	case model.FileFilterNonTests:
+		return "No non-test files changed."
+	default:
+		return "No files changed."
+	}
+}
+
+// IsTestFile reports whether path matches common test file conventions.
+func IsTestFile(path string) bool {
+	path = filepath.ToSlash(path)
+	parts := strings.Split(path, "/")
+	for _, part := range parts[:len(parts)-1] {
+		switch part {
+		case "__tests__", "tests":
+			return true
+		}
+	}
+
+	base := pathpkg.Base(path)
+	switch {
+	case strings.HasSuffix(base, "_test.go"):
+		return true
+	case strings.Contains(base, ".test."), strings.Contains(base, ".spec."):
+		return true
+	case strings.HasSuffix(base, ".py") && (strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py")):
+		return true
+	case strings.HasSuffix(base, "Test.java"), strings.HasSuffix(base, "Tests.java"):
+		return true
+	case strings.HasSuffix(base, "Test.kt"), strings.HasSuffix(base, "Tests.kt"):
+		return true
+	default:
+		return false
+	}
+}
+
+func includeFile(path string, filter model.FileFilter) bool {
+	switch filter {
+	case model.FileFilterTests:
+		return IsTestFile(path)
+	case model.FileFilterNonTests:
+		return !IsTestFile(path)
+	default:
+		return true
+	}
+}
+
+func (n *fileTreeNode) addFile(filePath string, fileIndex int) {
+	clean := strings.Trim(filepath.ToSlash(filePath), "/")
+	if clean == "" {
+		n.files = append(n.files, fileIndex)
+		return
+	}
+	parts := strings.Split(clean, "/")
+	node := n
+	for i, part := range parts[:len(parts)-1] {
+		dirPath := strings.Join(parts[:i+1], "/")
+		if node.dirs == nil {
+			node.dirs = make(map[string]*fileTreeNode)
+		}
+		child := node.dirs[part]
+		if child == nil {
+			child = &fileTreeNode{path: dirPath, dirs: make(map[string]*fileTreeNode)}
+			node.dirs[part] = child
+		}
+		node = child
+	}
+	node.files = append(node.files, fileIndex)
+}
+
+func (n *fileTreeNode) appendRows(rows *[]FileTreeRow, files []model.FileSummary, collapsed map[string]bool, continuations []bool) {
+	dirNames := make([]string, 0, len(n.dirs))
+	for name := range n.dirs {
+		dirNames = append(dirNames, name)
+	}
+	sort.Strings(dirNames)
+	sort.SliceStable(n.files, func(i, j int) bool {
+		return files[n.files[i]].Path < files[n.files[j]].Path
+	})
+
+	total := len(dirNames) + len(n.files)
+	for i, name := range dirNames {
+		child := n.dirs[name]
+		isCollapsed := collapsed != nil && collapsed[child.path]
+		last := i == total-1
+		*rows = append(*rows, FileTreeRow{
+			Kind:          FileTreeRowDir,
+			Path:          child.path,
+			Depth:         len(continuations),
+			FileIndex:     -1,
+			Collapsed:     isCollapsed,
+			Last:          last,
+			Continuations: copyContinuations(continuations),
+		})
+		if !isCollapsed {
+			nextContinuations := append(copyContinuations(continuations), !last)
+			child.appendRows(rows, files, collapsed, nextContinuations)
+		}
+	}
+
+	for i, fileIndex := range n.files {
+		last := len(dirNames)+i == total-1
+		*rows = append(*rows, FileTreeRow{
+			Kind:          FileTreeRowFile,
+			Path:          files[fileIndex].Path,
+			Depth:         len(continuations),
+			FileIndex:     fileIndex,
+			Last:          last,
+			Continuations: copyContinuations(continuations),
+		})
+	}
+}
+
+func copyContinuations(in []bool) []bool {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]bool, len(in))
+	copy(out, in)
+	return out
 }
 
 // EnsureVisible adjusts scrollOffset so selectedIdx is within the visible window.
@@ -141,39 +327,119 @@ func EnsureVisible(selectedIdx, scrollOffset, height, total int) int {
 }
 
 func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier) string {
-	selected := idx == selectedIdx
+	return renderFileTreeFileEntry(f, idx == selectedIdx, width, tier, FileTreeRow{Last: true})
+}
+
+func renderFileTreeRow(files []model.FileSummary, row FileTreeRow, selected bool, width int, tier review.FreshnessTier) string {
+	if row.Kind == FileTreeRowDir {
+		return renderFileTreeDirEntry(row, selected, width)
+	}
+	return renderFileTreeFileEntry(files[row.FileIndex], selected, width, tier, row)
+}
+
+func renderFileTreeDirEntry(row FileTreeRow, selected bool, width int) string {
+	marker := "[-]"
+	if row.Collapsed {
+		marker = "[+]"
+	}
+	label := pathpkg.Base(row.Path) + "/"
+	connector := treeConnector(row)
+	connectorWidth := lipgloss.Width(connector)
+	rest := marker + " " + label
+
+	restWidth := width - connectorWidth
+	if restWidth < 1 {
+		restWidth = 1
+	}
+	if lipgloss.Width(rest) > restWidth {
+		rest = truncatePath(rest, restWidth)
+	}
+	padded := padRightCells(rest, restWidth)
+	if selected {
+		return renderTreeConnector(row, true) + fileSelectedStyle.Width(restWidth).Render(padded)
+	}
+	return renderTreeConnector(row, false) + dirHeaderStyle.Render(padded)
+}
+
+func renderFileTreeFileEntry(f model.FileSummary, selected bool, width int, tier review.FreshnessTier, row FileTreeRow) string {
 	path := f.Path
 	if f.OldPath != "" {
-		path = fmt.Sprintf("%s → %s", f.OldPath, f.Path)
+		path = fmt.Sprintf("%s → %s", pathpkg.Base(f.OldPath), pathpkg.Base(f.Path))
+	} else {
+		path = pathpkg.Base(path)
 	}
 
-	marker := prefixMarker(tier)
+	connector := treeConnector(row)
+	freshness := ""
+	if tier != review.FreshnessCold {
+		freshness = prefixMarker(tier) + " "
+	}
+	freshnessWidth := lipgloss.Width(freshness)
 
-	prefix := "  "
+	icon := RenderIcon(f.Status, selected)
 	if selected {
-		prefix = "> "
+		icon = StatusIcon(f.Status)
 	}
+	statusWidth := lipgloss.Width(StatusIcon(f.Status))
+	connectorWidth := lipgloss.Width(connector)
 
-	// Reserve space: prefix(2) + marker(1) + gap(1) + status(1) + gap(2) + counts + gap(1).
+	counts := RenderCounts(f, selected)
+	if selected {
+		counts = FormatCounts(f)
+	}
 	countsWidth := lipgloss.Width(FormatCounts(f))
-	pathWidth := width - 2 - 1 - 1 - 1 - 2 - countsWidth - 1
-	if pathWidth < 5 {
-		pathWidth = 5
+	restWidth := width - connectorWidth
+	if restWidth < 1 {
+		restWidth = 1
 	}
 
+	// Reserve space: optional freshness marker + status/name + gap + counts.
+	labelWidth := restWidth - freshnessWidth - countsWidth - 1
+	if labelWidth < 5 {
+		labelWidth = 5
+	}
+
+	pathWidth := labelWidth - statusWidth - 1
+	if pathWidth < 1 {
+		pathWidth = 1
+	}
 	if lipgloss.Width(path) > pathWidth {
 		path = truncatePath(path, pathWidth)
 	}
-
-	icon := RenderIcon(f.Status, selected)
-	counts := RenderCounts(f, selected)
-	paddedPath := fmt.Sprintf("%-*s", pathWidth, path)
+	fileLabel := icon + " " + path
+	paddedLabel := padRightCells(fileLabel, labelWidth)
+	restLeft := freshness + paddedLabel
+	restLine := alignRight(restLeft, counts, restWidth)
 
 	if selected {
-		sel := fileSelectedStyle
-		return sel.Render(prefix) + marker + " " + icon + "  " + sel.Render(paddedPath) + " " + counts
+		return renderTreeConnector(row, true) + fileSelectedStyle.Width(restWidth).Render(restLine)
 	}
-	return prefix + marker + " " + icon + "  " + textStyle.Render(paddedPath) + " " + counts
+	return renderTreeConnector(row, false) + alignRight(freshness+textStyle.Render(paddedLabel), counts, restWidth)
+}
+
+func treeConnector(row FileTreeRow) string {
+	var b strings.Builder
+	for _, continues := range row.Continuations {
+		if continues {
+			b.WriteString("│ ")
+		} else {
+			b.WriteString("  ")
+		}
+	}
+	if row.Last {
+		b.WriteString("└─ ")
+	} else {
+		b.WriteString("├─ ")
+	}
+	return b.String()
+}
+
+func renderTreeConnector(row FileTreeRow, selected bool) string {
+	connector := treeConnector(row)
+	if selected {
+		return treeConnectorSelectStyle.Render(connector)
+	}
+	return treeConnectorStyle.Render(connector)
 }
 
 // prefixMarker returns a styled single-character freshness prefix.
@@ -203,6 +469,28 @@ func truncatePath(path string, maxWidth int) string {
 		w += rw
 	}
 	return path
+}
+
+func alignRight(left, right string, width int) string {
+	rightWidth := lipgloss.Width(right)
+	leftWidth := lipgloss.Width(left)
+	if leftWidth+1+rightWidth > width {
+		left = truncatePath(left, width-1-rightWidth)
+		leftWidth = lipgloss.Width(left)
+	}
+	gap := width - leftWidth - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func padRightCells(s string, width int) string {
+	gap := width - lipgloss.Width(s)
+	if gap <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", gap)
 }
 
 // statusStyleFor returns the lipgloss style for a file status icon.

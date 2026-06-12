@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
 )
@@ -79,24 +81,17 @@ func TestRenderFileListGrouped_FreshnessWorks(t *testing.T) {
 func TestGroupedFileList_SelectionIndexMapsCorrectly(t *testing.T) {
 	t.Parallel()
 
-	// With grouping, selection index 0 should select the first FILE, not a header.
+	// Selection index 0 should keep the first file visible without rendering the old gutter.
 	files := groupTestFiles()
 	opts := FileListOpts{GroupByDirectory: true}
 	output, _ := RenderFileList(files, 0, 0, 60, 20, true, opts)
 
-	// The first selectable item should have the > cursor.
-	if !strings.Contains(output, ">") {
-		t.Error("grouped output should show selection cursor")
+	plain := ansi.Strip(output)
+	if strings.Contains(plain, ">") {
+		t.Error("grouped output should not show selection cursor")
 	}
-	// And should point to the first file (cmd/main.go), not a directory header.
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, ">") && !strings.Contains(line, "main.go") {
-			// Check it's not a header line.
-			if !strings.Contains(line, ".go") && !strings.Contains(line, ".md") {
-				t.Errorf("selection cursor should be on a file, not a header: %q", line)
-			}
-		}
+	if !strings.Contains(plain, "M main.go") {
+		t.Fatalf("selected file row should show status icon adjacent to main.go, got:\n%s", plain)
 	}
 }
 
@@ -122,21 +117,12 @@ func TestRenderFileListGrouped_SelectedIdxMatchesFile(t *testing.T) {
 	opts := FileListOpts{GroupByDirectory: true}
 	output, _ := RenderFileList(files, 0, 0, 60, 20, true, opts)
 
-	// The cursor line (containing ">") should show README.md (what index 0 IS),
-	// not cmd/main.go (what sorted position 0 happens to be).
-	lines := strings.Split(output, "\n")
-	cursorFound := false
-	for _, line := range lines {
-		if strings.Contains(line, ">") {
-			cursorFound = true
-			if !strings.Contains(line, "README.md") {
-				t.Errorf("cursor should be on README.md (files[0]), got: %q", line)
-			}
-			break
-		}
+	plain := ansi.Strip(output)
+	if strings.Contains(plain, ">") {
+		t.Error("grouped output should not show selection cursor")
 	}
-	if !cursorFound {
-		t.Error("no cursor (>) found in output")
+	if !strings.Contains(plain, "M README.md") {
+		t.Fatalf("selected file should be README.md (files[0]), got:\n%s", plain)
 	}
 }
 

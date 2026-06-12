@@ -337,6 +337,8 @@ func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneFiles
 		m.State.Files = nil
 		m.State.SelectedFile = -1
+		m.State.FileTreeCursor = 0
+		m.State.FileTreeCollapsed = make(map[string]bool)
 		// Clear freshness state so stale generations from a previous worktree don't leak.
 		m.State.FileChangeGen = make(map[string]int)
 	}
@@ -389,6 +391,7 @@ func (m Model) handleDrillDownLoaded(msg DrillDownLoadedMsg) (tea.Model, tea.Cmd
 
 	// Reconcile selection: match by path, fallback to clamped index.
 	review.ReconcileSelection(&m.State, prevPath)
+	reconcileFileTreeToSelection(&m.State)
 
 	// If in patch view, reload the selected file's patch.
 	return m.loadSelectedPatch()
@@ -424,9 +427,15 @@ func (m *Model) returnToDashboard() {
 // updateDrillDown handles keys when in worktree drill-down (file/patch view for a single worktree).
 func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "h":
+	case "esc":
 		m.returnToDashboard()
 		return m, nil
+	case "h", "left":
+		row, ok := m.currentFileTreeRow()
+		if !ok || (row.Kind == panes.FileTreeRowFile && parentDir(row.Path) == "") {
+			m.returnToDashboard()
+			return m, nil
+		}
 	}
 	return m.updateFiles(msg)
 }
