@@ -3,6 +3,8 @@ package source
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -836,6 +838,101 @@ func TestBootstrapSuccess(t *testing.T) {
 	}
 	if !strings.Contains(out, result.Repo.WorktreeRoot) {
 		t.Errorf("repo runner toplevel = %q, want to contain %q", out, result.Repo.WorktreeRoot)
+	}
+}
+
+func TestBootstrapFromGitDirUsesMatchingWorktree(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	r := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: dir})
+	if _, err := r.RunGit(ctx, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	commitFixture(t, ctx, r, dir)
+	if _, err := r.RunGit(ctx, "branch", "-M", "main"); err != nil {
+		t.Fatalf("git branch: %v", err)
+	}
+	if _, err := r.RunGit(ctx, "worktree", "add", filepath.Join(t.TempDir(), "feature"), "-b", "feature"); err != nil {
+		t.Fatalf("git worktree add: %v", err)
+	}
+
+	result, err := Bootstrap(ctx, filepath.Join(dir, ".git"))
+	if err != nil {
+		t.Fatalf("Bootstrap from .git: %v", err)
+	}
+	if canonicalPath(t, result.Repo.WorktreeRoot) != canonicalPath(t, dir) {
+		t.Fatalf("WorktreeRoot = %q, want %q", result.Repo.WorktreeRoot, dir)
+	}
+	if result.Runner == nil {
+		t.Fatal("Runner is nil")
+	}
+}
+
+func TestBootstrapFromBareGitDirUsesMatchingWorktree(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	parent := t.TempDir()
+	bareDir := filepath.Join(parent, "repo.git")
+	bareRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: parent})
+	if _, err := bareRunner.RunGit(ctx, "init", "--bare", bareDir); err != nil {
+		t.Fatalf("git init --bare: %v", err)
+	}
+	if _, err := bareRunner.RunGit(ctx, "--git-dir", bareDir, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		t.Fatalf("git symbolic-ref: %v", err)
+	}
+
+	seedDir := filepath.Join(parent, "seed")
+	if _, err := bareRunner.RunGit(ctx, "clone", bareDir, seedDir); err != nil {
+		t.Fatalf("git clone: %v", err)
+	}
+	seedRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: seedDir})
+	commitFixture(t, ctx, seedRunner, seedDir)
+	if _, err := seedRunner.RunGit(ctx, "push", "origin", "HEAD:main"); err != nil {
+		t.Fatalf("git push: %v", err)
+	}
+
+	mainDir := filepath.Join(parent, "main")
+	if _, err := bareRunner.RunGit(ctx, "--git-dir", bareDir, "worktree", "add", mainDir, "main"); err != nil {
+		t.Fatalf("git worktree add: %v", err)
+	}
+
+	result, err := Bootstrap(ctx, bareDir)
+	if err != nil {
+		t.Fatalf("Bootstrap from bare git dir: %v", err)
+	}
+	if canonicalPath(t, result.Repo.WorktreeRoot) != canonicalPath(t, mainDir) {
+		t.Fatalf("WorktreeRoot = %q, want %q", result.Repo.WorktreeRoot, mainDir)
+	}
+}
+
+func canonicalPath(t *testing.T, path string) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("eval symlinks %s: %v", path, err)
+	}
+	return real
+}
+
+func commitFixture(t *testing.T, ctx context.Context, r gitexec.GitRunner, dir string) {
+	t.Helper()
+	if _, err := r.RunGit(ctx, "config", "user.email", "scry@example.com"); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+	if _, err := r.RunGit(ctx, "config", "user.name", "Scry Test"); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if _, err := r.RunGit(ctx, "add", "README.md"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := r.RunGit(ctx, "commit", "-m", "fixture"); err != nil {
+		t.Fatalf("git commit: %v", err)
 	}
 }
 

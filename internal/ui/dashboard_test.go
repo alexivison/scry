@@ -165,6 +165,34 @@ func TestDashboardDrillDownEnter(t *testing.T) {
 	}
 }
 
+func TestDashboardDrillDownBareWorktreeNoOp(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	state.DashboardState.Worktrees = []model.WorktreeInfo{
+		{Path: "/repo.git", Bare: true},
+		{Path: "/repo-main", Branch: "main"},
+	}
+	state.DashboardState.SelectedIdx = 0
+	provider := &mockDrillDownProvider{}
+	m := NewModel(state, WithDrillDownProvider(provider))
+	m.width = 80
+	m.height = 24
+
+	updated, cmd := m.Update(keyMsg('l'))
+	um := updated.(Model)
+
+	if um.State.DashboardState.DrillDown {
+		t.Fatal("bare worktree should not enter drill-down")
+	}
+	if cmd != nil {
+		t.Fatal("bare worktree should not start a drill-down command")
+	}
+	if len(provider.bases) != 0 {
+		t.Fatalf("provider called for bare worktree, bases=%v", provider.bases)
+	}
+}
+
 func TestDashboardDrillDownLoadsFiles(t *testing.T) {
 	t.Parallel()
 

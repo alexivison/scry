@@ -265,9 +265,57 @@ func Bootstrap(ctx context.Context, cwd string) (BootstrapResult, error) {
 
 	repo, err := ResolveRepoContext(ctx, discovery)
 	if err != nil {
+		if result, fallbackErr := bootstrapFromWorktreeList(ctx, discovery); fallbackErr == nil {
+			return result, nil
+		}
 		return BootstrapResult{}, err
 	}
 
 	repoRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: repo.WorktreeRoot})
 	return BootstrapResult{Repo: repo, Runner: repoRunner}, nil
+}
+
+func bootstrapFromWorktreeList(ctx context.Context, discovery gitexec.GitRunner) (BootstrapResult, error) {
+	entries, err := gitexec.WorktreeList(ctx, discovery)
+	if err != nil {
+		return BootstrapResult{}, err
+	}
+
+	branch := currentBranch(ctx, discovery)
+	worktreeRoot := selectBootstrapWorktree(entries, branch)
+	if worktreeRoot == "" {
+		return BootstrapResult{}, fmt.Errorf("no non-bare worktree found")
+	}
+
+	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreeRoot})
+	repo, err := ResolveRepoContext(ctx, runner)
+	if err != nil {
+		return BootstrapResult{}, err
+	}
+	return BootstrapResult{Repo: repo, Runner: runner}, nil
+}
+
+func currentBranch(ctx context.Context, r gitexec.GitRunner) string {
+	out, err := r.RunGit(ctx, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+func selectBootstrapWorktree(entries []gitexec.WorktreeEntry, branch string) string {
+	if branch != "" {
+		ref := "refs/heads/" + branch
+		for _, entry := range entries {
+			if !entry.Bare && !entry.Prunable && entry.Branch == ref {
+				return entry.Path
+			}
+		}
+	}
+	for _, entry := range entries {
+		if !entry.Bare && !entry.Prunable {
+			return entry.Path
+		}
+	}
+	return ""
 }

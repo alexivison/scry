@@ -329,6 +329,9 @@ func (m Model) handleWorktreeRemoved(msg WorktreeRemovedMsg) (tea.Model, tea.Cmd
 // and clears stale data so the previous worktree's files don't flash briefly.
 // When called as a refresh (already in drill-down), it preserves the current focus pane.
 func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
+	if wt.Bare {
+		return m, nil
+	}
 	isRefresh := m.State.DashboardState.DrillDown
 	m.State.DashboardState.DrillDown = true
 	// Always clear patch state so stale content doesn't linger.
@@ -471,6 +474,12 @@ func (m *Model) maybeLoadPreview() tea.Cmd {
 		return nil
 	}
 	wt := ds.Worktrees[ds.SelectedIdx]
+	if wt.Bare {
+		ds.PreviewFiles = nil
+		ds.PreviewSnap = WorktreeSnapshotKey(wt, m.State.CompareBasis)
+		ds.PreviewErr = ""
+		return nil
+	}
 	snap := WorktreeSnapshotKey(wt, m.State.CompareBasis)
 
 	// Cache hit.
@@ -677,6 +686,9 @@ func (m Model) viewDashboardSplit(outerHeight int) string {
 
 func (m Model) dashboardPreviewMeta() string {
 	ds := m.State.DashboardState
+	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) || ds.Worktrees[ds.SelectedIdx].Bare {
+		return ""
+	}
 	if ds.PreviewErr != "" || !m.dashboardPreviewFilesCurrent() {
 		return ""
 	}
@@ -694,6 +706,9 @@ func (m Model) dashboardPreviewContent(width, height int) string {
 	}
 	if ds.SelectedIdx < 0 || ds.SelectedIdx >= len(ds.Worktrees) {
 		return "Select a worktree."
+	}
+	if ds.Worktrees[ds.SelectedIdx].Bare {
+		return "Bare repository has no working tree."
 	}
 
 	snap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx], m.State.CompareBasis)

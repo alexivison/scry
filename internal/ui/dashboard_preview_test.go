@@ -153,6 +153,40 @@ func TestDashboardPreview_SnapshotKeyIncludesHeadDirtyBasis(t *testing.T) {
 	}
 }
 
+func TestDashboardPreview_BareWorktreeDoesNotLoad(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	state.DashboardState.Worktrees = []model.WorktreeInfo{
+		{Path: "/repo.git", Bare: true},
+		{Path: "/repo-main", Branch: "main"},
+	}
+	state.DashboardState.SelectedIdx = 0
+	loader := &mockPreviewLoader{files: previewFiles()}
+	m := NewModel(state, WithPreviewLoader(loader))
+	m.width = 120
+	m.height = 30
+
+	cmd := m.maybeLoadPreview()
+	if cmd != nil {
+		t.Fatal("bare worktree should not start a preview command")
+	}
+	if len(loader.bases) != 0 {
+		t.Fatalf("preview loader called for bare worktree, bases=%v", loader.bases)
+	}
+
+	output := ansi.Strip(m.View())
+	if strings.Contains(output, "Loading preview") {
+		t.Fatalf("bare worktree should not show loading preview, got:\n%s", output)
+	}
+	if strings.Contains(output, "+0 -0") {
+		t.Fatalf("bare worktree should not show empty aggregate counts, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Bare repository has no working tree.") {
+		t.Fatalf("bare worktree should show a no-working-tree message, got:\n%s", output)
+	}
+}
+
 func TestDashboardPreview_RenderInSplitView(t *testing.T) {
 	t.Parallel()
 
