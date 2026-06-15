@@ -292,6 +292,9 @@ func bootstrapFromWorktreeList(ctx context.Context, discovery gitexec.GitRunner)
 	if err != nil {
 		return BootstrapResult{}, err
 	}
+	// A git-dir launch point is the dashboard host, not the linked worktree
+	// selected as a command runner.
+	repo.IsLinkedWorktree = false
 	return BootstrapResult{Repo: repo, Runner: runner}, nil
 }
 

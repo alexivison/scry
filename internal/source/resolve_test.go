@@ -906,6 +906,9 @@ func TestBootstrapFromBareGitDirUsesMatchingWorktree(t *testing.T) {
 	if canonicalPath(t, result.Repo.WorktreeRoot) != canonicalPath(t, mainDir) {
 		t.Fatalf("WorktreeRoot = %q, want %q", result.Repo.WorktreeRoot, mainDir)
 	}
+	if result.Repo.IsLinkedWorktree {
+		t.Fatal("IsLinkedWorktree = true, want false for bare dashboard host")
+	}
 }
 
 func canonicalPath(t *testing.T, path string) string {
