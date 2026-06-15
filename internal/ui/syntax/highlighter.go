@@ -2,6 +2,7 @@
 package syntax
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -14,6 +15,12 @@ import (
 )
 
 const sampleLimit = 8192
+
+// Span identifies a raw byte range in a highlighted line body.
+type Span struct {
+	Start int
+	End   int
+}
 
 // CacheKey identifies the highlighted line cache for one loaded patch.
 type CacheKey struct {
@@ -144,6 +151,17 @@ func (lc *LineCache) HighlightLineSpanBackground(line int, body string, start, e
 	return lc.highlighter.HighlightSpanBackground(body, start, end, background)
 }
 
+// HighlightLineSpansBackground highlights changed body spans while preserving token styling.
+func (lc *LineCache) HighlightLineSpansBackground(line int, body string, spans []Span, match Span, background lipgloss.Color) string {
+	if len(spans) == 0 && (match.Start < 0 || match.End <= match.Start) {
+		return lc.HighlightLine(line, body)
+	}
+	if lc == nil || lc.highlighter == nil {
+		return body
+	}
+	return lc.highlighter.HighlightSpansBackground(body, spans, match, background)
+}
+
 // Highlighter wraps a coalesced Chroma lexer.
 type Highlighter struct {
 	lexer   chroma.Lexer
@@ -199,6 +217,11 @@ func (h *Highlighter) HighlightSpanBackground(body string, start, end int, backg
 	return h.highlight(body, span{start: start, end: end}, background)
 }
 
+// HighlightSpansBackground renders body text with backgrounds on selected raw byte spans.
+func (h *Highlighter) HighlightSpansBackground(body string, spans []Span, match Span, background lipgloss.Color) string {
+	return h.highlightSpans(body, spans, match, background)
+}
+
 func (h *Highlighter) highlight(body string, match span, background lipgloss.Color) string {
 	if body == "" || h == nil || h.profile == terminal.ColorNone || h.lexer == nil {
 		return body
@@ -221,6 +244,34 @@ func (h *Highlighter) highlight(body string, match span, background lipgloss.Col
 		}
 		b.WriteString(renderToken(style, token.Value, offset, match))
 		offset += len(token.Value)
+	}
+	if b.Len() == 0 {
+		return body
+	}
+	return b.String()
+}
+
+func (h *Highlighter) highlightSpans(body string, spans []Span, match Span, background lipgloss.Color) string {
+	if body == "" || h == nil || h.profile == terminal.ColorNone || h.lexer == nil {
+		return body
+	}
+
+	tokens, ok := h.tokens(body)
+	if !ok {
+		return body
+	}
+
+	var b strings.Builder
+	offset := 0
+	for _, token := range tokens {
+		if token == chroma.EOF || token.Value == "" {
+			continue
+		}
+		tokenStart := offset
+		tokenEnd := tokenStart + len(token.Value)
+		style := styleFor(token.Type, h.profile)
+		b.WriteString(renderTokenWithSpans(style, token.Value, tokenStart, spans, match, background))
+		offset = tokenEnd
 	}
 	if b.Len() == 0 {
 		return body
@@ -261,6 +312,73 @@ func renderToken(style lipgloss.Style, value string, tokenStart int, match span)
 	return style.Render(value[:overlapStart]) +
 		style.Reverse(true).Render(value[overlapStart:overlapEnd]) +
 		style.Render(value[overlapEnd:])
+}
+
+func renderTokenWithSpans(style lipgloss.Style, value string, tokenStart int, spans []Span, match Span, background lipgloss.Color) string {
+	tokenEnd := tokenStart + len(value)
+	boundaries := tokenStyleBoundaries(tokenStart, tokenEnd, spans, match)
+
+	var b strings.Builder
+	for i := 0; i < len(boundaries)-1; i++ {
+		start, end := boundaries[i], boundaries[i+1]
+		if start >= end {
+			continue
+		}
+		segmentStyle := style
+		if background != "" && spansOverlapRaw(spans, start, end) {
+			segmentStyle = segmentStyle.Background(background)
+		}
+		if spanOverlaps(match, start, end) {
+			segmentStyle = segmentStyle.Reverse(true)
+		}
+		b.WriteString(segmentStyle.Render(value[start-tokenStart : end-tokenStart]))
+	}
+	return b.String()
+}
+
+func tokenStyleBoundaries(tokenStart, tokenEnd int, spans []Span, match Span) []int {
+	boundaries := []int{tokenStart, tokenEnd}
+	for _, span := range spans {
+		start := max(min(span.Start, tokenEnd), tokenStart)
+		end := max(min(span.End, tokenEnd), start)
+		if start < end {
+			boundaries = append(boundaries, start, end)
+		}
+	}
+	if spanOverlaps(match, tokenStart, tokenEnd) {
+		boundaries = append(boundaries,
+			max(min(match.Start, tokenEnd), tokenStart),
+			max(min(match.End, tokenEnd), tokenStart),
+		)
+	}
+	sort.Ints(boundaries)
+	return compactInts(boundaries)
+}
+
+func compactInts(values []int) []int {
+	if len(values) == 0 {
+		return values
+	}
+	out := values[:1]
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func spansOverlapRaw(spans []Span, start, end int) bool {
+	for _, span := range spans {
+		if spanOverlaps(span, start, end) {
+			return true
+		}
+	}
+	return false
+}
+
+func spanOverlaps(span Span, start, end int) bool {
+	return span.Start >= 0 && span.End > span.Start && start < span.End && end > span.Start
 }
 
 func styleFor(tokenType chroma.TokenType, profile terminal.ColorProfile) lipgloss.Style {

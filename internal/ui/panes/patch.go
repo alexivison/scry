@@ -3,7 +3,10 @@ package panes
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -49,6 +52,9 @@ type patchLine struct {
 	diff      model.DiffLine // only for diff lines
 	diffIndex int            // logical diff line index, headers excluded
 	hunkIndex int
+
+	changedSpans []bodySpan
+	hasIntraline bool
 }
 
 type visualRow struct {
@@ -76,6 +82,11 @@ type bodySegment struct {
 	displayStart int
 	displayEnd   int
 	index        int
+}
+
+type bodySpan struct {
+	start int
+	end   int
 }
 
 // SearchMatch identifies the current search match in logical diff-line space.
@@ -135,12 +146,243 @@ func (vp *PatchViewport) buildLines() []patchLine {
 	diffIndex := 0
 	for hunkIndex, h := range vp.Patch.Hunks {
 		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1, hunkIndex: hunkIndex})
-		for _, dl := range h.Lines {
-			lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, diffIndex: diffIndex, hunkIndex: hunkIndex})
-			diffIndex++
-		}
+		lines = append(lines, buildPatchLines(h.Lines, hunkIndex, &diffIndex)...)
 	}
 	return lines
+}
+
+func buildPatchLines(diffLines []model.DiffLine, hunkIndex int, diffIndex *int) []patchLine {
+	lines := make([]patchLine, 0, len(diffLines))
+	for _, dl := range diffLines {
+		lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, diffIndex: *diffIndex, hunkIndex: hunkIndex})
+		*diffIndex = *diffIndex + 1
+	}
+	annotateIntralineChanges(lines)
+	return lines
+}
+
+func annotateIntralineChanges(lines []patchLine) {
+	for i := 0; i < len(lines); {
+		if lines[i].diff.Kind != model.LineDeleted {
+			i++
+			continue
+		}
+
+		deletedStart := i
+		for i < len(lines) && lines[i].diff.Kind == model.LineDeleted {
+			i++
+		}
+		addedStart := i
+		for i < len(lines) && lines[i].diff.Kind == model.LineAdded {
+			i++
+		}
+		if addedStart == i {
+			continue
+		}
+		annotatePairedLineChanges(lines[deletedStart:addedStart], lines[addedStart:i])
+	}
+}
+
+func annotatePairedLineChanges(deleted, added []patchLine) {
+	for i := 0; i < min(len(deleted), len(added)); i++ {
+		deletedSpans, addedSpans := intralineChangedSpans(deleted[i].diff.Text, added[i].diff.Text)
+		deleted[i].changedSpans = deletedSpans
+		deleted[i].hasIntraline = true
+		added[i].changedSpans = addedSpans
+		added[i].hasIntraline = true
+	}
+}
+
+func intralineChangedSpans(oldText, newText string) ([]bodySpan, []bodySpan) {
+	if oldText == "" || newText == "" {
+		return fallbackIntralineChangedSpans(oldText, newText)
+	}
+
+	oldTokens := tokenizeBody(oldText)
+	newTokens := tokenizeBody(newText)
+	if len(oldTokens) == 0 || len(newTokens) == 0 || len(oldTokens)*len(newTokens) > 262144 {
+		return fallbackIntralineChangedSpans(oldText, newText)
+	}
+
+	oldChanged, newChanged := changedTokenSpans(oldText, newText, oldTokens, newTokens)
+	if len(oldChanged) == 0 && len(newChanged) == 0 {
+		return fallbackIntralineChangedSpans(oldText, newText)
+	}
+	return oldChanged, newChanged
+}
+
+func fallbackIntralineChangedSpans(oldText, newText string) ([]bodySpan, []bodySpan) {
+	prefix := commonPrefixLen(oldText, newText)
+	oldSuffix, newSuffix := commonSuffixStart(oldText, newText, prefix)
+
+	oldSpan := expandSpanToToken(oldText, bodySpan{start: prefix, end: oldSuffix})
+	newSpan := expandSpanToToken(newText, bodySpan{start: prefix, end: newSuffix})
+
+	return nonEmptySpan(oldSpan), nonEmptySpan(newSpan)
+}
+
+type bodyToken struct {
+	text  string
+	start int
+	end   int
+}
+
+func tokenizeBody(body string) []bodyToken {
+	var tokens []bodyToken
+	for i := 0; i < len(body); {
+		start := i
+		r, size := utf8.DecodeRuneInString(body[i:])
+		token := isTokenRune(r)
+		i += size
+		for i < len(body) {
+			r, size = utf8.DecodeRuneInString(body[i:])
+			if isTokenRune(r) != token {
+				break
+			}
+			i += size
+		}
+		tokens = append(tokens, bodyToken{text: body[start:i], start: start, end: i})
+	}
+	return tokens
+}
+
+func changedTokenSpans(oldText, newText string, oldTokens, newTokens []bodyToken) ([]bodySpan, []bodySpan) {
+	common := longestCommonTokenSubsequence(oldTokens, newTokens)
+	return unmatchedTokenSpans(oldText, oldTokens, common, true), unmatchedTokenSpans(newText, newTokens, common, false)
+}
+
+type tokenMatch struct {
+	old int
+	new int
+}
+
+func longestCommonTokenSubsequence(oldTokens, newTokens []bodyToken) []tokenMatch {
+	cols := len(newTokens) + 1
+	table := make([]int, (len(oldTokens)+1)*cols)
+	for i := len(oldTokens) - 1; i >= 0; i-- {
+		for j := len(newTokens) - 1; j >= 0; j-- {
+			idx := i*cols + j
+			if oldTokens[i].text == newTokens[j].text {
+				table[idx] = table[(i+1)*cols+j+1] + 1
+				continue
+			}
+			table[idx] = max(table[(i+1)*cols+j], table[i*cols+j+1])
+		}
+	}
+
+	var matches []tokenMatch
+	for i, j := 0, 0; i < len(oldTokens) && j < len(newTokens); {
+		if oldTokens[i].text == newTokens[j].text {
+			matches = append(matches, tokenMatch{old: i, new: j})
+			i++
+			j++
+			continue
+		}
+		if table[(i+1)*cols+j] >= table[i*cols+j+1] {
+			i++
+		} else {
+			j++
+		}
+	}
+	return matches
+}
+
+func unmatchedTokenSpans(body string, tokens []bodyToken, matches []tokenMatch, oldSide bool) []bodySpan {
+	matched := make([]bool, len(tokens))
+	for _, match := range matches {
+		idx := match.new
+		if oldSide {
+			idx = match.old
+		}
+		matched[idx] = true
+	}
+
+	var spans []bodySpan
+	for i := 0; i < len(tokens); {
+		if matched[i] {
+			i++
+			continue
+		}
+		start := tokens[i].start
+		end := tokens[i].end
+		i++
+		for i < len(tokens) && !matched[i] {
+			end = tokens[i].end
+			i++
+		}
+		spans = append(spans, bodySpan{start: start, end: end})
+	}
+	return compactSpans(spans)
+}
+
+func compactSpans(spans []bodySpan) []bodySpan {
+	out := spans[:0]
+	for _, span := range spans {
+		if span.start < span.end {
+			out = append(out, span)
+		}
+	}
+	return out
+}
+
+func commonPrefixLen(a, b string) int {
+	i := 0
+	for i < len(a) && i < len(b) {
+		ar, as := utf8.DecodeRuneInString(a[i:])
+		br, bs := utf8.DecodeRuneInString(b[i:])
+		if ar != br {
+			break
+		}
+		i += min(as, bs)
+	}
+	return i
+}
+
+func commonSuffixStart(a, b string, prefix int) (int, int) {
+	ai, bi := len(a), len(b)
+	for ai > prefix && bi > prefix {
+		ar, as := utf8.DecodeLastRuneInString(a[:ai])
+		br, bs := utf8.DecodeLastRuneInString(b[:bi])
+		if ar != br || ai-as < prefix || bi-bs < prefix {
+			break
+		}
+		ai -= as
+		bi -= bs
+	}
+	return ai, bi
+}
+
+func expandSpanToToken(body string, span bodySpan) bodySpan {
+	if span.start >= span.end {
+		return span
+	}
+
+	for span.start > 0 {
+		r, size := utf8.DecodeLastRuneInString(body[:span.start])
+		if !isTokenRune(r) {
+			break
+		}
+		span.start -= size
+	}
+	for span.end < len(body) {
+		r, size := utf8.DecodeRuneInString(body[span.end:])
+		if !isTokenRune(r) {
+			break
+		}
+		span.end += size
+	}
+	return span
+}
+
+func isTokenRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
+}
+
+func nonEmptySpan(span bodySpan) []bodySpan {
+	if span.start >= span.end {
+		return nil
+	}
+	return []bodySpan{span}
 }
 
 func formatHunkHeader(h model.Hunk) string {
@@ -578,50 +820,55 @@ func (vp *PatchViewport) unifiedVisualRows() []visualRow {
 
 func (vp *PatchViewport) sideBySideVisualRows() []visualRow {
 	rows := make([]visualRow, 0, len(vp.lines))
-	diffIndex := 0
 	for hunkIndex, h := range vp.Patch.Hunks {
 		rows = append(rows, visualRow{
 			line: patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1, hunkIndex: hunkIndex},
 		})
 
-		for i := 0; i < len(h.Lines); {
-			switch h.Lines[i].Kind {
+		hunkLines := vp.diffLinesForHunk(hunkIndex)
+		for i := 0; i < len(hunkLines); {
+			switch hunkLines[i].diff.Kind {
 			case model.LineDeleted:
 				var deleted []patchLine
-				for i < len(h.Lines) && h.Lines[i].Kind == model.LineDeleted {
-					deleted = append(deleted, patchLine{typ: lineTypeDiff, diff: h.Lines[i], diffIndex: diffIndex, hunkIndex: hunkIndex})
+				for i < len(hunkLines) && hunkLines[i].diff.Kind == model.LineDeleted {
+					deleted = append(deleted, hunkLines[i])
 					i++
-					diffIndex++
 				}
 				var added []patchLine
-				for i < len(h.Lines) && h.Lines[i].Kind == model.LineAdded {
-					added = append(added, patchLine{typ: lineTypeDiff, diff: h.Lines[i], diffIndex: diffIndex, hunkIndex: hunkIndex})
+				for i < len(hunkLines) && hunkLines[i].diff.Kind == model.LineAdded {
+					added = append(added, hunkLines[i])
 					i++
-					diffIndex++
 				}
 				rows = append(rows, vp.pairedSideBySideRows(deleted, added)...)
 			case model.LineAdded:
 				var added []patchLine
-				for i < len(h.Lines) && h.Lines[i].Kind == model.LineAdded {
-					added = append(added, patchLine{typ: lineTypeDiff, diff: h.Lines[i], diffIndex: diffIndex, hunkIndex: hunkIndex})
+				for i < len(hunkLines) && hunkLines[i].diff.Kind == model.LineAdded {
+					added = append(added, hunkLines[i])
 					i++
-					diffIndex++
 				}
 				rows = append(rows, vp.pairedSideBySideRows(nil, added)...)
 			case model.LineContext:
-				line := patchLine{typ: lineTypeDiff, diff: h.Lines[i], diffIndex: diffIndex, hunkIndex: hunkIndex}
+				line := hunkLines[i]
 				rows = append(rows, vp.pairedSideBySideRows([]patchLine{line}, []patchLine{line})...)
 				i++
-				diffIndex++
 			default:
-				line := patchLine{typ: lineTypeDiff, diff: h.Lines[i], diffIndex: diffIndex, hunkIndex: hunkIndex}
+				line := hunkLines[i]
 				rows = append(rows, visualRow{line: line, segment: fullBodySegment(line.diff.Text)})
 				i++
-				diffIndex++
 			}
 		}
 	}
 	return rows
+}
+
+func (vp *PatchViewport) diffLinesForHunk(hunkIndex int) []patchLine {
+	var lines []patchLine
+	for _, line := range vp.lines {
+		if line.typ == lineTypeDiff && line.hunkIndex == hunkIndex {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func (vp *PatchViewport) pairedSideBySideRows(oldLines, newLines []patchLine) []visualRow {
@@ -772,23 +1019,52 @@ func (s bodySegment) matchInSegment(match SearchMatch) SearchMatch {
 	}
 }
 
+func (s bodySegment) spansInSegment(spans []bodySpan) []bodySpan {
+	if len(spans) == 0 {
+		return nil
+	}
+	segmentSpans := make([]bodySpan, 0, len(spans))
+	for _, span := range spans {
+		start := max(span.start, s.start)
+		end := min(span.end, s.end)
+		if start >= end {
+			continue
+		}
+		segmentSpans = append(segmentSpans, bodySpan{
+			start: start - s.start,
+			end:   end - s.start,
+		})
+	}
+	return segmentSpans
+}
+
 func (vp *PatchViewport) renderDiffVisualRow(row visualRow, match SearchMatch) string {
 	dl := row.line.diff
 	body := row.segment.text
 	bodyStyled := false
 	segmentMatch := row.segment.matchInSegment(match)
+	changedSpans := row.segment.spansInSegment(row.line.changedSpans)
 
-	if vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind) {
+	switch {
+	case row.line.hasIntraline && vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind):
+		highlighted := vp.highlightIntralineBody(dl, row.line.diffIndex, match, row.line.changedSpans)
+		body = ansi.Cut(highlighted, row.segment.displayStart, row.segment.displayEnd)
+		bodyStyled = true
+		segmentMatch = NoSearchMatch()
+		changedSpans = nil
+	case vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind):
 		highlighted := vp.highlightBody(dl, row.line.diffIndex, match)
 		body = ansi.Cut(highlighted, row.segment.displayStart, row.segment.displayEnd)
 		bodyStyled = true
 		segmentMatch = NoSearchMatch()
 	}
 
-	return renderDiffLineSegmentHL(
+	return renderDiffLineSegmentSpansHL(
 		dl,
 		body,
 		bodyStyled,
+		changedSpans,
+		row.line.hasIntraline,
 		vp.Width,
 		vp.SearchQuery,
 		segmentMatch,
@@ -834,8 +1110,16 @@ func (vp *PatchViewport) renderSideBySideCell(cell *sideBySideCell, width int, s
 		match = vp.SearchMatch
 	}
 	segmentMatch := cell.segment.matchInSegment(match)
+	changedSpans := cell.segment.spansInSegment(cell.line.changedSpans)
 
-	if vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind) {
+	switch {
+	case cell.line.hasIntraline && vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind):
+		highlighted := vp.highlightIntralineBody(dl, cell.line.diffIndex, match, cell.line.changedSpans)
+		body = ansi.Cut(highlighted, cell.segment.displayStart, cell.segment.displayEnd)
+		bodyStyled = true
+		segmentMatch = NoSearchMatch()
+		changedSpans = nil
+	case vp.syntaxHighlighted != nil && syntax.Highlightable(dl.Kind):
 		highlighted := vp.highlightBody(dl, cell.line.diffIndex, match)
 		body = ansi.Cut(highlighted, cell.segment.displayStart, cell.segment.displayEnd)
 		bodyStyled = true
@@ -854,6 +1138,9 @@ func (vp *PatchViewport) renderSideBySideCell(cell *sideBySideCell, width int, s
 		style:      style,
 		fill:       fill,
 		bodyStyled: bodyStyled,
+
+		changedSpans: changedSpans,
+		hasIntraline: cell.line.hasIntraline,
 	}
 
 	rendered := emitDiffLine(layers, width, vp.SearchQuery, segmentMatch, vp.LineMode, vp.XOffset, cell.continuation)
@@ -877,6 +1164,35 @@ func (vp *PatchViewport) highlightBody(dl model.DiffLine, diffIndex int, match S
 	return vp.syntaxHighlighted.HighlightLine(diffIndex, dl.Text)
 }
 
+func (vp *PatchViewport) highlightIntralineBody(dl model.DiffLine, diffIndex int, match SearchMatch, spans []bodySpan) string {
+	if vp.syntaxHighlighted == nil || !syntax.Highlightable(dl.Kind) {
+		return dl.Text
+	}
+	background, _ := diffLineBackground(dl.Kind)
+	return vp.syntaxHighlighted.HighlightLineSpansBackground(
+		diffIndex,
+		dl.Text,
+		syntaxSpans(spans),
+		syntaxMatch(match),
+		background,
+	)
+}
+
+func syntaxSpans(spans []bodySpan) []syntax.Span {
+	if len(spans) == 0 {
+		return nil
+	}
+	out := make([]syntax.Span, 0, len(spans))
+	for _, span := range spans {
+		out = append(out, syntax.Span{Start: span.start, End: span.end})
+	}
+	return out
+}
+
+func syntaxMatch(match SearchMatch) syntax.Span {
+	return syntax.Span{Start: match.Start, End: match.End}
+}
+
 type diffLineLayers struct {
 	gutter string
 	prefix string
@@ -885,6 +1201,9 @@ type diffLineLayers struct {
 	fill   bool
 
 	bodyStyled bool
+
+	changedSpans []bodySpan
+	hasIntraline bool
 }
 
 func buildDiffLineLayers(dl model.DiffLine, gutterVisible bool, gutterDigits int) diffLineLayers {
@@ -910,6 +1229,10 @@ func renderDiffLineBodyHL(dl model.DiffLine, body string, bodyStyled bool, width
 }
 
 func renderDiffLineSegmentHL(dl model.DiffLine, body string, bodyStyled bool, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int, lineMode model.LineMode, xOffset int, continuation bool) string {
+	return renderDiffLineSegmentSpansHL(dl, body, bodyStyled, nil, false, width, query, match, gutterVisible, gutterDigits, lineMode, xOffset, continuation)
+}
+
+func renderDiffLineSegmentSpansHL(dl model.DiffLine, body string, bodyStyled bool, changedSpans []bodySpan, hasIntraline bool, width int, query string, match SearchMatch, gutterVisible bool, gutterDigits int, lineMode model.LineMode, xOffset int, continuation bool) string {
 	if dl.Kind == model.LineNoNewline {
 		return noNewlineStyle.Render("\\ No newline at end of file")
 	}
@@ -917,6 +1240,8 @@ func renderDiffLineSegmentHL(dl model.DiffLine, body string, bodyStyled bool, wi
 	layers := buildDiffLineLayers(dl, gutterVisible, gutterDigits)
 	layers.body = body
 	layers.bodyStyled = bodyStyled
+	layers.changedSpans = changedSpans
+	layers.hasIntraline = hasIntraline
 	return emitDiffLine(layers, width, query, match, lineMode, xOffset, continuation)
 }
 
@@ -930,22 +1255,35 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 	}
 
 	visibleBody := layers.body
+	visibleSpans := layers.changedSpans
+	visibleMatch := match
 	bodyPadding := ""
 	if width > 0 {
 		bodyWidth := diffLineBodyWidth(layers, width)
 		if bodyWidth <= 0 {
 			visibleBody = ""
+			visibleSpans = nil
+			visibleMatch = NoSearchMatch()
 		} else {
-			if xOffset > 0 {
-				visibleBody = ansi.TruncateLeft(visibleBody, xOffset, "")
+			if layers.hasIntraline && !layers.bodyStyled {
+				segment := bodySegmentForDisplayRange(visibleBody, xOffset, bodyWidth)
+				visibleBody = segment.text
+				visibleSpans = segment.spansInSegment(visibleSpans)
+				visibleMatch = segment.matchInSegment(match)
+			} else {
+				if xOffset > 0 {
+					visibleBody = ansi.TruncateLeft(visibleBody, xOffset, "")
+				}
+				visibleBody = ansi.Truncate(visibleBody, bodyWidth, "")
 			}
-			visibleBody = ansi.Truncate(visibleBody, bodyWidth, "")
 			bodyPadding = diffLinePadding(visibleBody, bodyWidth, layers.fill)
 		}
 	}
 
 	body := layers.prefix + visibleBody + bodyPadding
-	if layers.bodyStyled {
+	if layers.hasIntraline && !layers.bodyStyled {
+		body = renderIntralineBody(layers.prefix, visibleBody, bodyPadding, visibleSpans, visibleMatch, layers.style, continuation)
+	} else if layers.bodyStyled {
 		body = layers.style.Render(layers.prefix) + visibleBody
 		if bodyPadding != "" {
 			body += layers.style.Render(bodyPadding)
@@ -953,6 +1291,9 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 	}
 
 	if layers.gutter != "" {
+		if layers.hasIntraline && !layers.bodyStyled {
+			return layers.gutter + body
+		}
 		if !layers.bodyStyled && query != "" && match.validForBody(layers.body) {
 			return layers.gutter + highlightSpan(body, bodySpanToVisibleContentSpan(match, layers.prefix, xOffset, visibleBody), layers.style)
 		}
@@ -960,6 +1301,10 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 			return layers.gutter + body
 		}
 		return layers.gutter + layers.style.Render(body)
+	}
+
+	if layers.hasIntraline && !layers.bodyStyled {
+		return body
 	}
 
 	if !layers.bodyStyled && query != "" && match.validForBody(layers.body) {
@@ -970,6 +1315,135 @@ func emitDiffLine(layers diffLineLayers, width int, query string, match SearchMa
 		return body
 	}
 	return layers.style.Render(body)
+}
+
+func bodySegmentForDisplayRange(body string, displayStart, width int) bodySegment {
+	if body == "" || width <= 0 {
+		return bodySegment{text: "", start: 0, end: 0}
+	}
+	if displayStart < 0 {
+		displayStart = 0
+	}
+
+	start, startDisplay := bodyStartByteAtDisplayColumn(body, displayStart)
+	end, endDisplay := bodyEndByteAtDisplayColumn(body, startDisplay+width)
+	return bodySegmentRange(body, start, end, startDisplay, endDisplay, 0)
+}
+
+func bodyStartByteAtDisplayColumn(body string, column int) (int, int) {
+	idx, displayCol, exact := bodyByteAtDisplayColumn(body, column)
+	if exact || idx >= len(body) {
+		return idx, displayCol
+	}
+	cluster, clusterWidth := ansi.FirstGraphemeCluster(body[idx:], ansi.GraphemeWidth)
+	return idx + len(cluster), displayCol + clusterWidth
+}
+
+func bodyEndByteAtDisplayColumn(body string, column int) (int, int) {
+	idx, displayCol, _ := bodyByteAtDisplayColumn(body, column)
+	return idx, displayCol
+}
+
+func bodyByteAtDisplayColumn(body string, column int) (idx int, displayCol int, exact bool) {
+	if column <= 0 {
+		return 0, 0, true
+	}
+
+	for i := 0; i < len(body); {
+		cluster, clusterWidth := ansi.FirstGraphemeCluster(body[i:], ansi.GraphemeWidth)
+		if cluster == "" {
+			break
+		}
+		if displayCol+clusterWidth > column {
+			return i, displayCol, false
+		}
+		i += len(cluster)
+		displayCol += clusterWidth
+		if displayCol == column {
+			return i, displayCol, true
+		}
+	}
+	return len(body), displayCol, true
+}
+
+func renderIntralineBody(prefix, body, padding string, spans []bodySpan, match SearchMatch, style lipgloss.Style, continuation bool) string {
+	var b strings.Builder
+	if continuation {
+		b.WriteString(prefix)
+	} else {
+		b.WriteString(style.Render(prefix))
+	}
+	b.WriteString(renderBodySpans(body, spans, match, style))
+	b.WriteString(padding)
+	return b.String()
+}
+
+func renderBodySpans(body string, spans []bodySpan, match SearchMatch, style lipgloss.Style) string {
+	hasMatch := match.validForBody(body)
+	if len(spans) == 0 && !hasMatch {
+		return body
+	}
+
+	boundaries := bodyStyleBoundaries(body, spans, match, hasMatch)
+	var b strings.Builder
+	for i := 0; i < len(boundaries)-1; i++ {
+		start, end := boundaries[i], boundaries[i+1]
+		if start >= end {
+			continue
+		}
+		segment := body[start:end]
+		changed := spansOverlap(spans, start, end)
+		matched := hasMatch && start < match.End && end > match.Start
+		switch {
+		case changed && matched:
+			b.WriteString(style.Reverse(true).Render(segment))
+		case changed:
+			b.WriteString(style.Render(segment))
+		case matched:
+			b.WriteString(lipgloss.NewStyle().Reverse(true).Render(segment))
+		default:
+			b.WriteString(segment)
+		}
+	}
+	return b.String()
+}
+
+func bodyStyleBoundaries(body string, spans []bodySpan, match SearchMatch, hasMatch bool) []int {
+	boundaries := []int{0, len(body)}
+	for _, span := range spans {
+		start := max(min(span.start, len(body)), 0)
+		end := max(min(span.end, len(body)), start)
+		if start < end {
+			boundaries = append(boundaries, start, end)
+		}
+	}
+	if hasMatch {
+		boundaries = append(boundaries, match.Start, match.End)
+	}
+	sort.Ints(boundaries)
+	return compactInts(boundaries)
+}
+
+func compactInts(values []int) []int {
+	if len(values) == 0 {
+		return values
+	}
+	out := values[:1]
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func spansOverlap(spans []bodySpan, start, end int) bool {
+	for _, span := range spans {
+		if start < span.end && end > span.start {
+			return true
+		}
+	}
+	return false
 }
 
 func diffLinePadding(body string, width int, fill bool) string {
