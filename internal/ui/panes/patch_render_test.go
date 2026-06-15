@@ -9,6 +9,8 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/terminal"
+	"github.com/alexivison/scry/internal/ui/syntax"
 )
 
 func TestGutterFormat_SeparatorColumn(t *testing.T) {
@@ -123,6 +125,126 @@ func TestChangedLinesUseBrightFullWidthBackground(t *testing.T) {
 				t.Fatalf("rendered line width = %d, want 16: %q", width, stripped)
 			}
 		})
+	}
+}
+
+func TestWrappedPairedParagraphHighlightsOnlyChangedWords(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	oldText := "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda."
+	newText := "Alpha beta gamma delta OMEGA zeta eta theta iota kappa lambda."
+	patch := model.FilePatch{
+		Summary: model.FileSummary{Path: "notes.md", Status: model.StatusModified},
+		Hunks: []model.Hunk{{
+			OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1,
+			Lines: []model.DiffLine{
+				{Kind: model.LineDeleted, OldNo: intP(1), Text: oldText},
+				{Kind: model.LineAdded, NewNo: intP(1), Text: newText},
+			},
+		}},
+	}
+
+	tests := map[string]struct {
+		mode  model.PatchDiffMode
+		width int
+	}{
+		"unified":      {mode: model.PatchDiffModeUnified, width: 36},
+		"side-by-side": {mode: model.PatchDiffModeSideBySide, width: 80},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			vp := NewPatchViewport(patch)
+			vp.DiffMode = tc.mode
+			vp.Width = tc.width
+			vp.Height = 20
+			vp.GutterVisible = false
+
+			got := vp.Render()
+
+			assertOnlyNeedleHasBackground(t, got, "epsilon", []string{"Alpha beta", "zeta"}, "48;2;139;0;0")
+			assertOnlyNeedleHasBackground(t, got, "OMEGA", []string{"Alpha beta", "zeta"}, "48;2;0;95;0")
+		})
+	}
+}
+
+func TestPairedLineHighlightsSeparateChangedWords(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	vp := NewPatchViewport(model.FilePatch{
+		Summary: model.FileSummary{Path: "notes.md", Status: model.StatusModified},
+		Hunks: []model.Hunk{{
+			OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1,
+			Lines: []model.DiffLine{
+				{Kind: model.LineDeleted, OldNo: intP(1), Text: "alpha one middle two omega"},
+				{Kind: model.LineAdded, NewNo: intP(1), Text: "alpha ONE middle TWO omega"},
+			},
+		}},
+	})
+	vp.Width = 0
+	vp.Height = 3
+	vp.GutterVisible = false
+
+	got := vp.Render()
+
+	assertOnlyNeedleHasBackground(t, got, "one", []string{"middle"}, "48;2;139;0;0")
+	assertOnlyNeedleHasBackground(t, got, "two", []string{"middle"}, "48;2;139;0;0")
+	assertOnlyNeedleHasBackground(t, got, "ONE", []string{"middle"}, "48;2;0;95;0")
+	assertOnlyNeedleHasBackground(t, got, "TWO", []string{"middle"}, "48;2;0;95;0")
+}
+
+func TestPairedIntralineChangesPreserveSyntaxHighlighting(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	vp := NewPatchViewport(model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},
+		Hunks: []model.Hunk{{
+			OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1,
+			Lines: []model.DiffLine{
+				{Kind: model.LineDeleted, OldNo: intP(1), Text: `return "old"`},
+				{Kind: model.LineAdded, NewNo: intP(1), Text: `return "new"`},
+			},
+		}},
+	})
+	vp.Width = 0
+	vp.Height = 3
+	vp.GutterVisible = false
+	vp.SetSyntaxHighlighter(syntax.NewLineCache("main.go", "", "", terminal.ColorANSI256))
+
+	got := vp.Render()
+	wantKeyword := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true).Render("return")
+	if !strings.Contains(got, wantKeyword) {
+		t.Fatalf("paired intraline lines should preserve syntax highlighting for unchanged code, got:\n%q", got)
+	}
+}
+
+func TestIntralineHorizontalScrollDoesNotOverflowWideRunes(t *testing.T) {
+	vp := NewPatchViewport(model.FilePatch{
+		Summary: model.FileSummary{Path: "wide.txt", Status: model.StatusModified},
+		Hunks: []model.Hunk{{
+			OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1,
+			Lines: []model.DiffLine{
+				{Kind: model.LineDeleted, OldNo: intP(1), Text: "abcdefg界XYZold"},
+				{Kind: model.LineAdded, NewNo: intP(1), Text: "abcdefg界XYZnew"},
+			},
+		}},
+	})
+	vp.LineMode = model.LineModeScroll
+	vp.Width = 5
+	vp.Height = 1
+	vp.ScrollOffset = 1
+	vp.XOffset = 8
+	vp.GutterVisible = false
+
+	got := vp.Render()
+	if width := lipgloss.Width(ansi.Strip(got)); width > vp.Width {
+		t.Fatalf("rendered line width = %d, want <= %d: %q", width, vp.Width, got)
 	}
 }
 
@@ -418,6 +540,55 @@ func findLineContaining(lines []string, needle string) string {
 		}
 	}
 	return ""
+}
+
+func assertOnlyNeedleHasBackground(t *testing.T, output, changed string, unchanged []string, bg string) {
+	t.Helper()
+	lines := strings.Split(output, "\n")
+	line := findLineContaining(lines, changed)
+	if line == "" {
+		t.Fatalf("missing rendered line for %q:\n%q", changed, output)
+	}
+	if !backgroundActiveAt(line, strings.Index(line, changed), bg) {
+		t.Fatalf("changed text %q lacks background %s in line:\n%q", changed, bg, line)
+	}
+
+	for _, text := range unchanged {
+		indexes := allIndexes(line, text)
+		if len(indexes) == 0 {
+			t.Fatalf("line for %q is missing unchanged text %q:\n%q", changed, text, line)
+		}
+		for _, index := range indexes {
+			if backgroundActiveAt(line, index, bg) {
+				t.Fatalf("unchanged text %q should not have background %s in line:\n%q", text, bg, line)
+			}
+		}
+	}
+}
+
+func allIndexes(s, substr string) []int {
+	var indexes []int
+	for offset := 0; offset < len(s); {
+		idx := strings.Index(s[offset:], substr)
+		if idx < 0 {
+			return indexes
+		}
+		indexes = append(indexes, offset+idx)
+		offset += idx + len(substr)
+	}
+	return indexes
+}
+
+func backgroundActiveAt(line string, index int, bg string) bool {
+	if index < 0 {
+		return false
+	}
+	before := line[:index]
+	bgAt := strings.LastIndex(before, bg)
+	if bgAt < 0 {
+		return false
+	}
+	return bgAt > strings.LastIndex(before, "\x1b[0m")
 }
 
 func TestWrapRenderingContinuationRowsAlignWithBody(t *testing.T) {
