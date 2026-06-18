@@ -198,7 +198,7 @@ func TestDashboardPreview_RenderInSplitView(t *testing.T) {
 
 	output := ansi.Strip(m.View())
 
-	if !strings.Contains(output, "├─ [-] cmd/") || !strings.Contains(output, "│ └─ [-] scry/") {
+	if !strings.Contains(output, "├─ [-] cmd/scry/") {
 		t.Fatalf("preview should use tree-style directory rows, got:\n%s", output)
 	}
 	if !strings.Contains(output, "preview.go") {
