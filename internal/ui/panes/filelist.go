@@ -52,6 +52,7 @@ const (
 type FileTreeRow struct {
 	Kind          FileTreeRowKind
 	Path          string
+	Label         string
 	Depth         int
 	FileIndex     int
 	Collapsed     bool
@@ -261,11 +262,13 @@ func (n *fileTreeNode) appendRows(rows *[]FileTreeRow, files []model.FileSummary
 	total := len(dirNames) + len(n.files)
 	for i, name := range dirNames {
 		child := n.dirs[name]
-		isCollapsed := collapsed != nil && collapsed[child.path]
+		visibleChild := compactDir(child, collapsed)
+		isCollapsed := collapsed != nil && collapsed[visibleChild.path]
 		last := i == total-1
 		*rows = append(*rows, FileTreeRow{
 			Kind:          FileTreeRowDir,
-			Path:          child.path,
+			Path:          visibleChild.path,
+			Label:         compactDirLabel(n.path, visibleChild.path, name),
 			Depth:         len(continuations),
 			FileIndex:     -1,
 			Collapsed:     isCollapsed,
@@ -274,7 +277,7 @@ func (n *fileTreeNode) appendRows(rows *[]FileTreeRow, files []model.FileSummary
 		})
 		if !isCollapsed {
 			nextContinuations := append(copyContinuations(continuations), !last)
-			child.appendRows(rows, files, collapsed, nextContinuations)
+			visibleChild.appendRows(rows, files, collapsed, nextContinuations)
 		}
 	}
 
@@ -289,6 +292,30 @@ func (n *fileTreeNode) appendRows(rows *[]FileTreeRow, files []model.FileSummary
 			Continuations: copyContinuations(continuations),
 		})
 	}
+}
+
+func compactDir(n *fileTreeNode, collapsed map[string]bool) *fileTreeNode {
+	for n != nil && len(n.files) == 0 && len(n.dirs) == 1 {
+		if collapsed != nil && collapsed[n.path] {
+			return n
+		}
+		for _, child := range n.dirs {
+			n = child
+			break
+		}
+	}
+	return n
+}
+
+func compactDirLabel(parentPath, dirPath, fallback string) string {
+	if parentPath == "" {
+		return dirPath
+	}
+	prefix := parentPath + "/"
+	if label, ok := strings.CutPrefix(dirPath, prefix); ok {
+		return label
+	}
+	return fallback
 }
 
 func copyContinuations(in []bool) []bool {
@@ -330,7 +357,11 @@ func renderFileTreeDirEntry(row FileTreeRow, selected bool, width int) string {
 	if row.Collapsed {
 		marker = "[+]"
 	}
-	label := pathpkg.Base(row.Path) + "/"
+	label := row.Label
+	if label == "" {
+		label = pathpkg.Base(row.Path)
+	}
+	label += "/"
 	connector := treeConnector(row)
 	connectorWidth := lipgloss.Width(connector)
 	rest := marker + " " + label

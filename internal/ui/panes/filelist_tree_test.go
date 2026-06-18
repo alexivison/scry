@@ -23,10 +23,12 @@ func TestProjectFileTreeParentBeforeChildAndFileIndices(t *testing.T) {
 
 	proj := ProjectFileTree(files, model.FileFilterAll, nil, 0)
 
-	assertRowBefore(t, proj.Rows, "cmd", "cmd/scry")
 	assertRowBefore(t, proj.Rows, "cmd/scry", "cmd/scry/main.go")
 	assertRowBefore(t, proj.Rows, "internal", "internal/model")
 	assertRowBefore(t, proj.Rows, "internal", "internal/ui")
+	if hasRow(proj.Rows, "cmd") {
+		t.Fatal("single-child cmd directory should be compacted into cmd/scry")
+	}
 
 	gotIdx, ok := fileIndexForRow(proj.Rows, "internal/ui/model_test.go")
 	if !ok {
@@ -56,6 +58,35 @@ func TestProjectFileTreeCollapsedDirectoryHidesDescendants(t *testing.T) {
 	}
 	if !hasRow(proj.Rows, "README.md") {
 		t.Fatal("collapsed directory should not hide unrelated root files")
+	}
+}
+
+func TestProjectFileTreeCompactsEmptyDirectoryChains(t *testing.T) {
+	t.Parallel()
+
+	files := []model.FileSummary{
+		{Path: "cmd/quest.go"},
+		{Path: "internal/quests/quest.go"},
+		{Path: "internal/quests/board/board.go"},
+		{Path: "internal/quests/board/view.go"},
+		{Path: "quest/comments.go"},
+	}
+
+	proj := ProjectFileTree(files, model.FileFilterAll, nil, 0)
+
+	if hasRow(proj.Rows, "internal") {
+		t.Fatal("single-child directory with no direct files should be compacted into its child")
+	}
+	if !hasRow(proj.Rows, "internal/quests") {
+		t.Fatalf("compacted directory row internal/quests missing: %+v", proj.Rows)
+	}
+	assertRowBefore(t, proj.Rows, "internal/quests", "internal/quests/board")
+	assertRowBefore(t, proj.Rows, "internal/quests/board", "internal/quests/board/board.go")
+
+	cmdIdx := rowIndex(proj.Rows, "cmd")
+	questIdx := rowIndex(proj.Rows, "quest")
+	if cmdIdx < 0 || questIdx < 0 {
+		t.Fatalf("directories with direct files should remain visible, rows: %+v", proj.Rows)
 	}
 }
 
@@ -206,9 +237,9 @@ func TestRenderFileListTreeConnectorGlyphs(t *testing.T) {
 	output, _ := RenderFileList(files, 0, 0, 80, 20, true)
 	plain := ansi.Strip(output)
 	want := []string{
-		"├─ [-] cmd/",
-		"│ └─ [-] scry/",
-		"│   ├─ M main.go",
+		"├─ [-] cmd/scry/",
+		"│ ├─ M main.go",
+		"│ └─ A util.go",
 		"│ └─ M app.go",
 		"└─ M README.md",
 	}
