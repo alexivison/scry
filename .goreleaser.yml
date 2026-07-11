@@ -33,6 +33,7 @@ brews:
   - repository:
       owner: alexivison
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     name: scry
     homepage: https://github.com/alexivison/scry
     description: "Minimal TUI for reviewing Git branch diffs"
