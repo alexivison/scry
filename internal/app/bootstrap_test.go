@@ -30,6 +30,9 @@ func TestInitialDiffStateDefaultsToSplitLayout(t *testing.T) {
 	if state.FocusPane != model.PaneFiles {
 		t.Fatalf("FocusPane = %q, want %q", state.FocusPane, model.PaneFiles)
 	}
+	if state.PatchDiffMode != model.PatchDiffModeSideBySide {
+		t.Fatalf("PatchDiffMode = %v, want %v", state.PatchDiffMode, model.PatchDiffModeSideBySide)
+	}
 	if state.Patches == nil {
 		t.Fatal("Patches map is nil")
 	}
@@ -54,6 +57,9 @@ func TestInitialDashboardStateDefaultsToSplitLayout(t *testing.T) {
 	}
 	if !state.WorktreeMode {
 		t.Fatal("WorktreeMode = false, want true")
+	}
+	if state.PatchDiffMode != model.PatchDiffModeSideBySide {
+		t.Fatalf("PatchDiffMode = %v, want %v", state.PatchDiffMode, model.PatchDiffModeSideBySide)
 	}
 	if state.Patches == nil {
 		t.Fatal("Patches map is nil")

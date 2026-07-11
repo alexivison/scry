@@ -163,6 +163,7 @@ func initialDiffState(cfg config.Config, cmp model.ResolvedCompare, basis model.
 		IgnoreWhitespace: cfg.IgnoreWhitespace,
 		FocusPane:        focusPane,
 		Layout:           model.LayoutSplit,
+		PatchDiffMode:    model.PatchDiffModeSideBySide,
 		Patches:          make(map[string]model.PatchLoadState),
 		WatchEnabled:     cfg.Watch,
 		WatchInterval:    cfg.WatchInterval,
@@ -181,6 +182,7 @@ func initialDashboardState(cfg config.Config) model.AppState {
 	return model.AppState{
 		FocusPane:        model.PaneDashboard,
 		Layout:           model.LayoutSplit,
+		PatchDiffMode:    model.PatchDiffModeSideBySide,
 		CompareBasis:     model.CompareBasisUpstream,
 		WorktreeMode:     true,
 		WatchEnabled:     cfg.Watch,
