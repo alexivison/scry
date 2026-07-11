@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	godiff "github.com/sourcegraph/go-diff/diff"
 
 	"github.com/alexivison/scry/internal/gitexec"
@@ -15,6 +16,7 @@ import (
 const (
 	maxPatchBytes = 8 << 20 // 8 MiB
 	maxPatchLines = 50_000
+	tabWidth      = 8 // terminal tab stop width; see expandTabs.
 )
 
 // OversizedError wraps ErrOversized with the measured byte size and line count
@@ -179,6 +181,37 @@ func mapHunks(src []*godiff.Hunk, rawBodies []string) ([]model.Hunk, int) {
 	return hunks, totalLines
 }
 
+// expandTabs replaces TAB characters in s with spaces, expanding each tab to
+// the next tab stop (a multiple of tabWidth) measured from column 0 of s.
+// A real terminal renders a tab as a jump to the next stop, but
+// ansi.StringWidth/lipgloss.Width measure a tab as width 0 — so scry's
+// layout math (soft-wrap segmentation, right-edge truncation, padding,
+// side-by-side column widths) would misjudge how much of a tab-indented
+// line actually fits. Expanding tabs once here, at parse time, keeps every
+// downstream consumer of DiffLine.Text (search, intraline-change spans,
+// syntax highlighting, wrap segmentation) consistent, since they all
+// operate on byte offsets into Text.
+func expandTabs(s string, tabWidth int) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			spaces := tabWidth - (col % tabWidth)
+			b.WriteString(strings.Repeat(" ", spaces))
+			col += spaces
+			continue
+		}
+		b.WriteRune(r)
+		col += ansi.StringWidth(string(r))
+	}
+	return b.String()
+}
+
 // mapLines parses a raw hunk body into DiffLines with line numbers.
 func mapLines(body string, oldStart, newStart int) []model.DiffLine {
 	body = strings.TrimSuffix(body, "\n")
@@ -207,7 +240,7 @@ func mapLines(body string, oldStart, newStart int) []model.DiffLine {
 		}
 
 		prefix := rl[0]
-		text := rl[1:]
+		text := expandTabs(rl[1:], tabWidth)
 
 		switch prefix {
 		case ' ':
