@@ -42,7 +42,8 @@ const bodyOffsetStep = 8
 type lineType int
 
 const (
-	lineTypeHunkHeader lineType = iota
+	lineTypeFileHeader lineType = iota
+	lineTypeHunkHeader
 	lineTypeDiff
 )
 
@@ -144,7 +145,12 @@ func (vp *PatchViewport) computeGutterDigits() int {
 func (vp *PatchViewport) buildLines() []patchLine {
 	var lines []patchLine
 	diffIndex := 0
+	filePath := ""
 	for hunkIndex, h := range vp.Patch.Hunks {
+		if h.FilePath != "" && h.FilePath != filePath {
+			lines = append(lines, patchLine{typ: lineTypeFileHeader, header: h.FilePath, diffIndex: -1})
+			filePath = h.FilePath
+		}
 		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1, hunkIndex: hunkIndex})
 		lines = append(lines, buildPatchLines(h.Lines, hunkIndex, &diffIndex)...)
 	}
@@ -768,6 +774,8 @@ func (vp *PatchViewport) Render() string {
 	rendered := make([]string, 0, len(visible))
 	for _, row := range visible {
 		switch row.line.typ {
+		case lineTypeFileHeader:
+			rendered = append(rendered, renderFileSeparator(row.line.header, vp.Width))
 		case lineTypeHunkHeader:
 			rendered = append(rendered, renderHunkSeparator(row.line.header, vp.Width))
 		case lineTypeDiff:
@@ -812,7 +820,7 @@ func (vp *PatchViewport) visualRows() []visualRow {
 func (vp *PatchViewport) unifiedVisualRows() []visualRow {
 	rows := make([]visualRow, 0, len(vp.lines))
 	for _, line := range vp.lines {
-		if line.typ == lineTypeHunkHeader {
+		if line.typ != lineTypeDiff {
 			rows = append(rows, visualRow{line: line})
 			continue
 		}
@@ -837,7 +845,12 @@ func (vp *PatchViewport) unifiedVisualRows() []visualRow {
 
 func (vp *PatchViewport) sideBySideVisualRows() []visualRow {
 	rows := make([]visualRow, 0, len(vp.lines))
+	filePath := ""
 	for hunkIndex, h := range vp.Patch.Hunks {
+		if h.FilePath != "" && h.FilePath != filePath {
+			rows = append(rows, visualRow{line: patchLine{typ: lineTypeFileHeader, header: h.FilePath, diffIndex: -1}})
+			filePath = h.FilePath
+		}
 		rows = append(rows, visualRow{
 			line: patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1, hunkIndex: hunkIndex},
 		})
@@ -1596,6 +1609,10 @@ func formatSideGutter(no *int, digits int) string {
 
 // renderHunkSeparator renders a hunk header as a horizontal rule with the @@ text embedded.
 // Example: ─── @@ -10,3 +11,4 @@ func main() ───────
+func renderFileSeparator(path string, width int) string {
+	return renderHunkSeparator("File: "+path, width)
+}
+
 func renderHunkSeparator(header string, width int) string {
 	prefix := "── "
 	middle := header

@@ -93,23 +93,29 @@ func TestFileTreeLExpandsSelectedCollapsedDirectory(t *testing.T) {
 	}
 }
 
-func TestFileTreeEnterDoesNothingOnFolder(t *testing.T) {
+func TestFileTreeEnterFocusesFolderPatch(t *testing.T) {
 	t.Parallel()
 
 	state := treeState()
 	state.FileTreeCollapsed = map[string]bool{"internal": true}
 	state.SelectedFile = -1
 	state.FileTreeCursor = 2
-	m := NewModel(state)
+	m := NewModel(state, WithPatchLoader(&mockPatchLoader{folderPatches: map[string]model.FilePatch{
+		"internal": samplePatch(),
+	}}))
 	m.width = 100
 	m.height = 30
 
 	m, cmd := sendKey(m, "enter")
-	if cmd != nil {
-		t.Fatal("enter on a folder should not load a patch")
+	if cmd == nil {
+		t.Fatal("enter on a folder should load its patch")
 	}
-	if !m.State.FileTreeCollapsed["internal"] || m.State.FocusPane != model.PaneFiles {
-		t.Fatal("enter should leave the folder selection unchanged")
+	if m.State.FocusPane != model.PanePatch {
+		t.Fatalf("FocusPane = %q, want patch", m.State.FocusPane)
+	}
+	m = drainCmd(t, m, cmd)
+	if m.patchViewport == nil {
+		t.Fatal("folder patch should be visible in the patch pane")
 	}
 }
 

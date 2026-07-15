@@ -745,8 +745,7 @@ func (m Model) moveFileTreeCursor(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) activateFileTreeRow() (tea.Model, tea.Cmd) {
-	row, ok := m.currentFileTreeRow()
-	if !ok || row.Kind == panes.FileTreeRowDir {
+	if _, ok := m.currentFileTreeRow(); !ok {
 		return m, nil
 	}
 	m.State.FocusPane = model.PanePatch
@@ -1889,7 +1888,7 @@ func (m Model) viewHelp() string {
 		"Navigation",
 		"  j/k       scroll / navigate",
 		"  l         expand folder / select file",
-		"  Enter     select file",
+		"  Enter     focus selected diff",
 	}
 	if m.State.WorktreeMode {
 		help = append(help, "  Esc       back to dashboard")

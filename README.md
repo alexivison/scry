@@ -84,7 +84,7 @@ scry --no-dashboard
 |-----|--------|
 | `j` / `k` | Navigate file list / worktree list |
 | `l` | Expand folder / select file / drill into worktree |
-| `Enter` | Select file / drill into worktree |
+| `Enter` | Focus selected diff / drill into worktree |
 | `h` / `Esc` | Back to file list / dashboard |
 | `n` / `p` | Next / previous hunk |
 | `/` | Search in current patch |
