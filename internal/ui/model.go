@@ -787,7 +787,7 @@ func (m Model) collapseFileTreeRow() (tea.Model, tea.Cmd) {
 		m.setFileTreeCursorByPath(parent, m.State.FileTreeCursor)
 	}
 	m.syncFileListScroll()
-	return m, nil
+	return m.loadSelectedPatch()
 }
 
 func (m Model) cycleFileFilter() (tea.Model, tea.Cmd) {

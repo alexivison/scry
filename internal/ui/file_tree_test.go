@@ -67,6 +67,27 @@ func TestFileTreeHOnFileCollapsesNearestParent(t *testing.T) {
 	}
 }
 
+func TestFileTreeCollapseKeepsFolderPreview(t *testing.T) {
+	t.Parallel()
+
+	state := treeState()
+	state.Layout = model.LayoutSplit
+	state.SelectedFile = 2
+	m := NewModel(state)
+	m.width = 100
+	m.height = 30
+	patch := samplePatch()
+	m.State.Patches["internal"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &patch}
+
+	m, cmd := sendKey(m, "h")
+	if cmd != nil {
+		t.Fatal("cached folder patch should not reload")
+	}
+	if m.patchViewport == nil {
+		t.Fatal("collapsing a folder should keep its preview visible")
+	}
+}
+
 func TestFileTreeLExpandsSelectedCollapsedDirectory(t *testing.T) {
 	t.Parallel()
 

@@ -1610,7 +1610,11 @@ func formatSideGutter(no *int, digits int) string {
 // renderHunkSeparator renders a hunk header as a horizontal rule with the @@ text embedded.
 // Example: ─── @@ -10,3 +11,4 @@ func main() ───────
 func renderFileSeparator(path string, width int) string {
-	return renderHunkSeparator("File: "+path, width)
+	label := " File: " + path + " "
+	if width > 0 {
+		label = padOrTruncateToWidth(label, width)
+	}
+	return fileHeaderStyle.Render(label)
 }
 
 func renderHunkSeparator(header string, width int) string {
@@ -1796,6 +1800,11 @@ func (vp *PatchViewport) CurrentTargetLine() (int, bool) {
 
 // Styles for patch rendering.
 var (
+	fileHeaderStyle = lipgloss.NewStyle().
+			Foreground(theme.BrightText).
+			Background(theme.SelectedBg).
+			Bold(true)
+
 	hunkHeaderStyle = lipgloss.NewStyle().
 			Foreground(theme.HunkHeader).
 			Bold(true)
