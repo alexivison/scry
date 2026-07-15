@@ -86,6 +86,28 @@ func TestPatchRenderSnapshotRepresentativeDiff(t *testing.T) {
 	}
 }
 
+func TestFolderPatchRendersFileSeparators(t *testing.T) {
+	t.Parallel()
+
+	patch := model.FilePatch{Hunks: []model.Hunk{
+		{FilePath: "internal/a.go", OldStart: 0, OldLen: 0, NewStart: 1, NewLen: 1, Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "a"}}},
+		{FilePath: "internal/b.go", OldStart: 0, OldLen: 0, NewStart: 1, NewLen: 1, Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "b"}}},
+	}}
+	for _, mode := range []model.PatchDiffMode{model.PatchDiffModeUnified, model.PatchDiffModeSideBySide} {
+		vp := NewPatchViewport(patch)
+		vp.DiffMode = mode
+		vp.Width = 80
+		vp.Height = 20
+
+		output := ansi.Strip(vp.Render())
+		for _, path := range []string{"File: internal/a.go", "File: internal/b.go"} {
+			if !strings.Contains(output, path) {
+				t.Fatalf("%v output missing %q:\n%s", mode, path, output)
+			}
+		}
+	}
+}
+
 func TestChangedLinesUseBrightFullWidthBackground(t *testing.T) {
 	oldProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)

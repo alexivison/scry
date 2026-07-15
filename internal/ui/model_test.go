@@ -61,8 +61,9 @@ func escMsg() tea.Msg {
 func intP(n int) *int { return &n }
 
 type mockPatchLoader struct {
-	patches map[string]model.FilePatch
-	err     error
+	patches       map[string]model.FilePatch
+	folderPatches map[string]model.FilePatch
+	err           error
 	// perFile allows returning a specific (FilePatch, error) pair per path.
 	perFile map[string]struct {
 		patch model.FilePatch
@@ -81,6 +82,13 @@ func (m *mockPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, 
 		return fp, nil
 	}
 	return model.FilePatch{}, nil
+}
+
+func (m *mockPatchLoader) LoadFolderPatch(_ context.Context, _ model.ResolvedCompare, folder string, _ []model.FileSummary, _ bool) (model.FilePatch, error) {
+	if m.err != nil {
+		return model.FilePatch{}, m.err
+	}
+	return m.folderPatches[folder], nil
 }
 
 type mockMetadataLoader struct {
@@ -438,6 +446,27 @@ func TestPatchDiffModeToggleKey(t *testing.T) {
 	}
 	if m.patchViewport.DiffMode != model.PatchDiffModeUnified {
 		t.Fatalf("viewport DiffMode = %v, want PatchDiffModeUnified", m.patchViewport.DiffMode)
+	}
+}
+
+func TestLineNumberToggleKey(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 80
+	m.State.FocusPane = model.PanePatch
+	m.patchViewport = panes.NewPatchViewport(samplePatch())
+
+	updated, _ := m.Update(keyMsg('L'))
+	m = updated.(Model)
+	if m.State.ShowLineNumbers || m.patchViewport.GutterVisible {
+		t.Fatal("L should hide line numbers")
+	}
+
+	updated, _ = m.Update(keyMsg('L'))
+	m = updated.(Model)
+	if !m.State.ShowLineNumbers || !m.patchViewport.GutterVisible {
+		t.Fatal("second L should show line numbers")
 	}
 }
 

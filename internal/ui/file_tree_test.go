@@ -67,7 +67,28 @@ func TestFileTreeHOnFileCollapsesNearestParent(t *testing.T) {
 	}
 }
 
-func TestFileTreeRightExpandsSelectedCollapsedDirectory(t *testing.T) {
+func TestFileTreeCollapseKeepsFolderPreview(t *testing.T) {
+	t.Parallel()
+
+	state := treeState()
+	state.Layout = model.LayoutSplit
+	state.SelectedFile = 2
+	m := NewModel(state)
+	m.width = 100
+	m.height = 30
+	patch := samplePatch()
+	m.State.Patches["internal"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &patch}
+
+	m, cmd := sendKey(m, "h")
+	if cmd != nil {
+		t.Fatal("cached folder patch should not reload")
+	}
+	if m.patchViewport == nil {
+		t.Fatal("collapsing a folder should keep its preview visible")
+	}
+}
+
+func TestFileTreeLExpandsSelectedCollapsedDirectory(t *testing.T) {
 	t.Parallel()
 
 	state := treeState()
@@ -78,18 +99,44 @@ func TestFileTreeRightExpandsSelectedCollapsedDirectory(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m, cmd := sendKey(m, "right")
+	m, cmd := sendKey(m, "l")
 	if cmd != nil {
-		t.Fatal("right on file list should not load a patch")
+		t.Fatal("l on a collapsed folder should not load a patch")
 	}
 	if m.State.FocusPane != model.PaneFiles {
 		t.Fatalf("FocusPane = %q, want files", m.State.FocusPane)
 	}
 	if m.State.FileTreeCollapsed["internal"] {
-		t.Fatal("right should expand selected collapsed directory")
+		t.Fatal("l should expand selected collapsed directory")
 	}
 	if m.State.SelectedFile != -1 {
 		t.Fatalf("SelectedFile = %d, want directory row to remain selected", m.State.SelectedFile)
+	}
+}
+
+func TestFileTreeEnterFocusesFolderPatch(t *testing.T) {
+	t.Parallel()
+
+	state := treeState()
+	state.FileTreeCollapsed = map[string]bool{"internal": true}
+	state.SelectedFile = -1
+	state.FileTreeCursor = 2
+	m := NewModel(state, WithPatchLoader(&mockPatchLoader{folderPatches: map[string]model.FilePatch{
+		"internal": samplePatch(),
+	}}))
+	m.width = 100
+	m.height = 30
+
+	m, cmd := sendKey(m, "enter")
+	if cmd == nil {
+		t.Fatal("enter on a folder should load its patch")
+	}
+	if m.State.FocusPane != model.PanePatch {
+		t.Fatalf("FocusPane = %q, want patch", m.State.FocusPane)
+	}
+	m = drainCmd(t, m, cmd)
+	if m.patchViewport == nil {
+		t.Fatal("folder patch should be visible in the patch pane")
 	}
 }
 
@@ -166,20 +213,20 @@ func TestFileFilterEmptyViewIsStable(t *testing.T) {
 	}
 }
 
-func TestSplitModeDirectoryCursorDoesNotLoadPatch(t *testing.T) {
+func TestSplitModeDirectoryCursorLoadsFolderPatch(t *testing.T) {
 	t.Parallel()
 
 	state := treeState()
 	state.Layout = model.LayoutSplit
-	m := NewModel(state, WithPatchLoader(&mockPatchLoader{patches: map[string]model.FilePatch{
-		"internal/app.go": samplePatch(),
+	m := NewModel(state, WithPatchLoader(&mockPatchLoader{folderPatches: map[string]model.FilePatch{
+		"internal": samplePatch(),
 	}}))
 	m.width = 120
 	m.height = 30
 
 	m, cmd := sendKey(m, "j") // internal directory row
-	if cmd != nil {
-		t.Fatal("moving to a directory in split mode should not load a patch")
+	if cmd == nil {
+		t.Fatal("moving to a directory in split mode should load its patch")
 	}
 	if got := selectedTreePath(m); got != "internal" {
 		t.Fatalf("cursor path = %q, want internal directory", got)
@@ -187,8 +234,9 @@ func TestSplitModeDirectoryCursorDoesNotLoadPatch(t *testing.T) {
 	if m.State.SelectedFile != -1 {
 		t.Fatalf("SelectedFile = %d, want -1 on directory row", m.State.SelectedFile)
 	}
-	if len(m.State.Patches) != 0 {
-		t.Fatalf("directory row should not mark patches loading: %+v", m.State.Patches)
+	m = drainCmd(t, m, cmd)
+	if m.patchViewport == nil {
+		t.Fatal("folder patch should be visible in split mode")
 	}
 }
 

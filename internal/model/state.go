@@ -120,6 +120,7 @@ type AppState struct {
 	Layout            LayoutMode
 	PatchLineMode     LineMode
 	PatchDiffMode     PatchDiffMode
+	ShowLineNumbers   bool
 
 	// Watch mode state (v0.2).
 	WatchEnabled    bool

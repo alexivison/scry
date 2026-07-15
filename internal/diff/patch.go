@@ -32,7 +32,7 @@ func (e *OversizedError) Error() string {
 
 func (e *OversizedError) Unwrap() error { return model.ErrOversized }
 
-// PatchService loads and parses unified diffs for individual files.
+// PatchService loads and parses unified diffs.
 type PatchService struct {
 	Runner gitexec.GitRunner
 }
@@ -88,6 +88,82 @@ func (s *PatchService) LoadPatch(ctx context.Context, cmp model.ResolvedCompare,
 	return model.FilePatch{Summary: summary, Hunks: hunks}, nil
 }
 
+// LoadFolderPatch loads the changed files under folder in one git diff command.
+func (s *PatchService) LoadFolderPatch(ctx context.Context, cmp model.ResolvedCompare, folder string, files []model.FileSummary, ignoreWhitespace bool) (model.FilePatch, error) {
+	summary := model.FileSummary{Path: folder}
+	for _, file := range files {
+		summary.Additions += file.Additions
+		summary.Deletions += file.Deletions
+	}
+
+	raw, err := s.runDiff(ctx, cmp, folder, "", ignoreWhitespace)
+	if err != nil {
+		return model.FilePatch{}, fmt.Errorf("git diff --patch: %w", err)
+	}
+	if len(raw) > maxPatchBytes {
+		return model.FilePatch{Summary: summary}, &OversizedError{Bytes: len(raw), Lines: strings.Count(raw, "\n")}
+	}
+
+	patch := model.FilePatch{Summary: summary}
+	totalLines := 0
+	if raw != "" {
+		fileDiffs, err := godiff.ParseMultiFileDiff([]byte(raw))
+		if err != nil {
+			return model.FilePatch{}, fmt.Errorf("parse patch for %s: %w", folder, err)
+		}
+		rawBodies := splitRawBodies(raw)
+		bodyOffset := 0
+		for _, fileDiff := range fileDiffs {
+			hunks, lines := mapHunks(fileDiff.Hunks, rawBodies[bodyOffset:])
+			bodyOffset += len(fileDiff.Hunks)
+			for i := range hunks {
+				hunks[i].FilePath = fileDiffPath(fileDiff)
+			}
+			patch.Hunks = append(patch.Hunks, hunks...)
+			totalLines += lines
+		}
+	}
+
+	var firstErr error
+	// ponytail: untracked files need one --no-index call each; use a temporary-tree diff if large untracked folders become common.
+	for _, file := range files {
+		if file.Status != model.StatusUntracked {
+			continue
+		}
+		filePatch, err := s.LoadPatch(ctx, cmp, file.Path, file.Status, ignoreWhitespace)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for i := range filePatch.Hunks {
+			filePatch.Hunks[i].FilePath = file.Path
+		}
+		patch.Hunks = append(patch.Hunks, filePatch.Hunks...)
+		for _, hunk := range filePatch.Hunks {
+			totalLines += len(hunk.Lines)
+		}
+	}
+
+	if totalLines > maxPatchLines {
+		return model.FilePatch{Summary: summary}, &OversizedError{Bytes: len(raw), Lines: totalLines}
+	}
+	if len(patch.Hunks) == 0 && firstErr != nil {
+		return patch, firstErr
+	}
+	return patch, nil
+}
+
+func fileDiffPath(fileDiff *godiff.FileDiff) string {
+	path := fileDiff.NewName
+	if path == "/dev/null" {
+		path = fileDiff.OrigName
+	}
+	path = strings.TrimPrefix(path, "a/")
+	return strings.TrimPrefix(path, "b/")
+}
+
 // runDiff executes the appropriate git diff command for the file.
 func (s *PatchService) runDiff(ctx context.Context, cmp model.ResolvedCompare, filePath string, status model.FileStatus, ignoreWS bool) (string, error) {
 	if status == model.StatusUntracked {
@@ -131,6 +207,14 @@ func splitRawBodies(raw string) []string {
 	inHunk := false
 
 	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") {
+			if inHunk {
+				bodies = append(bodies, strings.Join(bodyLines, "\n"))
+			}
+			bodyLines = nil
+			inHunk = false
+			continue
+		}
 		if strings.HasPrefix(line, "@@") {
 			if inHunk {
 				bodies = append(bodies, strings.Join(bodyLines, "\n"))

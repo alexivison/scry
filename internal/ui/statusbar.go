@@ -118,7 +118,7 @@ func (m Model) basisSegment() string {
 	return m.State.CompareBasis.StatusLabel()
 }
 
-// modeBadges returns styled mode indicator badges (W for whitespace, C for commit).
+// modeBadges returns styled mode indicator badges.
 // Active badges are bold/bright; inactive badges are dim.
 func (m Model) modeBadges() string {
 	wStyle := badgeDimStyle
@@ -129,7 +129,11 @@ func (m Model) modeBadges() string {
 	if m.State.CommitEnabled {
 		cStyle = badgeActiveStyle
 	}
-	return wStyle.Render("W") + " " + cStyle.Render("C")
+	lStyle := badgeDimStyle
+	if m.State.ShowLineNumbers {
+		lStyle = badgeActiveStyle
+	}
+	return wStyle.Render("W") + " " + cStyle.Render("C") + " " + lStyle.Render("L")
 }
 
 // watchSegment returns the watch state indicator: dot + interval + last check time.

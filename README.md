@@ -83,13 +83,15 @@ scry --no-dashboard
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Navigate file list / worktree list |
-| `l` / `Enter` | Select file / drill into worktree |
+| `l` | Expand folder / select file / drill into worktree |
+| `Enter` | Focus selected diff / drill into worktree |
 | `h` / `Esc` | Back to file list / dashboard |
 | `n` / `p` | Next / previous hunk |
 | `/` | Search in current patch |
 | `Enter` | Next search match |
 | `N` | Previous search match |
 | `s` | Toggle unified / side-by-side diff |
+| `L` | Toggle line numbers |
 | `W` | Toggle whitespace-ignore mode |
 | `b` | Cycle compare basis |
 | `Tab` | Toggle split/modal layout |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -506,5 +507,35 @@ func TestLoadPatch(t *testing.T) {
 				tc.check(t, got)
 			}
 		})
+	}
+}
+
+func TestLoadFolderPatch(t *testing.T) {
+	t.Parallel()
+
+	svc := &PatchService{Runner: &mockRunner{fn: routeGit(map[string]string{
+		patchCmd("internal"): modifyPatch + addPatch,
+		"diff --no-index --patch --no-color --no-ext-diff -- /dev/null internal/untracked.go": addPatch,
+	})}}
+	patch, err := svc.LoadFolderPatch(context.Background(), cmp(), "internal", []model.FileSummary{
+		{Path: "internal/main.go", Status: model.StatusModified, Additions: 1},
+		{Path: "internal/new.go", Status: model.StatusAdded, Additions: 2},
+		{Path: "internal/untracked.go", Status: model.StatusUntracked, Additions: 2},
+	}, false)
+	if err != nil {
+		t.Fatalf("LoadFolderPatch() error = %v", err)
+	}
+	if len(patch.Hunks) != 3 {
+		t.Fatalf("hunks = %d, want 3", len(patch.Hunks))
+	}
+	if got := []int{len(patch.Hunks[0].Lines), len(patch.Hunks[1].Lines), len(patch.Hunks[2].Lines)}; !slices.Equal(got, []int{4, 2, 2}) {
+		t.Fatalf("hunk line counts = %v, want [4 2 2]", got)
+	}
+	paths := []string{patch.Hunks[0].FilePath, patch.Hunks[1].FilePath, patch.Hunks[2].FilePath}
+	if want := []string{"main.go", "new.go", "internal/untracked.go"}; !slices.Equal(paths, want) {
+		t.Fatalf("file paths = %q, want %q", paths, want)
+	}
+	if patch.Summary.Additions != 5 {
+		t.Fatalf("summary additions = %d, want 5", patch.Summary.Additions)
 	}
 }

@@ -31,6 +31,10 @@ type PatchLoader interface {
 	LoadPatch(ctx context.Context, cmp model.ResolvedCompare, filePath string, status model.FileStatus, ignoreWhitespace bool) (model.FilePatch, error)
 }
 
+type FolderPatchLoader interface {
+	LoadFolderPatch(ctx context.Context, cmp model.ResolvedCompare, folder string, files []model.FileSummary, ignoreWhitespace bool) (model.FilePatch, error)
+}
+
 // MetadataLoader lists changed files for a compare range.
 type MetadataLoader interface {
 	ListFiles(ctx context.Context, cmp model.ResolvedCompare) ([]model.FileSummary, error)
@@ -143,6 +147,7 @@ func NewModel(state model.AppState, opts ...ModelOption) Model {
 	if state.FileTreeCollapsed == nil {
 		state.FileTreeCollapsed = make(map[string]bool)
 	}
+	state.ShowLineNumbers = true
 	reconcileFileTreeToSelection(&state)
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -418,6 +423,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "W" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleWhitespace()
 		}
+		if msg.String() == "L" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
+			m.toggleLineNumbers()
+			return m, nil
+		}
 		// b cycles the compare basis from any diff/dashboard pane (except help/search/commit).
 		if msg.String() == "b" && !m.showHelp && m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit {
 			return m.toggleCompareBasis()
@@ -530,7 +539,9 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.fileListPageUp()
 	case "h", "left":
 		return m.collapseFileTreeRow()
-	case "l", "right", "enter":
+	case "l", "right":
+		return m.expandFileTreeRow()
+	case "enter":
 		return m.activateFileTreeRow()
 	case "t":
 		return m.cycleFileFilter()
@@ -628,6 +639,49 @@ func (m Model) currentFileTreeRow() (panes.FileTreeRow, bool) {
 	return proj.Rows[proj.Cursor], true
 }
 
+func (m Model) selectedPatchPath() (string, bool) {
+	row, ok := m.currentFileTreeRow()
+	if !ok {
+		return "", false
+	}
+	if row.Kind == panes.FileTreeRowFile {
+		if row.FileIndex < 0 || row.FileIndex >= len(m.State.Files) {
+			return "", false
+		}
+		return m.State.Files[row.FileIndex].Path, true
+	}
+	return row.Path, true
+}
+
+func (m Model) selectedPatchSummary() (model.FileSummary, bool) {
+	row, ok := m.currentFileTreeRow()
+	if !ok {
+		return model.FileSummary{}, false
+	}
+	if row.Kind == panes.FileTreeRowFile && row.FileIndex >= 0 && row.FileIndex < len(m.State.Files) {
+		return m.State.Files[row.FileIndex], true
+	}
+
+	summary := model.FileSummary{Path: row.Path}
+	for _, file := range m.State.Files {
+		if strings.HasPrefix(file.Path, row.Path+"/") {
+			summary.Additions += file.Additions
+			summary.Deletions += file.Deletions
+		}
+	}
+	return summary, true
+}
+
+func (m Model) folderFiles(folder string) []model.FileSummary {
+	var files []model.FileSummary
+	for _, file := range m.State.Files {
+		if strings.HasPrefix(file.Path, folder+"/") {
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
 func (m *Model) setFileTreeCursor(cursor int) {
 	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor)
 	m.State.FileTreeCursor = proj.Cursor
@@ -687,28 +741,26 @@ func (m Model) moveFileTreeCursor(delta int) (tea.Model, tea.Cmd) {
 	}
 	m.setFileTreeCursor(cursor)
 	m.syncFileListScroll()
-	if m.State.Layout == model.LayoutSplit && m.State.SelectedFile >= 0 {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.loadSelectedPatch()
 }
 
 func (m Model) activateFileTreeRow() (tea.Model, tea.Cmd) {
+	if _, ok := m.currentFileTreeRow(); !ok {
+		return m, nil
+	}
+	m.State.FocusPane = model.PanePatch
+	return m.selectFile()
+}
+
+func (m Model) expandFileTreeRow() (tea.Model, tea.Cmd) {
 	row, ok := m.currentFileTreeRow()
-	if !ok {
-		return m, nil
+	if !ok || row.Kind != panes.FileTreeRowDir {
+		return m.activateFileTreeRow()
 	}
-	if row.Kind == panes.FileTreeRowDir {
-		delete(m.State.FileTreeCollapsed, row.Path)
-		m.setFileTreeCursorByPath(row.Path, m.State.FileTreeCursor)
-		m.syncFileListScroll()
-		return m, nil
-	}
-	if row.FileIndex >= 0 && row.FileIndex < len(m.State.Files) {
-		m.State.FocusPane = model.PanePatch
-		return m.selectFile()
-	}
-	return m, nil
+	delete(m.State.FileTreeCollapsed, row.Path)
+	m.setFileTreeCursorByPath(row.Path, m.State.FileTreeCursor)
+	m.syncFileListScroll()
+	return m.loadSelectedPatch()
 }
 
 func (m Model) collapseFileTreeRow() (tea.Model, tea.Cmd) {
@@ -735,7 +787,7 @@ func (m Model) collapseFileTreeRow() (tea.Model, tea.Cmd) {
 		m.setFileTreeCursorByPath(parent, m.State.FileTreeCursor)
 	}
 	m.syncFileListScroll()
-	return m, nil
+	return m.loadSelectedPatch()
 }
 
 func (m Model) cycleFileFilter() (tea.Model, tea.Cmd) {
@@ -748,10 +800,7 @@ func (m Model) cycleFileFilter() (tea.Model, tea.Cmd) {
 	m.State.FileFilter = m.State.FileFilter.Next()
 	m.setFileTreeCursorByPath(prevPath, prevCursor)
 	m.syncFileListScroll()
-	if m.State.Layout == model.LayoutSplit && m.State.SelectedFile >= 0 {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.loadSelectedPatch()
 }
 
 func parentDir(path string) string {
@@ -1088,20 +1137,27 @@ func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.
 
 // selectFile checks the cache and either uses a cached result or fires an async load.
 func (m Model) selectFile() (tea.Model, tea.Cmd) {
-	file := m.State.Files[m.State.SelectedFile]
-	path := file.Path
+	row, ok := m.currentFileTreeRow()
+	if !ok {
+		return m, nil
+	}
+	if row.Kind == panes.FileTreeRowDir {
+		return m.selectFolder(row)
+	}
+	if row.FileIndex < 0 || row.FileIndex >= len(m.State.Files) {
+		return m, nil
+	}
 
-	// Cache hit: use cached result directly.
+	file := m.State.Files[row.FileIndex]
+	path := file.Path
 	if ps, hit := review.CacheLookup(m.State, path); hit {
 		m.applyPatchResult(ps)
 		return m, nil
 	}
-
 	if m.patchLoader == nil {
 		return m, nil
 	}
 
-	// Cache miss: mark loading and fire async Cmd.
 	review.MarkLoading(&m.State, path)
 	m.patchViewport = nil
 	m.patchErr = ""
@@ -1110,14 +1166,37 @@ func (m Model) selectFile() (tea.Model, tea.Cmd) {
 	gen := m.State.CacheGeneration
 	cmp := m.State.Compare
 	ignoreWS := m.State.IgnoreWhitespace
-	status := file.Status
 	loader := m.patchLoader
-
 	loadCmd := func() tea.Msg {
-		fp, err := loader.LoadPatch(context.Background(), cmp, path, status, ignoreWS)
+		fp, err := loader.LoadPatch(context.Background(), cmp, path, file.Status, ignoreWS)
 		return PatchLoadedMsg{Path: path, Patch: fp, Gen: gen, Err: err}
 	}
+	return m, tea.Batch(loadCmd, m.spinner.Tick)
+}
 
+func (m Model) selectFolder(row panes.FileTreeRow) (tea.Model, tea.Cmd) {
+	if ps, hit := review.CacheLookup(m.State, row.Path); hit {
+		m.applyPatchResult(ps)
+		return m, nil
+	}
+	loader, ok := m.patchLoader.(FolderPatchLoader)
+	if !ok {
+		return m, nil
+	}
+
+	files := m.folderFiles(row.Path)
+	review.MarkLoading(&m.State, row.Path)
+	m.patchViewport = nil
+	m.patchErr = ""
+	m.patchFallback = ""
+
+	gen := m.State.CacheGeneration
+	cmp := m.State.Compare
+	ignoreWS := m.State.IgnoreWhitespace
+	loadCmd := func() tea.Msg {
+		fp, err := loader.LoadFolderPatch(context.Background(), cmp, row.Path, files, ignoreWS)
+		return PatchLoadedMsg{Path: row.Path, Patch: fp, Gen: gen, Err: err}
+	}
 	return m, tea.Batch(loadCmd, m.spinner.Tick)
 }
 
@@ -1132,9 +1211,8 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	review.CacheStore(&m.State, msg.Path, patch, msg.Err)
 
-	// Only update viewport if this message is for the currently selected file.
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		selected := m.State.Files[m.State.SelectedFile].Path
+	// Only update viewport if this message is for the currently selected file or folder.
+	if selected, ok := m.selectedPatchPath(); ok {
 		if selected == msg.Path {
 			ps := m.State.Patches[msg.Path]
 			m.applyPatchResult(ps)
@@ -1209,10 +1287,14 @@ func (m Model) toggleWhitespace() (tea.Model, tea.Cmd) {
 	m.searchIndex = nil
 	m.searchNotFound = ""
 
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		return m.selectFile()
+	return m.selectFile()
+}
+
+func (m *Model) toggleLineNumbers() {
+	m.State.ShowLineNumbers = !m.State.ShowLineNumbers
+	if m.patchViewport != nil {
+		m.patchViewport.SetGutterVisible(m.State.ShowLineNumbers && m.width >= 60)
 	}
-	return m, nil
 }
 
 func (m Model) toggleCompareBasis() (tea.Model, tea.Cmd) {
@@ -1312,18 +1394,18 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 		m.State.FocusPane = model.PaneFiles
 	}
 
-	if m.State.SelectedFile < 0 {
+	if _, ok := m.currentFileTreeRow(); !ok {
 		return m, nil
 	}
 
 	return m.loadSelectedPatch()
 }
 
-// loadSelectedPatch fires an async patch load for the currently selected file
-// if in the patch pane or in split layout.
+// loadSelectedPatch fires an async patch load for the selected file or folder
+// when the patch pane is visible.
 func (m Model) loadSelectedPatch() (tea.Model, tea.Cmd) {
 	needsPatch := m.State.FocusPane == model.PanePatch || m.State.Layout == model.LayoutSplit
-	if needsPatch && m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
+	if needsPatch {
 		return m.selectFile()
 	}
 	return m, nil
@@ -1335,10 +1417,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 		m.patchViewport = nil
 		m.searchIndex = nil
 
-		var summary model.FileSummary
-		if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-			summary = m.State.Files[m.State.SelectedFile]
-		}
+		summary, _ := m.selectedPatchSummary()
 
 		if fb := buildFallback(summary, ps.Err); fb != "" {
 			m.patchFallback = fb
@@ -1359,7 +1438,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp := panes.NewPatchViewport(*ps.Patch)
 	vp.Width = m.width
 	vp.Height = m.height - 1
-	vp.GutterVisible = m.width >= 60
+	vp.GutterVisible = m.State.ShowLineNumbers && m.width >= 60
 	vp.LineMode = m.State.PatchLineMode
 	vp.DiffMode = m.State.PatchDiffMode
 	vp.XOffset = 0
@@ -1723,8 +1802,7 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 		return m.patchFallback
 	}
 
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		path := m.State.Files[m.State.SelectedFile].Path
+	if path, ok := m.selectedPatchPath(); ok {
 		if ps, ok := m.State.Patches[path]; ok && ps.Status == model.LoadLoading {
 			return m.spinner.View() + " Loading..."
 		}
@@ -1735,7 +1813,7 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	}
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
-	m.patchViewport.GutterVisible = outerWidth >= 60
+	m.patchViewport.SetGutterVisible(m.State.ShowLineNumbers && outerWidth >= 60)
 	m.patchViewport.ClampXOffset()
 	return m.patchViewport.Render()
 }
@@ -1809,7 +1887,8 @@ func (m Model) viewHelp() string {
 	help := []string{
 		"Navigation",
 		"  j/k       scroll / navigate",
-		"  l/Enter   select file / focus patch",
+		"  l         expand folder / select file",
+		"  Enter     focus selected diff",
 	}
 	if m.State.WorktreeMode {
 		help = append(help, "  Esc       back to dashboard")
@@ -1824,6 +1903,7 @@ func (m Model) viewHelp() string {
 		"  ctrl+f/b  full page down/up",
 		"  t         cycle file filter",
 		"  s         unified/side-by-side diff",
+		"  L         toggle line numbers",
 		"  ]c/[c     next/prev changed file",
 		"",
 		"Search",
@@ -2004,8 +2084,8 @@ func (m Model) patchScrollLine(innerHeight int) int {
 
 // patchTitle returns the title for the patch pane (current filename).
 func (m Model) patchTitle() string {
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		return m.State.Files[m.State.SelectedFile].Path
+	if path, ok := m.selectedPatchPath(); ok {
+		return path
 	}
 	return "Patch"
 }
@@ -2053,11 +2133,7 @@ func (m Model) toggleLayout() (tea.Model, tea.Cmd) {
 	}
 	m.State.Layout = model.LayoutSplit
 	m.syncFileListScroll()
-	// Auto-load selected file's patch so the right pane isn't empty.
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.loadSelectedPatch()
 }
 
 // fileListWidth computes the file list pane width: max(25, min(termWidth*0.3, 50)).
