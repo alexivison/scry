@@ -746,11 +746,8 @@ func (m Model) moveFileTreeCursor(delta int) (tea.Model, tea.Cmd) {
 
 func (m Model) activateFileTreeRow() (tea.Model, tea.Cmd) {
 	row, ok := m.currentFileTreeRow()
-	if !ok {
+	if !ok || row.Kind == panes.FileTreeRowDir {
 		return m, nil
-	}
-	if row.Kind == panes.FileTreeRowDir {
-		return m.expandFileTreeRow()
 	}
 	m.State.FocusPane = model.PanePatch
 	return m.selectFile()
@@ -1891,7 +1888,8 @@ func (m Model) viewHelp() string {
 	help := []string{
 		"Navigation",
 		"  j/k       scroll / navigate",
-		"  l/Enter   expand folder / select file",
+		"  l         expand folder / select file",
+		"  Enter     select file",
 	}
 	if m.State.WorktreeMode {
 		help = append(help, "  Esc       back to dashboard")

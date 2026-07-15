@@ -67,7 +67,7 @@ func TestFileTreeHOnFileCollapsesNearestParent(t *testing.T) {
 	}
 }
 
-func TestFileTreeEnterExpandsSelectedCollapsedDirectory(t *testing.T) {
+func TestFileTreeLExpandsSelectedCollapsedDirectory(t *testing.T) {
 	t.Parallel()
 
 	state := treeState()
@@ -78,18 +78,38 @@ func TestFileTreeEnterExpandsSelectedCollapsedDirectory(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m, cmd := sendKey(m, "enter")
+	m, cmd := sendKey(m, "l")
 	if cmd != nil {
-		t.Fatal("enter on a collapsed folder should not load a patch")
+		t.Fatal("l on a collapsed folder should not load a patch")
 	}
 	if m.State.FocusPane != model.PaneFiles {
 		t.Fatalf("FocusPane = %q, want files", m.State.FocusPane)
 	}
 	if m.State.FileTreeCollapsed["internal"] {
-		t.Fatal("enter should expand selected collapsed directory")
+		t.Fatal("l should expand selected collapsed directory")
 	}
 	if m.State.SelectedFile != -1 {
 		t.Fatalf("SelectedFile = %d, want directory row to remain selected", m.State.SelectedFile)
+	}
+}
+
+func TestFileTreeEnterDoesNothingOnFolder(t *testing.T) {
+	t.Parallel()
+
+	state := treeState()
+	state.FileTreeCollapsed = map[string]bool{"internal": true}
+	state.SelectedFile = -1
+	state.FileTreeCursor = 2
+	m := NewModel(state)
+	m.width = 100
+	m.height = 30
+
+	m, cmd := sendKey(m, "enter")
+	if cmd != nil {
+		t.Fatal("enter on a folder should not load a patch")
+	}
+	if !m.State.FileTreeCollapsed["internal"] || m.State.FocusPane != model.PaneFiles {
+		t.Fatal("enter should leave the folder selection unchanged")
 	}
 }
 
