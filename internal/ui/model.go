@@ -745,8 +745,12 @@ func (m Model) moveFileTreeCursor(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) activateFileTreeRow() (tea.Model, tea.Cmd) {
-	if _, ok := m.currentFileTreeRow(); !ok {
+	row, ok := m.currentFileTreeRow()
+	if !ok {
 		return m, nil
+	}
+	if row.Kind == panes.FileTreeRowDir {
+		return m.expandFileTreeRow()
 	}
 	m.State.FocusPane = model.PanePatch
 	return m.selectFile()
@@ -1887,8 +1891,7 @@ func (m Model) viewHelp() string {
 	help := []string{
 		"Navigation",
 		"  j/k       scroll / navigate",
-		"  l         expand folder / select file",
-		"  Enter     view selected file or folder",
+		"  l/Enter   expand folder / select file",
 	}
 	if m.State.WorktreeMode {
 		help = append(help, "  Esc       back to dashboard")
@@ -2133,11 +2136,7 @@ func (m Model) toggleLayout() (tea.Model, tea.Cmd) {
 	}
 	m.State.Layout = model.LayoutSplit
 	m.syncFileListScroll()
-	// Auto-load selected file's patch so the right pane isn't empty.
-	if m.State.SelectedFile >= 0 && m.State.SelectedFile < len(m.State.Files) {
-		return m.selectFile()
-	}
-	return m, nil
+	return m.loadSelectedPatch()
 }
 
 // fileListWidth computes the file list pane width: max(25, min(termWidth*0.3, 50)).

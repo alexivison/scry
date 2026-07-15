@@ -83,8 +83,7 @@ scry --no-dashboard
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Navigate file list / worktree list |
-| `l` | Expand folder / select file / drill into worktree |
-| `Enter` | View selected file or folder / drill into worktree |
+| `l` / `Enter` | Expand folder / select file / drill into worktree |
 | `h` / `Esc` | Back to file list / dashboard |
 | `n` / `p` | Next / previous hunk |
 | `/` | Search in current patch |

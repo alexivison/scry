@@ -796,44 +796,6 @@ func TestEnterLoadsPatchAndSwitchesFocus(t *testing.T) {
 	}
 }
 
-func TestEnterLoadsFolderPatch(t *testing.T) {
-	t.Parallel()
-
-	state := sampleState()
-	state.Files = []model.FileSummary{
-		{Path: "internal/a.go", Status: model.StatusModified, Additions: 1},
-		{Path: "internal/b.go", Status: model.StatusAdded, Additions: 1},
-		{Path: "README.md", Status: model.StatusModified, Additions: 1},
-	}
-	state.SelectedFile = -1
-	loader := &mockPatchLoader{folderPatches: map[string]model.FilePatch{
-		"internal": {
-			Summary: model.FileSummary{Path: "internal"},
-			Hunks: []model.Hunk{
-				{FilePath: "internal/a.go", OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1, Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "a"}}},
-				{FilePath: "internal/b.go", OldStart: 0, OldLen: 0, NewStart: 1, NewLen: 1, Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "b"}}},
-			},
-		},
-	}}
-	m := NewModel(state, WithPatchLoader(loader))
-	m.width = 100
-	m.height = 30
-
-	um := enterAndLoad(t, m)
-	if um.State.FocusPane != model.PanePatch {
-		t.Fatalf("FocusPane = %q, want patch", um.State.FocusPane)
-	}
-	if um.patchViewport == nil {
-		t.Fatal("folder patch viewport is nil")
-	}
-	view := um.View()
-	for _, path := range []string{"internal/a.go", "internal/b.go"} {
-		if !strings.Contains(view, path) {
-			t.Fatalf("folder patch missing %q:\n%s", path, view)
-		}
-	}
-}
-
 func TestEnterWithLoadError(t *testing.T) {
 	t.Parallel()
 
