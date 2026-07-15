@@ -61,8 +61,9 @@ func escMsg() tea.Msg {
 func intP(n int) *int { return &n }
 
 type mockPatchLoader struct {
-	patches map[string]model.FilePatch
-	err     error
+	patches       map[string]model.FilePatch
+	folderPatches map[string]model.FilePatch
+	err           error
 	// perFile allows returning a specific (FilePatch, error) pair per path.
 	perFile map[string]struct {
 		patch model.FilePatch
@@ -81,6 +82,13 @@ func (m *mockPatchLoader) LoadPatch(_ context.Context, _ model.ResolvedCompare, 
 		return fp, nil
 	}
 	return model.FilePatch{}, nil
+}
+
+func (m *mockPatchLoader) LoadFolderPatch(_ context.Context, _ model.ResolvedCompare, folder string, _ []model.FileSummary, _ bool) (model.FilePatch, error) {
+	if m.err != nil {
+		return model.FilePatch{}, m.err
+	}
+	return m.folderPatches[folder], nil
 }
 
 type mockMetadataLoader struct {
@@ -441,6 +449,27 @@ func TestPatchDiffModeToggleKey(t *testing.T) {
 	}
 }
 
+func TestLineNumberToggleKey(t *testing.T) {
+	t.Parallel()
+
+	m := NewModel(sampleState())
+	m.width = 80
+	m.State.FocusPane = model.PanePatch
+	m.patchViewport = panes.NewPatchViewport(samplePatch())
+
+	updated, _ := m.Update(keyMsg('L'))
+	m = updated.(Model)
+	if m.State.ShowLineNumbers || m.patchViewport.GutterVisible {
+		t.Fatal("L should hide line numbers")
+	}
+
+	updated, _ = m.Update(keyMsg('L'))
+	m = updated.(Model)
+	if !m.State.ShowLineNumbers || !m.patchViewport.GutterVisible {
+		t.Fatal("second L should show line numbers")
+	}
+}
+
 func TestApplyPatchResultAppliesLineMode(t *testing.T) {
 	t.Parallel()
 
@@ -764,6 +793,44 @@ func TestEnterLoadsPatchAndSwitchesFocus(t *testing.T) {
 	}
 	if um.patchViewport == nil {
 		t.Fatal("patchViewport should not be nil after Enter")
+	}
+}
+
+func TestEnterLoadsFolderPatch(t *testing.T) {
+	t.Parallel()
+
+	state := sampleState()
+	state.Files = []model.FileSummary{
+		{Path: "internal/a.go", Status: model.StatusModified, Additions: 1},
+		{Path: "internal/b.go", Status: model.StatusAdded, Additions: 1},
+		{Path: "README.md", Status: model.StatusModified, Additions: 1},
+	}
+	state.SelectedFile = -1
+	loader := &mockPatchLoader{folderPatches: map[string]model.FilePatch{
+		"internal": {
+			Summary: model.FileSummary{Path: "internal"},
+			Hunks: []model.Hunk{
+				{FilePath: "internal/a.go", OldStart: 1, OldLen: 1, NewStart: 1, NewLen: 1, Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "a"}}},
+				{FilePath: "internal/b.go", OldStart: 0, OldLen: 0, NewStart: 1, NewLen: 1, Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "b"}}},
+			},
+		},
+	}}
+	m := NewModel(state, WithPatchLoader(loader))
+	m.width = 100
+	m.height = 30
+
+	um := enterAndLoad(t, m)
+	if um.State.FocusPane != model.PanePatch {
+		t.Fatalf("FocusPane = %q, want patch", um.State.FocusPane)
+	}
+	if um.patchViewport == nil {
+		t.Fatal("folder patch viewport is nil")
+	}
+	view := um.View()
+	for _, path := range []string{"internal/a.go", "internal/b.go"} {
+		if !strings.Contains(view, path) {
+			t.Fatalf("folder patch missing %q:\n%s", path, view)
+		}
 	}
 }
 

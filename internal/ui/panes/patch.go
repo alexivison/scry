@@ -387,6 +387,9 @@ func nonEmptySpan(span bodySpan) []bodySpan {
 
 func formatHunkHeader(h model.Hunk) string {
 	s := fmt.Sprintf("@@ -%d,%d +%d,%d @@", h.OldStart, h.OldLen, h.NewStart, h.NewLen)
+	if h.FilePath != "" {
+		s += " " + h.FilePath
+	}
 	if h.Header != "" {
 		s += " " + h.Header
 	}
@@ -645,9 +648,23 @@ func (vp *PatchViewport) SetDiffMode(mode model.PatchDiffMode) {
 		return
 	}
 
+	vp.setLayout(mode, vp.GutterVisible)
+}
+
+// SetGutterVisible changes line-number visibility while preserving scroll position.
+func (vp *PatchViewport) SetGutterVisible(visible bool) {
+	if vp.GutterVisible == visible {
+		return
+	}
+
+	vp.setLayout(vp.DiffMode, visible)
+}
+
+func (vp *PatchViewport) setLayout(mode model.PatchDiffMode, gutterVisible bool) {
 	diffLine, rowOffset, ok := vp.ScrollAnchor()
 	headerHunk := vp.headerAnchor()
 	vp.DiffMode = mode
+	vp.GutterVisible = gutterVisible
 	vp.XOffset = 0
 	switch {
 	case ok:

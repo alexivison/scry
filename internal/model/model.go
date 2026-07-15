@@ -43,12 +43,12 @@ type ResolvedCompare struct {
 type FileStatus string
 
 const (
-	StatusAdded    FileStatus = "A"
-	StatusModified FileStatus = "M"
-	StatusDeleted  FileStatus = "D"
-	StatusRenamed  FileStatus = "R"
-	StatusCopied   FileStatus = "C"
-	StatusTypeChg  FileStatus = "T"
+	StatusAdded     FileStatus = "A"
+	StatusModified  FileStatus = "M"
+	StatusDeleted   FileStatus = "D"
+	StatusRenamed   FileStatus = "R"
+	StatusCopied    FileStatus = "C"
+	StatusTypeChg   FileStatus = "T"
 	StatusUnmerged  FileStatus = "U"
 	StatusUntracked FileStatus = "?"
 )
@@ -66,7 +66,7 @@ type FileSummary struct {
 type LineKind string
 
 const (
-	LineContext    LineKind = "context"
+	LineContext   LineKind = "context"
 	LineAdded     LineKind = "added"
 	LineDeleted   LineKind = "deleted"
 	LineNoNewline LineKind = "no-newline"
@@ -80,6 +80,7 @@ type DiffLine struct {
 }
 
 type Hunk struct {
+	FilePath         string
 	Header           string
 	OldStart, OldLen int
 	NewStart, NewLen int

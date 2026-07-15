@@ -166,20 +166,20 @@ func TestFileFilterEmptyViewIsStable(t *testing.T) {
 	}
 }
 
-func TestSplitModeDirectoryCursorDoesNotLoadPatch(t *testing.T) {
+func TestSplitModeDirectoryCursorLoadsFolderPatch(t *testing.T) {
 	t.Parallel()
 
 	state := treeState()
 	state.Layout = model.LayoutSplit
-	m := NewModel(state, WithPatchLoader(&mockPatchLoader{patches: map[string]model.FilePatch{
-		"internal/app.go": samplePatch(),
+	m := NewModel(state, WithPatchLoader(&mockPatchLoader{folderPatches: map[string]model.FilePatch{
+		"internal": samplePatch(),
 	}}))
 	m.width = 120
 	m.height = 30
 
 	m, cmd := sendKey(m, "j") // internal directory row
-	if cmd != nil {
-		t.Fatal("moving to a directory in split mode should not load a patch")
+	if cmd == nil {
+		t.Fatal("moving to a directory in split mode should load its patch")
 	}
 	if got := selectedTreePath(m); got != "internal" {
 		t.Fatalf("cursor path = %q, want internal directory", got)
@@ -187,8 +187,9 @@ func TestSplitModeDirectoryCursorDoesNotLoadPatch(t *testing.T) {
 	if m.State.SelectedFile != -1 {
 		t.Fatalf("SelectedFile = %d, want -1 on directory row", m.State.SelectedFile)
 	}
-	if len(m.State.Patches) != 0 {
-		t.Fatalf("directory row should not mark patches loading: %+v", m.State.Patches)
+	m = drainCmd(t, m, cmd)
+	if m.patchViewport == nil {
+		t.Fatal("folder patch should be visible in split mode")
 	}
 }
 
