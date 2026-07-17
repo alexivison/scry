@@ -306,6 +306,33 @@ func TestDashboardRefreshAtTopLevel(t *testing.T) {
 	}
 }
 
+func TestDashboardRefreshRetriesAfterDeleteInvalidatesInFlightRefresh(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	state.RefreshInFlight = true
+	loader := &mockWorktreeLoader{worktrees: []model.WorktreeInfo{
+		{Path: "/home/user/project", Branch: "main"},
+		{Path: "/home/user/project-fix", Branch: "bugfix"},
+	}}
+	m := NewModel(state, WithWorktreeLoader(loader))
+
+	updated, _ := m.Update(WorktreeRemovedMsg{Path: "/home/user/project-feat"})
+	afterDelete := updated.(Model)
+	updated, cmd := afterDelete.Update(WorktreeRefreshedMsg{Generation: 0})
+	afterStale := updated.(Model)
+
+	if !afterStale.State.RefreshInFlight {
+		t.Error("RefreshInFlight = false, want retry after stale refresh")
+	}
+	if cmd == nil {
+		t.Fatal("expected retry command after stale refresh")
+	}
+	if msg := cmd(); msg.(WorktreeRefreshedMsg).Generation != 1 {
+		t.Errorf("retry generation = %d, want 1", msg.(WorktreeRefreshedMsg).Generation)
+	}
+}
+
 func TestDashboardRefreshInDrillDown(t *testing.T) {
 	t.Parallel()
 

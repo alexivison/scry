@@ -112,7 +112,7 @@ func (m Model) handleWorktreeRefreshed(msg WorktreeRefreshedMsg) (tea.Model, tea
 
 	// Discard stale refresh results from before a deletion.
 	if msg.Generation != m.State.DashboardState.RefreshGeneration {
-		return m, nil
+		return m.refreshDashboard()
 	}
 
 	if msg.Err != nil {
