@@ -42,15 +42,13 @@ Scry has strict module boundaries. Please respect them:
 - **`gitexec`** — The only package that runs subprocess commands.
 - **`app`** — Wiring only. No business logic.
 
-See [SPEC.md](docs/SPEC.md) for the full architecture reference.
-
 ### API keys
 
 The `--commit` feature requires an `ANTHROPIC_API_KEY` environment variable. Tests for the Claude provider use `httptest` stubs and do not require a real key.
 
 ### Testing
 
-- Every feature needs tests. See the task breakdown in [docs/SPEC.md](docs/SPEC.md) for expected test patterns.
+- Every feature needs tests.
 - Use `testdata/repos/` fixture repositories for integration tests. Run `testdata/repos/setup.sh <dir>` to create fixtures.
 - Golden tests go in `testdata/golden/`.
 - Smoke tests in `internal/smoke/` exercise cross-package flows against real fixture repos.
@@ -58,7 +56,7 @@ The `--commit` feature requires an `ANTHROPIC_API_KEY` environment variable. Tes
 
 ### Scope discipline
 
-Scry is deliberately minimal. Before proposing a feature, check the non-goals in [SPEC.md](docs/SPEC.md). If your idea adds write operations, plugin infrastructure, or broad Git client functionality, it is likely out of scope for the foreseeable future.
+Scry is deliberately minimal. Avoid write operations, plugin infrastructure, and broad Git client functionality.
 
 ## Submitting changes
 

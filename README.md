@@ -116,10 +116,6 @@ These are intentional omissions, not missing features:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Architecture
-
-See [docs/SPEC.md](docs/SPEC.md) for the full technical specification, architecture, and implementation plan.
-
 ## License
 
 [MIT](LICENSE)
