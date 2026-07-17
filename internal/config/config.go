@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/alexivison/scry/internal/model"
 	flag "github.com/spf13/pflag"
@@ -17,9 +16,6 @@ type Config struct {
 	HeadRef          string            // --head
 	Mode             model.CompareMode // from config file; default: CompareThreeDot
 	IgnoreWhitespace bool              // from config file; default: false
-
-	Watch         bool          // default: true; --no-watch disables
-	WatchInterval time.Duration // from config file; default: 2s, min: 500ms
 
 	Commit         bool   // --commit
 	CommitProvider string // from config file; default: "claude"
@@ -63,7 +59,6 @@ func Parse(args []string, opts ...ParseOption) (Config, error) {
 	var (
 		base        string
 		head        string
-		noWatch     bool
 		commit      bool
 		commitAuto  bool
 		noDashboard bool
@@ -71,7 +66,6 @@ func Parse(args []string, opts ...ParseOption) (Config, error) {
 
 	fs.StringVar(&base, "base", "", "base ref for comparison (default: @{upstream})")
 	fs.StringVar(&head, "head", "", "head ref for comparison (default: working tree; use --head HEAD for committed only)")
-	fs.BoolVar(&noWatch, "no-watch", false, "disable watch mode")
 	fs.BoolVar(&commit, "commit", false, "enable AI commit message generation")
 	fs.BoolVar(&commitAuto, "commit-auto", false, "skip confirmation and commit immediately (requires --commit)")
 	fs.BoolVar(&noDashboard, "no-dashboard", false, "force diff mode regardless of cwd (overrides smart default)")
@@ -101,18 +95,6 @@ func Parse(args []string, opts ...ParseOption) (Config, error) {
 		return Config{}, err
 	}
 
-	watchInterval := 2 * time.Second
-	if fileConfig.Watch.Interval != nil {
-		d, err := time.ParseDuration(*fileConfig.Watch.Interval)
-		if err != nil {
-			return Config{}, fmt.Errorf("invalid watch.interval %q: %w", *fileConfig.Watch.Interval, err)
-		}
-		if d < 500*time.Millisecond {
-			return Config{}, fmt.Errorf("watch.interval %v is below minimum 500ms", d)
-		}
-		watchInterval = d
-	}
-
 	commitProvider := derefStr(fileConfig.Commit.Provider, "claude")
 	if !supportedProviders[commitProvider] {
 		return Config{}, fmt.Errorf("unsupported commit provider %q", commitProvider)
@@ -123,8 +105,6 @@ func Parse(args []string, opts ...ParseOption) (Config, error) {
 		HeadRef:          head,
 		Mode:             cm,
 		IgnoreWhitespace: derefBool(fileConfig.Diff.IgnoreWhitespace, false),
-		Watch:            !noWatch,
-		WatchInterval:    watchInterval,
 		Commit:           commit,
 		CommitProvider:   commitProvider,
 		CommitModel:      derefStr(fileConfig.Commit.Model, ""),

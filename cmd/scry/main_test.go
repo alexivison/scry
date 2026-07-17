@@ -82,7 +82,6 @@ func TestHelpDocumentsFinalCLISurface(t *testing.T) {
 		"--head",
 		"--commit",
 		"--commit-auto",
-		"--no-watch",
 		"--no-dashboard",
 	}
 	for _, f := range finalFlags {
@@ -108,6 +107,8 @@ func TestHelpDoesNotDocumentDeprecatedFlags(t *testing.T) {
 	deprecated := []string{
 		"--mode",
 		"--ignore-whitespace",
+		"--watch",
+		"--no-watch",
 		"--watch-interval",
 		"--commit-provider",
 		"--commit-model",

@@ -2,7 +2,6 @@ package config
 
 import (
 	"testing"
-	"time"
 
 	"github.com/alexivison/scry/internal/model"
 )
@@ -30,12 +29,6 @@ func TestParseDefaults(t *testing.T) {
 	}
 	if cfg.IgnoreWhitespace {
 		t.Error("IgnoreWhitespace = true, want false")
-	}
-	if !cfg.Watch {
-		t.Error("Watch = false, want true (default)")
-	}
-	if cfg.WatchInterval != 2*time.Second {
-		t.Errorf("WatchInterval = %v, want 2s", cfg.WatchInterval)
 	}
 	if cfg.Commit {
 		t.Error("Commit = true, want false")
@@ -78,18 +71,6 @@ func TestParseCommitAutoRequiresCommit(t *testing.T) {
 	}
 }
 
-func TestParseNoWatchFlag(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := Parse([]string{"--no-watch"}, noConfigFiles())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Watch {
-		t.Error("Watch = true, want false after --no-watch")
-	}
-}
-
 func TestParseNoDashboardFlag(t *testing.T) {
 	t.Parallel()
 
@@ -109,6 +90,7 @@ func TestParseDeprecatedFlagsRejected(t *testing.T) {
 
 	deprecated := []string{
 		"--watch",
+		"--no-watch",
 		"--worktrees",
 		"--mode=three-dot",
 		"--watch-interval=2s",
@@ -137,7 +119,6 @@ func TestParseFinalCLISurface(t *testing.T) {
 		"--head", "HEAD",
 		"--commit",
 		"--commit-auto",
-		"--no-watch",
 		"--no-dashboard",
 	}, noConfigFiles())
 	if err != nil {
@@ -155,9 +136,6 @@ func TestParseFinalCLISurface(t *testing.T) {
 	if !cfg.CommitAuto {
 		t.Error("CommitAuto = false, want true")
 	}
-	if cfg.Watch {
-		t.Error("Watch = true, want false after --no-watch")
-	}
 	if !cfg.NoDashboard {
 		t.Error("NoDashboard = false, want true")
 	}
@@ -170,7 +148,6 @@ func TestMergeFileConfigs(t *testing.T) {
 
 	user := FileConfig{}
 	user.Diff.Mode = strPtr("two-dot")
-	user.Watch.Interval = strPtr("5s")
 
 	repo := FileConfig{}
 	repo.Diff.Mode = strPtr("three-dot") // overrides user
@@ -179,9 +156,6 @@ func TestMergeFileConfigs(t *testing.T) {
 	merged := MergeFileConfigs(user, repo)
 	if merged.Diff.Mode == nil || *merged.Diff.Mode != "three-dot" {
 		t.Errorf("Diff.Mode = %v, want %q (repo overrides user)", merged.Diff.Mode, "three-dot")
-	}
-	if merged.Watch.Interval == nil || *merged.Watch.Interval != "5s" {
-		t.Errorf("Watch.Interval = %v, want %q (from user, repo empty)", merged.Watch.Interval, "5s")
 	}
 	if merged.Commit.Provider == nil || *merged.Commit.Provider != "claude" {
 		t.Errorf("Commit.Provider = %v, want %q (from repo)", merged.Commit.Provider, "claude")

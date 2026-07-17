@@ -302,13 +302,12 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:         stubRepo,
-				BaseRef:      "mbup111",
-				Basis:        model.CompareBasisUpstream,
-				HeadRef:      "feat111",
-				MergeBase:    "mb222",
-				DiffRange:    "mbup111...feat111",
-				WatchBaseRef: "refs/remotes/origin/main",
+				Repo:      stubRepo,
+				BaseRef:   "mbup111",
+				Basis:     model.CompareBasisUpstream,
+				HeadRef:   "feat111",
+				MergeBase: "mb222",
+				DiffRange: "mbup111...feat111",
 			},
 		},
 		"default base resolves to merge-base with local trunk when requested": {
@@ -337,13 +336,12 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:         stubRepo,
-				BaseRef:      "mbmain111",
-				Basis:        model.CompareBasisLocalTrunk,
-				HeadRef:      "feat111",
-				MergeBase:    "mb222",
-				DiffRange:    "mbmain111...feat111",
-				WatchBaseRef: "refs/heads/main",
+				Repo:      stubRepo,
+				BaseRef:   "mbmain111",
+				Basis:     model.CompareBasisLocalTrunk,
+				HeadRef:   "feat111",
+				MergeBase: "mb222",
+				DiffRange: "mbmain111...feat111",
 			},
 		},
 		"local trunk working tree uses HEAD merge-base": {
@@ -368,12 +366,11 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:         stubRepo,
-				BaseRef:      "mbmain111",
-				Basis:        model.CompareBasisLocalTrunk,
-				WorkingTree:  true,
-				DiffRange:    "mbmain111",
-				WatchBaseRef: "refs/heads/main",
+				Repo:        stubRepo,
+				BaseRef:     "mbmain111",
+				Basis:       model.CompareBasisLocalTrunk,
+				WorkingTree: true,
+				DiffRange:   "mbmain111",
 			},
 		},
 		"head dirty working tree uses HEAD as base": {
@@ -455,13 +452,12 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:         stubRepo,
-				BaseRef:      "mb333",
-				Basis:        model.CompareBasisUpstream,
-				HeadRef:      "feat111",
-				MergeBase:    "mb555",
-				DiffRange:    "mb333...feat111",
-				WatchBaseRef: "origin/main",
+				Repo:      stubRepo,
+				BaseRef:   "mb333",
+				Basis:     model.CompareBasisUpstream,
+				HeadRef:   "feat111",
+				MergeBase: "mb555",
+				DiffRange: "mb333...feat111",
 			},
 		},
 		"missing upstream falls back to merge-base with origin/HEAD": {
@@ -489,13 +485,12 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:         stubRepo,
-				BaseRef:      "mb444",
-				Basis:        model.CompareBasisUpstream,
-				HeadRef:      "feat111",
-				MergeBase:    "mb666",
-				DiffRange:    "mb444...feat111",
-				WatchBaseRef: "origin/HEAD",
+				Repo:      stubRepo,
+				BaseRef:   "mb444",
+				Basis:     model.CompareBasisUpstream,
+				HeadRef:   "feat111",
+				MergeBase: "mb666",
+				DiffRange: "mb444...feat111",
 			},
 		},
 		"missing upstream working tree uses HEAD for merge-base": {
@@ -521,12 +516,11 @@ func TestCompareResolverResolve(t *testing.T) {
 				}
 			},
 			want: model.ResolvedCompare{
-				Repo:         stubRepo,
-				BaseRef:      "mb777",
-				Basis:        model.CompareBasisUpstream,
-				WorkingTree:  true,
-				DiffRange:    "mb777",
-				WatchBaseRef: "origin/main",
+				Repo:        stubRepo,
+				BaseRef:     "mb777",
+				Basis:       model.CompareBasisUpstream,
+				WorkingTree: true,
+				DiffRange:   "mb777",
 			},
 		},
 		"all fallbacks exhausted": {

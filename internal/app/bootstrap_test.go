@@ -2,7 +2,6 @@ package app
 
 import (
 	"testing"
-	"time"
 
 	"github.com/alexivison/scry/internal/config"
 	"github.com/alexivison/scry/internal/model"
@@ -13,8 +12,6 @@ func TestInitialDiffStateDefaultsToSplitLayout(t *testing.T) {
 
 	cfg := config.Config{
 		IgnoreWhitespace: true,
-		Watch:            true,
-		WatchInterval:    3 * time.Second,
 		Commit:           true,
 		CommitAuto:       true,
 		GroupByDirectory: true,
@@ -42,8 +39,6 @@ func TestInitialDashboardStateDefaultsToSplitLayout(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Config{
-		Watch:            true,
-		WatchInterval:    3 * time.Second,
 		GroupByDirectory: true,
 	}
 

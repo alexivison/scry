@@ -2,20 +2,6 @@
 
 Manual verification steps for scry v0.2 features. Run these against a real repository with an upstream branch configured.
 
-## Watch Mode
-
-- [ ] `scry --base origin/main --watch` — starts in file list (or idle if no changes)
-- [ ] Make a local edit → scry auto-refreshes the file list within the polling interval
-- [ ] Commit a change → scry detects the new HEAD and refreshes
-- [ ] `git fetch` (if upstream advanced) → scry detects the base ref change
-
-## Idle Screen
-
-- [ ] `scry --base origin/main --head HEAD --watch` on a branch with no divergence → shows idle screen
-- [ ] Make a commit that diverges from base → idle screen auto-transitions to file list
-- [ ] `q` from idle screen exits cleanly
-- [ ] `?` from idle screen shows help overlay
-
 ## Commit Flow
 
 - [ ] `scry --base origin/main --commit` → `c` key generates a commit message

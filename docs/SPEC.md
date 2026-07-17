@@ -528,56 +528,6 @@ When all criteria above pass and non-goals remain intact, we tag `v0.1.0`.
 
 ## Post-v0.1 Roadmap
 
-### Watch Mode (`--watch`) — v0.2, Polling-First
-
-#### Objective
-Continuously monitor divergence from the configured base/head and auto-refresh when fingerprint changes.
-
-#### CLI
-- `--watch` (bool): enable watch loop.
-- `--watch-interval` (duration, default `2s`, min `500ms`).
-
-#### Fingerprint design
-- Baseline fingerprint command:
-  - `git rev-parse HEAD refs/remotes/origin/main`
-- Optional extended fingerprint (config-gated):
-  - Include `git status --porcelain` hash for working-tree sensitivity.
-- Fingerprint change is the only trigger for auto-refresh.
-- Worktree note: `HEAD` is per-worktree, but remote-tracking refs (e.g. `refs/remotes/origin/main`) are shared across all worktrees. A `git fetch` in any sibling worktree mutates the shared ref and will trigger refresh in all watchers that include it in their fingerprint. This is expected behavior but should be documented for multi-agent setups.
-
-#### Refresh behavior
-- On fingerprint change:
-  - Execute same refresh path as manual `r` (F6a).
-  - Increment generation, clear cache, reload metadata.
-- Debounce rule:
-  - If refresh already in flight, skip new trigger and evaluate on next tick.
-
-#### State additions
-- `WatchEnabled bool`
-- `WatchInterval time.Duration`
-- `LastFingerprint string`
-- `RefreshInFlight bool`
-- `LastRefreshAt time.Time`
-
-#### Acceptance criteria
-- No-refresh churn when fingerprint is stable.
-- Auto-refresh occurs within one watch interval after fingerprint change.
-- No stale patch state after rapid successive repository updates.
-
-### Idle Screen and Auto-Refresh — v0.2
-
-#### Behavior
-- If launched with `--watch` and no divergence, show idle screen:
-  - Compare target summary.
-  - Watch interval.
-  - Last fingerprint check time.
-  - Key hints (`q`, `r`).
-- On first detected divergence, transition automatically to normal review view.
-
-#### Acceptance criteria
-- Idle view displays without attempting unnecessary patch loads.
-- Transition to review view is automatic and non-disruptive.
-
 ### tmux Session Integration — v0.2
 
 See [docs/integrations/tmux-session.md](docs/integrations/tmux-session.md) for details on launching Scry as a long-lived process in a tmux session alongside other tools.
@@ -710,18 +660,14 @@ Detection uses `internal/source.ResolveRepoContext`, which compares the canonica
 - `h`/`Esc` to return from drill-down.
 - `q` to quit.
 
-#### Auto-refresh
-- Uses V2-T3 watch fingerprint infra.
-- Polls worktree list + per-worktree dirty state on each tick.
-
 #### Dependencies
-V2-T0, V2-T1, V2-T2, V2-T3.
+V2-T0, V2-T1, V2-T2.
 
 #### Acceptance criteria
 - Dashboard lists all linked worktrees with correct branch and dirty state.
 - Drill-down shows the selected worktree's working tree diff.
 - Return from drill-down preserves dashboard selection.
-- Auto-refresh picks up new/removed worktrees and dirty state changes.
+- Manual refresh picks up new/removed worktrees and dirty state changes.
 
 ### Additional Future Features
 
@@ -797,14 +743,12 @@ Let the reviewer drop a single file's working-tree changes from the file-list pa
 
 ### Roadmap Priority Order (v0.2)
 1. **Working tree diff mode** (default head = working tree).
-2. Watch mode (`--watch`) with polling fingerprint.
-3. Idle screen + auto-transition.
-4. AI commit message generator (`--commit`).
-5. PR resolver (`--pr`).
-6. Review queue mode.
-7. Split-pane layout with vim navigation.
-8. **Worktree dashboard mode** (auto-selected from the primary worktree when linked worktrees exist).
-9. Noise gate profiles.
-10. Delta-since-last-review mode.
-11. Changed symbols jump list.
-12. Trust overlay.
+2. AI commit message generator (`--commit`).
+3. PR resolver (`--pr`).
+4. Review queue mode.
+5. Split-pane layout with vim navigation.
+6. **Worktree dashboard mode** (auto-selected from the primary worktree when linked worktrees exist).
+7. Noise gate profiles.
+8. Delta-since-last-review mode.
+9. Changed symbols jump list.
+10. Trust overlay.

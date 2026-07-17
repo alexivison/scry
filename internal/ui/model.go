@@ -23,7 +23,6 @@ import (
 	"github.com/alexivison/scry/internal/ui/panes"
 	"github.com/alexivison/scry/internal/ui/syntax"
 	"github.com/alexivison/scry/internal/ui/theme"
-	"github.com/alexivison/scry/internal/watch"
 )
 
 // PatchLoader loads a file's unified diff.
@@ -49,11 +48,6 @@ type CompareReResolver interface {
 // from disk (untracked). Path is repo-relative.
 type FileDiscarder interface {
 	Discard(ctx context.Context, path string, untracked bool) error
-}
-
-// WatchFingerprinter computes a repo state fingerprint for watch mode.
-type WatchFingerprinter interface {
-	Fingerprint(ctx context.Context, baseRef string, workingTree bool) (string, error)
 }
 
 // CommitProvider generates commit messages. The implementation is responsible
@@ -106,20 +100,13 @@ type Model struct {
 	commitExecutor CommitExecutor     // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
-	fingerprinter  WatchFingerprinter // optional watch mode fingerprinter
-	watchBaseRef   string             // symbolic base ref for fingerprint checks
-	lastCheckAt    time.Time          // when the last fingerprint check completed
-	watchErr       bool               // true when last fingerprint check failed
-	fingerprintGen int                // monotonic counter to discard stale fingerprint results
-
 	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
 	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
 	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
 	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
 	fileDiscarder     FileDiscarder     // optional discarder for "discard changes" action
 
-	spinner   spinner.Model // shared spinner for loading states
-	idlePulse bool          // toggles on spinner tick for idle screen pulse indicator
+	spinner spinner.Model // shared spinner for loading states
 }
 
 // NewModel creates a Model from bootstrap data. Sets SelectedFile to -1
@@ -206,14 +193,6 @@ func WithFileDiscarder(d FileDiscarder) ModelOption {
 	return func(m *Model) { m.fileDiscarder = d }
 }
 
-// WithWatch sets the WatchFingerprinter and symbolic base ref for watch mode.
-func WithWatch(fp WatchFingerprinter, baseRef string) ModelOption {
-	return func(m *Model) {
-		m.fingerprinter = fp
-		m.watchBaseRef = baseRef
-	}
-}
-
 // PatchLoadedMsg is sent when an async patch load completes.
 type PatchLoadedMsg struct {
 	Path  string
@@ -274,11 +253,6 @@ func (m Model) Init() tea.Cmd {
 				return WorktreeRefreshedMsg{Worktrees: wts, Err: err, Generation: gen}
 			})
 		}
-		if m.State.WatchEnabled {
-			cmds = append(cmds, watch.TickCmd(m.State.WatchInterval))
-		}
-	} else if m.State.WatchEnabled && m.fingerprinter != nil {
-		cmds = append(cmds, m.buildCheckCmd())
 	}
 	// Load initial dashboard preview if in dashboard mode.
 	if m.State.FocusPane == model.PaneDashboard {
@@ -343,27 +317,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case watch.FSEventMsg:
-		// fsnotify detected a file change — trigger immediate fingerprint check
-		// without rescheduling the polling timer (to avoid timer multiplication).
-		if m.State.WatchEnabled && m.fingerprinter != nil && !m.State.WorktreeMode {
-			m.fingerprintGen++
-			return m, m.buildFSCheckCmd()
-		}
-		if m.State.WorktreeMode && m.State.WatchEnabled && m.worktreeLoader != nil {
-			return m.handleDashboardTick()
-		}
-		return m, nil
-
-	case watch.TickMsg:
-		if m.State.WorktreeMode {
-			return m.handleDashboardTick()
-		}
-		return m.handleWatchTick(msg)
-
-	case watch.FingerprintMsg:
-		return m.handleWatchFingerprint(msg)
-
 	case WorktreeRefreshedMsg:
 		return m.handleWorktreeRefreshed(msg)
 
@@ -413,7 +366,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				// Top-level dashboard: trigger manual refresh (blocked during modal).
 				if !m.State.RefreshInFlight && !m.State.DashboardState.ConfirmDelete {
-					return m.handleDashboardTick()
+					return m.refreshDashboard()
 				}
 				return m, nil
 			}
@@ -434,7 +387,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "s" && !m.showHelp &&
 			m.State.FocusPane != model.PaneSearch &&
 			m.State.FocusPane != model.PaneCommit &&
-			m.State.FocusPane != model.PaneIdle &&
 			m.State.FocusPane != model.PaneDashboard {
 			m.togglePatchDiffMode()
 			return m, nil
@@ -442,14 +394,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "o" && !m.showHelp &&
 			m.State.FocusPane != model.PaneSearch &&
 			m.State.FocusPane != model.PaneCommit &&
-			m.State.FocusPane != model.PaneIdle &&
 			m.State.FocusPane != model.PaneDashboard {
 			return m.openInNeovim()
 		}
 		if msg.String() == "X" && !m.showHelp &&
 			m.State.FocusPane != model.PaneSearch &&
 			m.State.FocusPane != model.PaneCommit &&
-			m.State.FocusPane != model.PaneIdle &&
 			m.State.FocusPane != model.PaneDashboard {
 			return m.startDiscardConfirm()
 		}
@@ -465,9 +415,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.State.FocusPane == model.PaneCommit {
 			return m.updateCommit(msg)
-		}
-		if m.State.FocusPane == model.PaneIdle {
-			return m.updateIdle(msg)
 		}
 		if m.State.FocusPane == model.PaneDashboard {
 			return m.updateDashboard(msg)
@@ -1036,105 +983,6 @@ func (m Model) buildCommitCmd(gen int) (tea.Cmd, context.CancelFunc) {
 	return cmd, cancel
 }
 
-// --- Watch mode handlers ---
-
-// buildCheckCmd creates an async Cmd that computes the repo fingerprint (polling path).
-// Captures the current fingerprintGen so stale results are discarded on arrival.
-func (m Model) buildCheckCmd() tea.Cmd {
-	gen := m.fingerprintGen
-	fp := m.fingerprinter
-	baseRef := m.watchBaseRef
-	wt := m.State.Compare.WorkingTree
-	return func() tea.Msg {
-		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
-		return watch.FingerprintMsg{Fingerprint: result, Err: err, Gen: gen}
-	}
-}
-
-// buildFSCheckCmd creates an async Cmd that computes the repo fingerprint (fsnotify path).
-// The result has FromFS=true so handleWatchFingerprint won't reschedule the polling timer.
-// Captures the current fingerprintGen so stale results are discarded on arrival.
-func (m Model) buildFSCheckCmd() tea.Cmd {
-	gen := m.fingerprintGen
-	fp := m.fingerprinter
-	baseRef := m.watchBaseRef
-	wt := m.State.Compare.WorkingTree
-	return func() tea.Msg {
-		result, err := fp.Fingerprint(context.Background(), baseRef, wt)
-		return watch.FingerprintMsg{Fingerprint: result, Err: err, FromFS: true, Gen: gen}
-	}
-}
-
-// handleWatchTick fires a fingerprint check on each watch interval tick.
-func (m Model) handleWatchTick(_ watch.TickMsg) (tea.Model, tea.Cmd) {
-	if !m.State.WatchEnabled || m.fingerprinter == nil {
-		return m, nil
-	}
-	m.fingerprintGen++
-	return m, m.buildCheckCmd()
-}
-
-// handleWatchFingerprint processes a fingerprint check result.
-func (m Model) handleWatchFingerprint(msg watch.FingerprintMsg) (tea.Model, tea.Cmd) {
-	if !m.State.WatchEnabled {
-		return m, nil
-	}
-	// Discard stale results from superseded checks, but keep the polling
-	// chain alive for non-FS results (TickCmd is one-shot).
-	if msg.Gen != m.fingerprintGen {
-		if !msg.FromFS {
-			return m, watch.TickCmd(m.State.WatchInterval)
-		}
-		return m, nil
-	}
-	m.lastCheckAt = time.Now()
-	// Toggle idle pulse indicator on each watch check.
-	m.idlePulse = !m.idlePulse
-
-	// tickCmd returns the polling tick command, or nil for FS-triggered checks
-	// (to avoid multiplying polling timers).
-	tickCmd := func() tea.Cmd {
-		if msg.FromFS {
-			return nil
-		}
-		return watch.TickCmd(m.State.WatchInterval)
-	}
-
-	if msg.Err != nil {
-		m.watchErr = true
-		return m, tickCmd()
-	}
-	m.watchErr = false
-
-	// First fingerprint: seed without refresh (bootstrap already loaded data).
-	// Exception: in idle mode, bootstrap had no files — refresh to catch any
-	// changes that occurred between bootstrap and this first fingerprint.
-	if m.State.LastFingerprint == "" {
-		m.State.LastFingerprint = msg.Fingerprint
-		if m.State.FocusPane == model.PaneIdle {
-			refreshed, refreshCmd := m.startRefresh()
-			if tc := tickCmd(); tc != nil {
-				return refreshed, tea.Batch(refreshCmd, tc)
-			}
-			return refreshed, refreshCmd
-		}
-		return m, tickCmd()
-	}
-
-	if watch.ShouldRefresh(&m.State, msg.Fingerprint) {
-		m.State.LastFingerprint = msg.Fingerprint
-		refreshed, refreshCmd := m.startRefresh()
-		if tc := tickCmd(); tc != nil {
-			return refreshed, tea.Batch(refreshCmd, tc)
-		}
-		return refreshed, refreshCmd
-	}
-
-	// When RefreshInFlight is true, LastFingerprint is intentionally NOT updated
-	// so the mismatch triggers a refresh once the in-flight one completes.
-	return m, tickCmd()
-}
-
 // selectFile checks the cache and either uses a cached result or fires an async load.
 func (m Model) selectFile() (tea.Model, tea.Cmd) {
 	row, ok := m.currentFileTreeRow()
@@ -1302,7 +1150,6 @@ func (m Model) toggleCompareBasis() (tea.Model, tea.Cmd) {
 	m.State.Compare.Basis = m.State.CompareBasis
 	m.compareRequest.Basis = m.State.CompareBasis
 	m.refreshErr = ""
-	m.State.LastFingerprint = ""
 
 	if m.State.WorktreeMode {
 		if m.State.DashboardState.DrillDown {
@@ -1340,7 +1187,6 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	if msg.Compare != nil {
 		m.State.Compare = *msg.Compare
 		m.State.CompareBasis = msg.Compare.Basis
-		m.syncWatchBaseRef(*msg.Compare)
 	}
 
 	// Save scroll state for the selected file before invalidation.
@@ -1388,11 +1234,6 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	m.patchErr = ""
 	m.searchIndex = nil
 	m.searchNotFound = ""
-
-	// Transition from idle to review when first files arrive.
-	if m.State.FocusPane == model.PaneIdle && len(m.State.Files) > 0 {
-		m.State.FocusPane = model.PaneFiles
-	}
 
 	if _, ok := m.currentFileTreeRow(); !ok {
 		return m, nil
@@ -1466,22 +1307,6 @@ func (m *Model) restoreSavedPatchScroll() {
 	}
 	m.patchViewport.ScrollOffset = m.savedScrollOffset
 	m.patchViewport.SyncCurrentHunk()
-}
-
-func (m *Model) syncWatchBaseRef(cmp model.ResolvedCompare) {
-	if cmp.WatchBaseRef != "" {
-		m.watchBaseRef = cmp.WatchBaseRef
-		return
-	}
-	if cmp.Basis == model.CompareBasisHeadDirty {
-		m.watchBaseRef = "HEAD"
-		return
-	}
-	if m.compareRequest.BaseRef != "" {
-		m.watchBaseRef = m.compareRequest.BaseRef
-		return
-	}
-	m.watchBaseRef = "@{upstream}"
 }
 
 func isSentinelError(err error) bool {
@@ -1725,9 +1550,7 @@ func (m Model) View() string {
 
 	// Render the base content view.
 	var base string
-	if m.State.FocusPane == model.PaneIdle {
-		base = m.viewIdle()
-	} else if m.State.FocusPane == model.PaneDashboard {
+	if m.State.FocusPane == model.PaneDashboard {
 		base = m.viewDashboard()
 	} else if m.State.FocusPane == model.PaneCommit {
 		base = m.viewCommit()
@@ -1769,7 +1592,7 @@ func (m Model) viewFileList() string {
 	content, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, 0,
 		innerW, innerH, true,
-		m.freshnessOpts(),
+		m.fileListOpts(),
 	)
 	meta := ""
 	if m.showFooter() {
@@ -1870,6 +1693,45 @@ func (m Model) viewCommit() string {
 	return centerBox(box, contentH, m.width, boxW)
 }
 
+func centerBox(box string, contentH, totalW, boxW int) string {
+	boxLines := strings.Split(box, "\n")
+	startRow := max((contentH-len(boxLines))/2, 0)
+	startCol := max((totalW-boxW)/2, 0)
+	pad := strings.Repeat(" ", startCol)
+	result := make([]string, contentH)
+	for i := range result {
+		if boxIdx := i - startRow; boxIdx >= 0 && boxIdx < len(boxLines) {
+			result[i] = pad + boxLines[boxIdx]
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+func wrapBadges(badges []string, maxW int) string {
+	if len(badges) == 0 {
+		return ""
+	}
+	const sep = "  "
+	lines := []string{badges[0]}
+	lineW := lipgloss.Width(badges[0])
+	for _, badge := range badges[1:] {
+		badgeW := lipgloss.Width(badge)
+		if lineW+lipgloss.Width(sep)+badgeW > maxW {
+			lines = append(lines, badge)
+			lineW = badgeW
+			continue
+		}
+		lines[len(lines)-1] += sep + badge
+		lineW += lipgloss.Width(sep) + badgeW
+	}
+	return strings.Join(lines, "\n")
+}
+
+func keyBadge(key, label string) string {
+	badgeStyle := lipgloss.NewStyle().Background(theme.StatusBg).Foreground(theme.BrightText).Padding(0, 1)
+	return badgeStyle.Render(key) + " " + lipgloss.NewStyle().Foreground(theme.Muted).Render(label)
+}
+
 func (m Model) viewHelp() string {
 	if m.State.WorktreeMode && !m.State.DashboardState.DrillDown {
 		return strings.Join([]string{
@@ -1918,13 +1780,6 @@ func (m Model) viewHelp() string {
 		"  Tab       toggle split/modal layout",
 		"  X         discard selected file's changes (confirm y/N)",
 	)
-	if m.State.WatchEnabled {
-		watchLine := fmt.Sprintf("  [watch]   auto-refresh every %s", m.State.WatchInterval)
-		if !m.State.LastRefreshAt.IsZero() {
-			watchLine += fmt.Sprintf(", last refresh %s", m.State.LastRefreshAt.Format("15:04:05"))
-		}
-		help = append(help, watchLine)
-	}
 	if m.State.CommitEnabled {
 		help = append(help, "  c         generate commit message")
 	}
@@ -2020,11 +1875,9 @@ func (m Model) showFooter() bool {
 	return ht >= terminal.HeightFooterVisible
 }
 
-// freshnessOpts returns the FileListOpts for freshness rendering.
-func (m Model) freshnessOpts() panes.FileListOpts {
+// fileListOpts returns the FileListOpts for tree rendering.
+func (m Model) fileListOpts() panes.FileListOpts {
 	return panes.FileListOpts{
-		ChangeGen:        m.State.FileChangeGen,
-		CurrentGen:       m.State.CacheGeneration,
 		GroupByDirectory: m.State.GroupByDirectory,
 		Filter:           m.State.FileFilter,
 		Collapsed:        m.State.FileTreeCollapsed,
@@ -2173,7 +2026,7 @@ func (m Model) viewSplit() string {
 	leftContent, _ := panes.RenderFileList(
 		m.State.Files, m.State.SelectedFile, m.fileListScroll,
 		flInnerW, flInnerH, filesActive,
-		m.freshnessOpts(),
+		m.fileListOpts(),
 	)
 	rightContent := m.renderPatch(patchInnerW, patchInnerH, patchOuterWidth)
 

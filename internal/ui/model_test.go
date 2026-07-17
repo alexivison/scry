@@ -2248,9 +2248,6 @@ func TestMetadataLoadedClearsRefreshInFlight(t *testing.T) {
 	if um.State.RefreshInFlight {
 		t.Error("RefreshInFlight should be false after metadata load completes")
 	}
-	if um.State.LastRefreshAt.IsZero() {
-		t.Error("LastRefreshAt should be set after refresh completes")
-	}
 }
 
 func TestRefreshWithCompareReResolution(t *testing.T) {
@@ -2394,9 +2391,6 @@ func TestDoubleRefreshInFlightClearedByNewerGeneration(t *testing.T) {
 			}
 			if um4.State.RefreshInFlight {
 				t.Error("RefreshInFlight should be false after current-gen response completes")
-			}
-			if um4.State.LastRefreshAt.IsZero() {
-				t.Error("LastRefreshAt should be set after refresh completes")
 			}
 		}
 	}

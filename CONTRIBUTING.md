@@ -37,7 +37,6 @@ go test -race ./...
 Scry has strict module boundaries. Please respect them:
 
 - **`model`**, **`source`**, **`diff`**, **`search`**, **`review`** — UI-agnostic core logic. No imports from `ui`.
-- **`watch`** — Fingerprint-based change detection for watch mode. UI-agnostic.
 - **`commit`** — AI commit message generation and git commit execution. UI-agnostic.
 - **`ui`** — Rendering and key handling only. No direct git command execution.
 - **`gitexec`** — The only package that runs subprocess commands.
