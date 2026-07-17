@@ -1,7 +1,5 @@
 package model
 
-import "time"
-
 // Pane identifies a UI focus area.
 type Pane string
 
@@ -10,7 +8,6 @@ const (
 	PanePatch  Pane = "patch"
 	PaneSearch Pane = "search"
 	PaneCommit Pane = "commit"
-	PaneIdle   Pane = "idle"
 )
 
 // LayoutMode controls the overall pane arrangement.
@@ -122,12 +119,8 @@ type AppState struct {
 	PatchDiffMode     PatchDiffMode
 	ShowLineNumbers   bool
 
-	// Watch mode state (v0.2).
-	WatchEnabled    bool
-	WatchInterval   time.Duration
-	LastFingerprint string
+	// Refresh state.
 	RefreshInFlight bool
-	LastRefreshAt   time.Time
 
 	// Commit generation state (v0.2).
 	CommitEnabled bool

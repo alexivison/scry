@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alexivison/scry/internal/model"
-	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/ui/theme"
 )
 
@@ -25,10 +24,6 @@ var (
 	statusRenamedStyle  = lipgloss.NewStyle().Foreground(theme.Accent)
 	statusDefaultStyle  = lipgloss.NewStyle().Foreground(theme.Muted)
 
-	// Freshness markers.
-	freshnessHotStyle  = lipgloss.NewStyle().Foreground(theme.Added).Bold(true)
-	freshnessWarmStyle = lipgloss.NewStyle().Foreground(theme.Muted)
-
 	// Directory header style.
 	dirHeaderStyle           = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
 	treeConnectorStyle       = lipgloss.NewStyle().Foreground(theme.Muted)
@@ -37,9 +32,7 @@ var (
 
 // FileListOpts holds optional parameters for file list rendering.
 type FileListOpts struct {
-	ChangeGen        map[string]int // per-file last-change generation (nil to disable)
-	CurrentGen       int            // current CacheGeneration for freshness calculation
-	GroupByDirectory bool           // when true, group files by directory with dim headers
+	GroupByDirectory bool // when true, group files by directory with dim headers
 	Filter           model.FileFilter
 	Collapsed        map[string]bool
 	Cursor           int
@@ -112,14 +105,8 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 
 	lines := make([]string, 0, end-scrollOffset)
 	for i := scrollOffset; i < end; i++ {
-		tier := review.FreshnessCold
 		row := proj.Rows[i]
-		if row.Kind == FileTreeRowFile && o.ChangeGen != nil {
-			if gen, ok := o.ChangeGen[files[row.FileIndex].Path]; ok {
-				tier = review.ComputeFreshness(gen, o.CurrentGen)
-			}
-		}
-		line := renderFileTreeRow(files, row, !o.HideCursor && i == proj.Cursor, width, tier)
+		line := renderFileTreeRow(files, row, !o.HideCursor && i == proj.Cursor, width)
 		if !active {
 			line = fileDimStyle.Render(line)
 		}
@@ -327,15 +314,15 @@ func EnsureVisible(selectedIdx, scrollOffset, height, total int) int {
 	return scrollOffset
 }
 
-func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int, tier review.FreshnessTier) string {
-	return renderFileTreeFileEntry(f, idx == selectedIdx, width, tier, FileTreeRow{Last: true})
+func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int) string {
+	return renderFileTreeFileEntry(f, idx == selectedIdx, width, FileTreeRow{Last: true})
 }
 
-func renderFileTreeRow(files []model.FileSummary, row FileTreeRow, selected bool, width int, tier review.FreshnessTier) string {
+func renderFileTreeRow(files []model.FileSummary, row FileTreeRow, selected bool, width int) string {
 	if row.Kind == FileTreeRowDir {
 		return renderFileTreeDirEntry(row, selected, width)
 	}
-	return renderFileTreeFileEntry(files[row.FileIndex], selected, width, tier, row)
+	return renderFileTreeFileEntry(files[row.FileIndex], selected, width, row)
 }
 
 func renderFileTreeDirEntry(row FileTreeRow, selected bool, width int) string {
@@ -362,7 +349,7 @@ func renderFileTreeDirEntry(row FileTreeRow, selected bool, width int) string {
 	return renderTreeConnector(row, false) + dirHeaderStyle.Render(padded)
 }
 
-func renderFileTreeFileEntry(f model.FileSummary, selected bool, width int, tier review.FreshnessTier, row FileTreeRow) string {
+func renderFileTreeFileEntry(f model.FileSummary, selected bool, width int, row FileTreeRow) string {
 	path := f.Path
 	if f.OldPath != "" {
 		path = fmt.Sprintf("%s → %s", pathpkg.Base(f.OldPath), pathpkg.Base(f.Path))
@@ -371,12 +358,6 @@ func renderFileTreeFileEntry(f model.FileSummary, selected bool, width int, tier
 	}
 
 	connector := treeConnector(row)
-	freshness := ""
-	if tier != review.FreshnessCold {
-		freshness = prefixMarker(tier) + " "
-	}
-	freshnessWidth := lipgloss.Width(freshness)
-
 	icon := RenderIcon(f.Status, selected)
 	if selected {
 		icon = StatusIcon(f.Status)
@@ -394,8 +375,7 @@ func renderFileTreeFileEntry(f model.FileSummary, selected bool, width int, tier
 		restWidth = 1
 	}
 
-	// Reserve space: optional freshness marker + status/name + gap + counts.
-	labelWidth := restWidth - freshnessWidth - countsWidth - 1
+	labelWidth := restWidth - countsWidth - 1
 	if labelWidth < 5 {
 		labelWidth = 5
 	}
@@ -409,13 +389,12 @@ func renderFileTreeFileEntry(f model.FileSummary, selected bool, width int, tier
 	}
 	fileLabel := icon + " " + path
 	paddedLabel := padRightCells(fileLabel, labelWidth)
-	restLeft := freshness + paddedLabel
-	restLine := alignRight(restLeft, counts, restWidth)
+	restLine := alignRight(paddedLabel, counts, restWidth)
 
 	if selected {
 		return renderTreeConnector(row, true) + fileSelectedStyle.Width(restWidth).Render(restLine)
 	}
-	return renderTreeConnector(row, false) + alignRight(freshness+textStyle.Render(paddedLabel), counts, restWidth)
+	return renderTreeConnector(row, false) + alignRight(textStyle.Render(paddedLabel), counts, restWidth)
 }
 
 func treeConnector(row FileTreeRow) string {
@@ -441,18 +420,6 @@ func renderTreeConnector(row FileTreeRow, selected bool) string {
 		return treeConnectorSelectStyle.Render(connector)
 	}
 	return treeConnectorStyle.Render(connector)
-}
-
-// prefixMarker returns a styled single-character freshness prefix.
-func prefixMarker(tier review.FreshnessTier) string {
-	switch tier {
-	case review.FreshnessHot:
-		return freshnessHotStyle.Render("●")
-	case review.FreshnessWarm:
-		return freshnessWarmStyle.Render("○")
-	default:
-		return " "
-	}
 }
 
 // truncatePath trims a path to fit within maxWidth, adding "…" as ellipsis.

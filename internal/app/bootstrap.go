@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -19,7 +18,6 @@ import (
 	"github.com/alexivison/scry/internal/source"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui"
-	"github.com/alexivison/scry/internal/watch"
 )
 
 // Run executes the full scry pipeline and returns an exit code.
@@ -99,18 +97,6 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		ui.WithCompareResolver(resolver, req),
 		ui.WithFileDiscarder(&fileDiscarderImpl{runner: boot.Runner, workdir: boot.Repo.WorktreeRoot}),
 	}
-	if cfg.Watch {
-		baseRef := cmp.WatchBaseRef // symbolic fallback from resolver (e.g. "origin/main")
-		if baseRef == "" {
-			// No fallback was needed — use explicit base or @{upstream}.
-			baseRef = cfg.BaseRef
-			if baseRef == "" {
-				baseRef = "@{upstream}"
-			}
-		}
-		opts = append(opts, ui.WithWatch(&watch.Fingerprinter{Runner: boot.Runner}, baseRef))
-	}
-
 	if cfg.Commit {
 		provider, err := commit.NewClaudeProvider(
 			"", // reads ANTHROPIC_API_KEY from env
@@ -128,20 +114,6 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 	m := ui.NewModel(state, opts...)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
-	// Start fsnotify watcher for accelerated refresh (polling remains as fallback).
-	if cfg.Watch {
-		repoRoot := boot.Repo.WorktreeRoot
-		if repoRoot == "" {
-			repoRoot = boot.Repo.GitDir
-		}
-		fsw := watch.NewFSWatcher(repoRoot, boot.Repo.GitDir, func() {
-			p.Send(watch.FSEventMsg{})
-		})
-		if fsw != nil {
-			defer fsw.Close()
-		}
-	}
-
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "scry: %v\n", err)
 		return 1
@@ -151,22 +123,15 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 }
 
 func initialDiffState(cfg config.Config, cmp model.ResolvedCompare, basis model.CompareBasis, files []model.FileSummary) model.AppState {
-	focusPane := model.PaneFiles
-	if cfg.Watch && len(files) == 0 {
-		focusPane = model.PaneIdle
-	}
-
 	return model.AppState{
 		Compare:          cmp,
 		CompareBasis:     basis,
 		Files:            files,
 		IgnoreWhitespace: cfg.IgnoreWhitespace,
-		FocusPane:        focusPane,
+		FocusPane:        model.PaneFiles,
 		Layout:           model.LayoutSplit,
 		PatchDiffMode:    model.PatchDiffModeSideBySide,
 		Patches:          make(map[string]model.PatchLoadState),
-		WatchEnabled:     cfg.Watch,
-		WatchInterval:    cfg.WatchInterval,
 		CommitEnabled:    cfg.Commit,
 		CommitAuto:       cfg.CommitAuto,
 		GroupByDirectory: cfg.GroupByDirectory,
@@ -174,19 +139,12 @@ func initialDiffState(cfg config.Config, cmp model.ResolvedCompare, basis model.
 }
 
 func initialDashboardState(cfg config.Config) model.AppState {
-	interval := cfg.WatchInterval
-	if interval == 0 {
-		interval = 2 * time.Second
-	}
-
 	return model.AppState{
 		FocusPane:        model.PaneDashboard,
 		Layout:           model.LayoutSplit,
 		PatchDiffMode:    model.PatchDiffModeSideBySide,
 		CompareBasis:     model.CompareBasisUpstream,
 		WorktreeMode:     true,
-		WatchEnabled:     cfg.Watch,
-		WatchInterval:    interval,
 		GroupByDirectory: cfg.GroupByDirectory,
 		RefreshInFlight:  true, // signal that initial load is pending
 		Patches:          make(map[string]model.PatchLoadState),

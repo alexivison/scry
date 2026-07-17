@@ -1,10 +1,6 @@
 package review
 
-import (
-	"time"
-
-	"github.com/alexivison/scry/internal/model"
-)
+import "github.com/alexivison/scry/internal/model"
 
 // PrepareRefresh performs the synchronous start of a refresh cycle:
 // generation bump and refresh-in-flight state update.
@@ -59,10 +55,9 @@ func SelectiveInvalidate(state *model.AppState, oldFiles, newFiles []model.FileS
 	}
 }
 
-// CompleteRefresh marks the refresh as finished and records the completion time.
+// CompleteRefresh marks the refresh as finished.
 func CompleteRefresh(state *model.AppState) {
 	state.RefreshInFlight = false
-	state.LastRefreshAt = time.Now()
 }
 
 // ReconcileSelection restores the selected file index after a file list update.
@@ -89,4 +84,3 @@ func ReconcileSelection(state *model.AppState, previousPath string) {
 		state.SelectedFile = 0
 	}
 }
-

@@ -16,9 +16,6 @@ func TestLoadFileConfig_Valid(t *testing.T) {
 mode = "two-dot"
 ignore_whitespace = true
 
-[watch]
-interval = "5s"
-
 [commit]
 provider = "claude"
 model = "claude-sonnet-4-20250514"
@@ -36,9 +33,6 @@ model = "claude-sonnet-4-20250514"
 	}
 	if fc.Diff.IgnoreWhitespace == nil || !*fc.Diff.IgnoreWhitespace {
 		t.Error("Diff.IgnoreWhitespace should be true")
-	}
-	if fc.Watch.Interval == nil || *fc.Watch.Interval != "5s" {
-		t.Errorf("Watch.Interval = %v, want %q", fc.Watch.Interval, "5s")
 	}
 	if fc.Commit.Provider == nil || *fc.Commit.Provider != "claude" {
 		t.Errorf("Commit.Provider = %v, want %q", fc.Commit.Provider, "claude")
@@ -89,7 +83,7 @@ func TestLoadFileConfig_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if fc.Diff.Mode != nil || fc.Diff.IgnoreWhitespace != nil || fc.Watch.Interval != nil {
+	if fc.Diff.Mode != nil || fc.Diff.IgnoreWhitespace != nil {
 		t.Error("empty file should produce zero-value FileConfig")
 	}
 }

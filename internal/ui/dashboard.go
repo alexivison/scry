@@ -11,7 +11,6 @@ import (
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/ui/panes"
-	"github.com/alexivison/scry/internal/watch"
 )
 
 // maxPreviewCacheSize caps the number of entries in the preview cache.
@@ -69,7 +68,7 @@ type WorktreeRemovedMsg struct {
 	Err  error
 }
 
-// WithWorktreeLoader sets the WorktreeLoader used for dashboard auto-refresh.
+// WithWorktreeLoader sets the WorktreeLoader used for dashboard refresh.
 func WithWorktreeLoader(wl WorktreeLoader) ModelOption {
 	return func(m *Model) { m.worktreeLoader = wl }
 }
@@ -93,26 +92,9 @@ type DrillDownLoadedMsg struct {
 	Generation int // matches DashboardState.DrillGeneration to detect stale results
 }
 
-// handleDashboardTick fires an async worktree list refresh on each watch tick.
-func (m Model) handleDashboardTick() (tea.Model, tea.Cmd) {
-	if !m.State.WorktreeMode || m.worktreeLoader == nil {
-		return m, nil
-	}
-	// Skip refresh during drill-down — the worktree list isn't visible, and
-	// firing LoadWorktrees would set the shared RefreshInFlight flag, which
-	// can conflict with drill-down operations. Keep scheduling ticks so
-	// refresh resumes automatically when the user returns to the dashboard.
-	if m.State.DashboardState.DrillDown {
-		if m.State.WatchEnabled {
-			return m, watch.TickCmd(m.State.WatchInterval)
-		}
-		return m, nil
-	}
-	if m.State.RefreshInFlight {
-		// Skip this tick; schedule next one only if watch is still enabled.
-		if m.State.WatchEnabled {
-			return m, watch.TickCmd(m.State.WatchInterval)
-		}
+// refreshDashboard reloads the worktree list on manual refresh.
+func (m Model) refreshDashboard() (tea.Model, tea.Cmd) {
+	if !m.State.WorktreeMode || m.worktreeLoader == nil || m.State.DashboardState.DrillDown || m.State.RefreshInFlight {
 		return m, nil
 	}
 	m.State.RefreshInFlight = true
@@ -128,19 +110,14 @@ func (m Model) handleDashboardTick() (tea.Model, tea.Cmd) {
 func (m Model) handleWorktreeRefreshed(msg WorktreeRefreshedMsg) (tea.Model, tea.Cmd) {
 	m.State.RefreshInFlight = false
 
-	var nextTick tea.Cmd
-	if m.State.WatchEnabled && m.State.WatchInterval > 0 {
-		nextTick = watch.TickCmd(m.State.WatchInterval)
-	}
-
 	// Discard stale refresh results from before a deletion.
 	if msg.Generation != m.State.DashboardState.RefreshGeneration {
-		return m, nextTick
+		return m.refreshDashboard()
 	}
 
 	if msg.Err != nil {
 		m.refreshErr = fmt.Sprintf("worktree refresh failed: %v", msg.Err)
-		return m, nextTick
+		return m, nil
 	}
 	m.refreshErr = ""
 
@@ -182,9 +159,9 @@ func (m Model) handleWorktreeRefreshed(msg WorktreeRefreshedMsg) (tea.Model, tea
 
 	// Trigger preview load for the (possibly new) selection.
 	if previewCmd := m.maybeLoadPreview(); previewCmd != nil {
-		return m, tea.Batch(nextTick, previewCmd)
+		return m, previewCmd
 	}
-	return m, nextTick
+	return m, nil
 }
 
 func (m Model) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -321,7 +298,7 @@ func (m Model) handleWorktreeRemoved(msg WorktreeRemovedMsg) (tea.Model, tea.Cmd
 	ds.PreviewErr = ""
 
 	// Schedule a refresh to get authoritative state and reload preview.
-	return m.handleDashboardTick()
+	return m.refreshDashboard()
 }
 
 // startDrillDown begins loading the diff context for a worktree.

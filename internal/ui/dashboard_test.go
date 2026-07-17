@@ -10,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alexivison/scry/internal/model"
-	"github.com/alexivison/scry/internal/watch"
 )
 
 func dashboardWorktrees() []model.WorktreeInfo {
@@ -307,6 +306,33 @@ func TestDashboardRefreshAtTopLevel(t *testing.T) {
 	}
 }
 
+func TestDashboardRefreshRetriesAfterDeleteInvalidatesInFlightRefresh(t *testing.T) {
+	t.Parallel()
+
+	state := dashboardState()
+	state.RefreshInFlight = true
+	loader := &mockWorktreeLoader{worktrees: []model.WorktreeInfo{
+		{Path: "/home/user/project", Branch: "main"},
+		{Path: "/home/user/project-fix", Branch: "bugfix"},
+	}}
+	m := NewModel(state, WithWorktreeLoader(loader))
+
+	updated, _ := m.Update(WorktreeRemovedMsg{Path: "/home/user/project-feat"})
+	afterDelete := updated.(Model)
+	updated, cmd := afterDelete.Update(WorktreeRefreshedMsg{Generation: 0})
+	afterStale := updated.(Model)
+
+	if !afterStale.State.RefreshInFlight {
+		t.Error("RefreshInFlight = false, want retry after stale refresh")
+	}
+	if cmd == nil {
+		t.Fatal("expected retry command after stale refresh")
+	}
+	if msg := cmd(); msg.(WorktreeRefreshedMsg).Generation != 1 {
+		t.Errorf("retry generation = %d, want 1", msg.(WorktreeRefreshedMsg).Generation)
+	}
+}
+
 func TestDashboardRefreshInDrillDown(t *testing.T) {
 	t.Parallel()
 
@@ -477,7 +503,7 @@ func TestDashboardStatusBar(t *testing.T) {
 	}
 }
 
-// --- Auto-refresh tests ---
+// --- Manual refresh tests ---
 
 type mockWorktreeLoader struct {
 	worktrees []model.WorktreeInfo
@@ -488,75 +514,10 @@ func (m *mockWorktreeLoader) LoadWorktrees(_ context.Context) ([]model.WorktreeI
 	return m.worktrees, m.err
 }
 
-func TestDashboardInitStartsTick(t *testing.T) {
-	t.Parallel()
-
-	state := dashboardState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
-	loader := &mockWorktreeLoader{worktrees: dashboardWorktrees()}
-	m := NewModel(state, WithWorktreeLoader(loader))
-
-	cmd := m.Init()
-	if cmd == nil {
-		t.Fatal("Init() returned nil, want tick command")
-	}
-}
-
-func TestDashboardInitNoTickWithoutWatch(t *testing.T) {
-	t.Parallel()
-
-	state := dashboardState()
-	state.WatchEnabled = false
-	m := NewModel(state)
-
-	cmd := m.Init()
-	if initContainsMsg[watch.TickMsg](t, cmd) {
-		t.Error("Init should not contain watch tick when watch disabled")
-	}
-}
-
-func TestDashboardTickTriggersRefresh(t *testing.T) {
-	t.Parallel()
-
-	state := dashboardState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
-	updated := []model.WorktreeInfo{
-		{Path: "/home/user/project", Branch: "main", CommitHash: "new1234", Subject: "updated", Dirty: true},
-	}
-	loader := &mockWorktreeLoader{worktrees: updated}
-	m := NewModel(state, WithWorktreeLoader(loader))
-	m.width = 80
-	m.height = 24
-
-	// Send a tick — should fire async refresh.
-	result, cmd := m.Update(watch.TickMsg{At: time.Now()})
-	um := result.(Model)
-	if !um.State.RefreshInFlight {
-		t.Error("RefreshInFlight = false, want true after tick")
-	}
-	if cmd == nil {
-		t.Fatal("expected async command after tick, got nil")
-	}
-
-	// Execute the async command to get the refresh result.
-	msg := cmd()
-	refreshMsg, ok := msg.(WorktreeRefreshedMsg)
-	if !ok {
-		t.Fatalf("cmd returned %T, want WorktreeRefreshedMsg", msg)
-	}
-	if len(refreshMsg.Worktrees) != 1 {
-		t.Errorf("worktrees len = %d, want 1", len(refreshMsg.Worktrees))
-	}
-}
-
 func TestDashboardRefreshUpdatesState(t *testing.T) {
 	t.Parallel()
 
 	state := dashboardState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
 	state.RefreshInFlight = true
 	m := NewModel(state)
 	m.width = 80
@@ -567,7 +528,7 @@ func TestDashboardRefreshUpdatesState(t *testing.T) {
 		{Path: "/home/user/project-new", Branch: "new-branch", CommitHash: "xyz9999", Subject: "new work", Dirty: false},
 	}
 
-	result, cmd := m.Update(WorktreeRefreshedMsg{Worktrees: updated})
+	result, _ := m.Update(WorktreeRefreshedMsg{Worktrees: updated})
 	um := result.(Model)
 
 	if um.State.RefreshInFlight {
@@ -576,18 +537,12 @@ func TestDashboardRefreshUpdatesState(t *testing.T) {
 	if len(um.State.DashboardState.Worktrees) != 2 {
 		t.Errorf("worktrees len = %d, want 2", len(um.State.DashboardState.Worktrees))
 	}
-	// Should schedule next tick.
-	if cmd == nil {
-		t.Error("expected next tick command, got nil")
-	}
 }
 
 func TestDashboardRefreshPreservesSelection(t *testing.T) {
 	t.Parallel()
 
 	state := dashboardState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
 	state.DashboardState.SelectedIdx = 1 // "feature" selected
 	state.RefreshInFlight = true
 	m := NewModel(state)
@@ -607,57 +562,6 @@ func TestDashboardRefreshPreservesSelection(t *testing.T) {
 	// Selection should follow "feature" branch to index 2.
 	if um.State.DashboardState.SelectedIdx != 2 {
 		t.Errorf("SelectedIdx = %d, want 2 (followed 'feature' branch)", um.State.DashboardState.SelectedIdx)
-	}
-}
-
-func TestDashboardTickSkipsWhenRefreshInFlight(t *testing.T) {
-	t.Parallel()
-
-	state := dashboardState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
-	state.RefreshInFlight = true
-	loader := &mockWorktreeLoader{worktrees: dashboardWorktrees()}
-	m := NewModel(state, WithWorktreeLoader(loader))
-	m.width = 80
-	m.height = 24
-
-	result, cmd := m.Update(watch.TickMsg{At: time.Now()})
-	um := result.(Model)
-
-	// Should still be in flight (skipped).
-	if !um.State.RefreshInFlight {
-		t.Error("RefreshInFlight should stay true when refresh already in flight")
-	}
-	// Should schedule next tick anyway.
-	if cmd == nil {
-		t.Error("expected next tick command even when skipping, got nil")
-	}
-}
-
-func TestDashboardTickSkipsDuringDrillDown(t *testing.T) {
-	t.Parallel()
-
-	state := dashboardState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
-	state.DashboardState.DrillDown = true
-	state.FocusPane = model.PaneFiles
-	loader := &mockWorktreeLoader{worktrees: dashboardWorktrees()}
-	m := NewModel(state, WithWorktreeLoader(loader))
-	m.width = 80
-	m.height = 24
-
-	result, cmd := m.Update(watch.TickMsg{At: time.Now()})
-	um := result.(Model)
-
-	// Should NOT set RefreshInFlight during drill-down.
-	if um.State.RefreshInFlight {
-		t.Error("RefreshInFlight = true during drill-down, want false (tick should be skipped)")
-	}
-	// Should still schedule next tick so refresh resumes when returning to dashboard.
-	if cmd == nil {
-		t.Error("expected next tick command during drill-down, got nil")
 	}
 }
 

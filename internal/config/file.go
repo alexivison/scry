@@ -15,7 +15,6 @@ import (
 // layers to override lower-precedence values (including resetting to defaults).
 type FileConfig struct {
 	Diff     DiffFileConfig     `toml:"diff"`
-	Watch    WatchFileConfig    `toml:"watch"`
 	Commit   CommitFileConfig   `toml:"commit"`
 	FileList FileListFileConfig `toml:"filelist"`
 }
@@ -29,11 +28,6 @@ type FileListFileConfig struct {
 type DiffFileConfig struct {
 	Mode             *string `toml:"mode"`
 	IgnoreWhitespace *bool   `toml:"ignore_whitespace"`
-}
-
-// WatchFileConfig holds watch-related config file settings.
-type WatchFileConfig struct {
-	Interval *string `toml:"interval"`
 }
 
 // CommitFileConfig holds commit-related config file settings.
@@ -68,9 +62,6 @@ func MergeFileConfigs(user, repo FileConfig) FileConfig {
 	}
 	if repo.Diff.IgnoreWhitespace != nil {
 		merged.Diff.IgnoreWhitespace = repo.Diff.IgnoreWhitespace
-	}
-	if repo.Watch.Interval != nil {
-		merged.Watch.Interval = repo.Watch.Interval
 	}
 	if repo.Commit.Provider != nil {
 		merged.Commit.Provider = repo.Commit.Provider

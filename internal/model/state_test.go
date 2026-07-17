@@ -7,21 +7,9 @@ func TestAppStateZeroValues(t *testing.T) {
 
 	var s AppState
 
-	// Watch-mode fields exist and zero-initialize correctly.
-	if s.WatchEnabled {
-		t.Error("WatchEnabled zero value = true, want false")
-	}
-	if s.WatchInterval != 0 {
-		t.Errorf("WatchInterval zero value = %v, want 0", s.WatchInterval)
-	}
-	if s.LastFingerprint != "" {
-		t.Errorf("LastFingerprint zero value = %q, want empty", s.LastFingerprint)
-	}
+	// Refresh state zero-initializes correctly.
 	if s.RefreshInFlight {
 		t.Error("RefreshInFlight zero value = true, want false")
-	}
-	if !s.LastRefreshAt.IsZero() {
-		t.Errorf("LastRefreshAt zero value = %v, want zero", s.LastRefreshAt)
 	}
 
 	// CommitState embedded struct exists and zero-initializes.

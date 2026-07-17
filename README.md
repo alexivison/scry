@@ -28,8 +28,6 @@ Scry does one thing well: show you what changed between two refs, with the same 
 
 ## Features (v0.2)
 
-- **Watch mode** (`--watch`): auto-refresh when the repo state changes, with configurable polling interval (`--watch-interval`)
-- **Idle screen**: shown when watch mode is active but no files have diverged yet; auto-transitions to file list on change
 - **AI commit messages** (`--commit`): generate conventional commit messages via Claude; confirm, edit, or regenerate before committing
 - **Auto-commit** (`--commit-auto`): skip confirmation and commit immediately after message generation (requires `--commit`)
 - **Worktree dashboard**: list all git worktrees with dirty state, branch, and latest commit; drill down into any worktree's diff. Shown automatically when run from the primary repo with linked worktrees; use `--no-dashboard` to opt out
@@ -61,12 +59,6 @@ scry --base v1.0.0 --head feature-branch
 
 # Use two-dot comparison instead of three-dot
 scry --base main --head HEAD --mode two-dot
-
-# Watch mode: auto-refresh on repo changes
-scry --base origin/main --watch
-
-# Watch with custom polling interval
-scry --base origin/main --watch --watch-interval 5s
 
 # AI commit message generation (requires ANTHROPIC_API_KEY)
 scry --base origin/main --commit
@@ -123,10 +115,6 @@ These are intentional omissions, not missing features:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Architecture
-
-See [docs/SPEC.md](docs/SPEC.md) for the full technical specification, architecture, and implementation plan.
 
 ## License
 

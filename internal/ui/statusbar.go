@@ -70,11 +70,6 @@ func (m Model) viewStatusBar() string {
 		segments = append(segments, m.modeBadges())
 	}
 
-	// Segment 3: Watch state (non-dashboard).
-	if m.State.WatchEnabled && m.State.FocusPane != model.PaneDashboard {
-		segments = append(segments, m.watchSegment())
-	}
-
 	left := " " + strings.Join(segments, sep) + " "
 
 	// Right-aligned file/worktree count.
@@ -136,23 +131,6 @@ func (m Model) modeBadges() string {
 	return wStyle.Render("W") + " " + cStyle.Render("C") + " " + lStyle.Render("L")
 }
 
-// watchSegment returns the watch state indicator: dot + interval + last check time.
-// Always builds the full segment; left-side truncation handles narrow widths.
-func (m Model) watchSegment() string {
-	dot := watchDotStyle.Render("●")
-	if m.watchErr {
-		dot = watchErrorDotStyle.Render("●")
-	}
-	if m.State.RefreshInFlight {
-		dot = m.spinner.View()
-	}
-	s := dot + " " + m.State.WatchInterval.String()
-	if !m.lastCheckAt.IsZero() {
-		s += " " + m.lastCheckAt.Format("15:04:05")
-	}
-	return s
-}
-
 // drillDownBreadcrumb returns "Dashboard > branch" (and "> file" if a file is selected).
 func (m Model) drillDownBreadcrumb() string {
 	ds := m.State.DashboardState
@@ -185,10 +163,4 @@ var (
 				Bold(true)
 	badgeDimStyle = lipgloss.NewStyle().
 			Foreground(theme.Muted)
-	watchDotStyle = lipgloss.NewStyle().
-			Foreground(theme.Clean)
-	watchRefreshDotStyle = lipgloss.NewStyle().
-				Foreground(theme.Dirty)
-	watchErrorDotStyle = lipgloss.NewStyle().
-				Foreground(theme.Error)
 )

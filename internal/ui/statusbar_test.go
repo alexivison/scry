@@ -3,7 +3,6 @@ package ui
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/alexivison/scry/internal/model"
 )
@@ -65,32 +64,6 @@ func TestStatusBar_ModeBadges(t *testing.T) {
 	})
 }
 
-func TestStatusBar_WatchIndicator(t *testing.T) {
-	t.Parallel()
-
-	state := sampleState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
-	m := NewModel(state)
-	m.width = 100
-	m.height = 30
-	m.lastCheckAt = time.Date(2026, 1, 1, 12, 34, 56, 0, time.UTC)
-
-	bar := m.viewStatusBar()
-	// Should contain watch interval.
-	if !strings.Contains(bar, "2s") {
-		t.Errorf("status bar should show watch interval, got: %q", bar)
-	}
-	// Should contain last check time.
-	if !strings.Contains(bar, "12:34:56") {
-		t.Errorf("status bar should show last check time, got: %q", bar)
-	}
-	// Should contain a dot indicator (● for watching).
-	if !strings.Contains(bar, "●") {
-		t.Errorf("status bar should show watch dot indicator, got: %q", bar)
-	}
-}
-
 func TestStatusBar_DrillDownBreadcrumb(t *testing.T) {
 	t.Parallel()
 
@@ -114,44 +87,6 @@ func TestStatusBar_DrillDownBreadcrumb(t *testing.T) {
 	}
 	if !strings.Contains(bar, "feature-x") {
 		t.Errorf("drill-down breadcrumb should contain branch name, got: %q", bar)
-	}
-}
-
-func TestStatusBar_WatchErrorRedDot(t *testing.T) {
-	t.Parallel()
-
-	state := sampleState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
-	m := NewModel(state)
-	m.width = 100
-	m.height = 30
-	m.watchErr = true
-
-	bar := m.viewStatusBar()
-	// Should still show the watch dot (red when error).
-	if !strings.Contains(bar, "●") {
-		t.Errorf("watch error should show dot indicator, got: %q", bar)
-	}
-}
-
-func TestStatusBar_RefreshInFlightOverridesWatchErr(t *testing.T) {
-	t.Parallel()
-
-	state := sampleState()
-	state.WatchEnabled = true
-	state.WatchInterval = 2 * time.Second
-	state.RefreshInFlight = true
-	m := NewModel(state)
-	m.width = 100
-	m.height = 30
-	m.watchErr = true // both error and in-flight set
-
-	bar := m.viewStatusBar()
-	// Should show spinner (refresh in-flight takes priority over error dot).
-	// The spinner replaces the static ● dot. Verify the error dot is NOT shown.
-	if strings.Contains(bar, "●") && !strings.Contains(bar, m.spinner.View()) {
-		t.Errorf("watch segment should show spinner when refresh in-flight, got: %q", bar)
 	}
 }
 

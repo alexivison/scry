@@ -14,7 +14,6 @@ import (
 	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/gitexec"
 	"github.com/alexivison/scry/internal/model"
-	"github.com/alexivison/scry/internal/watch"
 )
 
 var fixtureDir string
@@ -63,9 +62,9 @@ func copyFixture(t *testing.T, name string) gitexec.GitRunner {
 	return gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: dst})
 }
 
-// ─── Watch: no-divergence startup ───────────────────────────────────────────
+// ─── Diff: no-divergence startup ────────────────────────────────────────────
 
-func TestSmoke_NoDivergenceWatchStartup(t *testing.T) {
+func TestSmoke_NoDivergence(t *testing.T) {
 	t.Parallel()
 
 	runner := fixtureRunner(t, "no-divergence")
@@ -103,106 +102,6 @@ func TestSmoke_NoDivergenceWatchStartup(t *testing.T) {
 
 	if len(files) != 0 {
 		t.Errorf("no-divergence should produce 0 files, got %d", len(files))
-	}
-}
-
-// ─── Watch: fingerprint divergence detection ────────────────────────────────
-
-func TestSmoke_WatchFingerprintDivergence(t *testing.T) {
-	t.Parallel()
-
-	// Work on a copy so we can mutate the repo between fingerprint calls.
-	runner := copyFixture(t, "watch-divergence")
-	ctx := context.Background()
-
-	fp := &watch.Fingerprinter{Runner: runner}
-
-	// Compute fingerprint at current state.
-	before, err := fp.Fingerprint(ctx, "HEAD~1", false)
-	if err != nil {
-		t.Fatalf("before fingerprint: %v", err)
-	}
-	if before == "" {
-		t.Fatal("before fingerprint is empty")
-	}
-
-	// Mutate: create a new commit so HEAD advances.
-	if _, err := runner.RunGit(ctx, "-c", "user.name=test", "-c", "user.email=test@test.com",
-		"commit", "--allow-empty", "-m", "advance HEAD"); err != nil {
-		t.Fatalf("create commit: %v", err)
-	}
-
-	// Re-fingerprint: should differ because HEAD changed.
-	after, err := fp.Fingerprint(ctx, "HEAD~2", false)
-	if err != nil {
-		t.Fatalf("after fingerprint: %v", err)
-	}
-
-	if before == after {
-		t.Errorf("fingerprint should change after new commit: both %q", before)
-	}
-
-	// Verify ShouldRefresh detects the change.
-	state := model.AppState{LastFingerprint: before}
-	if !watch.ShouldRefresh(&state, after) {
-		t.Error("ShouldRefresh should return true after fingerprint change")
-	}
-}
-
-func TestSmoke_WatchFingerprintWorkingTree(t *testing.T) {
-	t.Parallel()
-
-	runner := fixtureRunner(t, "simple")
-	ctx := context.Background()
-
-	fp := &watch.Fingerprinter{Runner: runner}
-
-	wt, err := fp.Fingerprint(ctx, "HEAD~1", true)
-	if err != nil {
-		t.Fatalf("working-tree fingerprint: %v", err)
-	}
-
-	committed, err := fp.Fingerprint(ctx, "HEAD~1", false)
-	if err != nil {
-		t.Fatalf("committed fingerprint: %v", err)
-	}
-
-	// Committed has 2 parts, working-tree has 3 (third is diff appendix).
-	committedParts := strings.Split(committed, ":")
-	wtParts := strings.Split(wt, ":")
-	if len(committedParts) != 2 {
-		t.Errorf("committed fingerprint parts = %d, want 2", len(committedParts))
-	}
-	if len(wtParts) != 3 {
-		t.Errorf("working-tree fingerprint parts = %d, want 3", len(wtParts))
-	}
-}
-
-// ─── Watch: linked-worktree fingerprint ─────────────────────────────────────
-
-func TestSmoke_LinkedWorktreeWatchBehavior(t *testing.T) {
-	t.Parallel()
-
-	mainRunner := fixtureRunner(t, "linked-worktree/main")
-	wtRunner := fixtureRunner(t, "linked-worktree/wt")
-	ctx := context.Background()
-
-	mainFP := &watch.Fingerprinter{Runner: mainRunner}
-	wtFP := &watch.Fingerprinter{Runner: wtRunner}
-
-	mainFingerprint, err := mainFP.Fingerprint(ctx, "HEAD~1", false)
-	if err != nil {
-		t.Fatalf("main fingerprint: %v", err)
-	}
-
-	wtFingerprint, err := wtFP.Fingerprint(ctx, "HEAD", false)
-	if err != nil {
-		t.Fatalf("wt fingerprint: %v", err)
-	}
-
-	// Different worktrees at different HEADs should produce different fingerprints.
-	if mainFingerprint == wtFingerprint {
-		t.Errorf("main and linked-worktree fingerprints should differ: both %q", mainFingerprint)
 	}
 }
 
@@ -330,30 +229,6 @@ func TestSmoke_FullDiffPipeline(t *testing.T) {
 		}
 		if len(fp.Hunks) == 0 {
 			t.Errorf("LoadPatch(%s): 0 hunks", f.Path)
-		}
-	}
-}
-
-// ─── Race detector: concurrent fingerprint calls ────────────────────────────
-
-func TestSmoke_ConcurrentFingerprints(t *testing.T) {
-	t.Parallel()
-
-	runner := fixtureRunner(t, "simple")
-	fp := &watch.Fingerprinter{Runner: runner}
-	ctx := context.Background()
-
-	errs := make(chan error, 10)
-	for range 10 {
-		go func() {
-			_, err := fp.Fingerprint(ctx, "HEAD~1", true)
-			errs <- err
-		}()
-	}
-
-	for range 10 {
-		if err := <-errs; err != nil {
-			t.Errorf("concurrent Fingerprint: %v", err)
 		}
 	}
 }

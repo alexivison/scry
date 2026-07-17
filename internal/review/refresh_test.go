@@ -2,7 +2,6 @@ package review
 
 import (
 	"testing"
-	"time"
 
 	"github.com/alexivison/scry/internal/model"
 )
@@ -40,15 +39,10 @@ func TestCompleteRefresh(t *testing.T) {
 		RefreshInFlight: true,
 	}
 
-	before := time.Now()
 	CompleteRefresh(&state)
-	after := time.Now()
 
 	if state.RefreshInFlight {
 		t.Error("RefreshInFlight should be false after CompleteRefresh")
-	}
-	if state.LastRefreshAt.Before(before) || state.LastRefreshAt.After(after) {
-		t.Errorf("LastRefreshAt = %v, want between %v and %v", state.LastRefreshAt, before, after)
 	}
 }
 
