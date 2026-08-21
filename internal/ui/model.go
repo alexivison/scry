@@ -100,11 +100,12 @@ type Model struct {
 	commitExecutor CommitExecutor     // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
-	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
-	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
-	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
-	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
-	fileDiscarder     FileDiscarder     // optional discarder for "discard changes" action
+	worktreeLoader        WorktreeLoader    // optional loader for worktree dashboard
+	drillDownProvider     DrillDownProvider // optional provider for worktree drill-down
+	worktreeRemover       WorktreeRemover   // optional remover for worktree deletion
+	previewLoader         PreviewLoader     // optional loader for dashboard preview pane
+	worktreeCompareLoader WorktreeCompareLoader
+	fileDiscarder         FileDiscarder // optional discarder for "discard changes" action
 
 	spinner spinner.Model // shared spinner for loading states
 }
@@ -317,6 +318,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case hunkClosedMsg:
+		if msg.err != nil {
+			m.refreshErr = fmt.Sprintf("hunk failed: %v", msg.err)
+		}
+		return m, nil
 	case WorktreeRefreshedMsg:
 		return m.handleWorktreeRefreshed(msg)
 
@@ -325,6 +331,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PreviewLoadedMsg:
 		return m.handlePreviewLoaded(msg)
+
+	case WorktreeCompareLoadedMsg:
+		return m.handleWorktreeCompareLoaded(msg)
 
 	case WorktreeRemovedMsg:
 		return m.handleWorktreeRemoved(msg)
@@ -396,6 +405,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.State.FocusPane != model.PaneCommit &&
 			m.State.FocusPane != model.PaneDashboard {
 			return m.openInNeovim()
+		}
+		if msg.String() == "H" && !m.showHelp &&
+			m.State.FocusPane != model.PaneSearch &&
+			m.State.FocusPane != model.PaneCommit {
+			if m.State.FocusPane == model.PaneDashboard {
+				return m.openSelectedWorktreeInHunk()
+			}
+			return m.openInHunk(m.State.Compare)
 		}
 		if msg.String() == "X" && !m.showHelp &&
 			m.State.FocusPane != model.PaneSearch &&
@@ -1741,6 +1758,7 @@ func (m Model) viewHelp() string {
 			"",
 			"Actions",
 			fmt.Sprintf("  b         cycle diff basis (current: %s)", m.State.CompareBasis.Label()),
+			"  H         open selected worktree in Hunk",
 			"  ?/Esc     close help",
 			"  q         quit",
 		}, "\n")
@@ -1771,10 +1789,10 @@ func (m Model) viewHelp() string {
 		"Search",
 		"  /         search in patch",
 		"  enter/N   next/prev match",
-		"",
 		"Actions",
 		"  r         refresh",
 		fmt.Sprintf("  b         cycle diff basis (current: %s)", m.State.CompareBasis.Label()),
+		"  H         open current compare in Hunk",
 		"  o         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",

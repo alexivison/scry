@@ -36,7 +36,16 @@ type DrillDownProvider interface {
 
 // PreviewLoader loads the top changed files for a worktree preview.
 type PreviewLoader interface {
-	LoadPreview(ctx context.Context, worktreePath string, basis model.CompareBasis) ([]model.FileSummary, error)
+	LoadPreview(ctx context.Context, worktreePath string, basis model.CompareBasis) (PreviewResult, error)
+}
+
+type WorktreeCompareLoader interface {
+	LoadCompare(ctx context.Context, worktreePath string, basis model.CompareBasis) (model.ResolvedCompare, error)
+}
+
+type PreviewResult struct {
+	Compare model.ResolvedCompare
+	Files   []model.FileSummary
 }
 
 // WithPreviewLoader sets the PreviewLoader for dashboard preview pane.
@@ -44,12 +53,22 @@ func WithPreviewLoader(pl PreviewLoader) ModelOption {
 	return func(m *Model) { m.previewLoader = pl }
 }
 
+func WithWorktreeCompareLoader(cl WorktreeCompareLoader) ModelOption {
+	return func(m *Model) { m.worktreeCompareLoader = cl }
+}
+
 // PreviewLoadedMsg is sent when an async preview load completes.
 type PreviewLoadedMsg struct {
-	Path  string
-	Snap  string
-	Files []model.FileSummary
-	Err   error
+	Path   string
+	Snap   string
+	Result PreviewResult
+	Err    error
+}
+
+type WorktreeCompareLoadedMsg struct {
+	Compare model.ResolvedCompare
+	Snap    string
+	Err     error
 }
 
 // WorktreeRemover removes a worktree.
@@ -429,7 +448,7 @@ func WorktreeSnapshotKey(wt model.WorktreeInfo, basis model.CompareBasis) string
 	if basis != model.CompareBasisLocalTrunk && basis != model.CompareBasisHeadDirty {
 		basis = model.CompareBasisUpstream
 	}
-	return fmt.Sprintf("%s|%s|%v|%d|%s", wt.Path, wt.CommitHash, wt.Dirty, wt.ChangedFiles, basis)
+	return fmt.Sprintf("%s|%s|%s|%v|%d|%s", wt.Path, wt.Branch, wt.CommitHash, wt.Dirty, wt.ChangedFiles, basis)
 }
 
 // maybeLoadPreview triggers a preview load for the selected worktree if not cached.
@@ -477,8 +496,8 @@ func (m *Model) maybeLoadPreview() tea.Cmd {
 	path := wt.Path
 	basis := m.State.CompareBasis
 	return func() tea.Msg {
-		files, err := loader.LoadPreview(context.Background(), path, basis)
-		return PreviewLoadedMsg{Path: path, Snap: snap, Files: files, Err: err}
+		result, err := loader.LoadPreview(context.Background(), path, basis)
+		return PreviewLoadedMsg{Path: path, Snap: snap, Result: result, Err: err}
 	}
 }
 
@@ -497,7 +516,7 @@ func (m Model) handlePreviewLoaded(msg PreviewLoadedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	files := msg.Files
+	result := msg.Result
 
 	// Store in cache.
 	if ds.PreviewCache == nil {
@@ -509,13 +528,13 @@ func (m Model) handlePreviewLoaded(msg PreviewLoadedMsg) (tea.Model, tea.Cmd) {
 		// for a preview cache — the working set rebuilds quickly.
 		ds.PreviewCache = make(map[string]model.PreviewEntry)
 	}
-	ds.PreviewCache[msg.Snap] = model.PreviewEntry{Files: files}
+	ds.PreviewCache[msg.Snap] = model.PreviewEntry{Compare: result.Compare, Files: result.Files}
 
 	// Apply to current view only if the selected worktree's snapshot still matches.
 	if ds.SelectedIdx >= 0 && ds.SelectedIdx < len(ds.Worktrees) {
 		currentSnap := WorktreeSnapshotKey(ds.Worktrees[ds.SelectedIdx], m.State.CompareBasis)
 		if msg.Snap == currentSnap {
-			ds.PreviewFiles = files
+			ds.PreviewFiles = result.Files
 			ds.PreviewSnap = msg.Snap
 			ds.PreviewErr = ""
 		}

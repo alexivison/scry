@@ -36,7 +36,7 @@ func TestViewHelp_ContainsNewKeys(t *testing.T) {
 
 	output := m.View()
 
-	for _, key := range []string{"gg", "ctrl+d/u", "ctrl+f/b", "s", "b", "o", "current: upstream"} {
+	for _, key := range []string{"gg", "ctrl+d/u", "ctrl+f/b", "s", "b", "H", "o", "current: upstream"} {
 		if !strings.Contains(output, key) {
 			t.Errorf("help should contain %q", key)
 		}

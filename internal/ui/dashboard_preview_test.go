@@ -19,9 +19,9 @@ type mockPreviewLoader struct {
 	bases []model.CompareBasis
 }
 
-func (m *mockPreviewLoader) LoadPreview(_ context.Context, _ string, basis model.CompareBasis) ([]model.FileSummary, error) {
+func (m *mockPreviewLoader) LoadPreview(_ context.Context, _ string, basis model.CompareBasis) (PreviewResult, error) {
 	m.bases = append(m.bases, basis)
-	return m.files, m.err
+	return PreviewResult{Files: m.files}, m.err
 }
 
 func previewFiles() []model.FileSummary {
@@ -153,6 +153,16 @@ func TestDashboardPreview_SnapshotKeyIncludesHeadDirtyBasis(t *testing.T) {
 	}
 }
 
+func TestDashboardPreview_SnapshotKeyIncludesBranch(t *testing.T) {
+	wt := dashboardWorktrees()[0]
+	otherBranch := wt
+	otherBranch.Branch = "release"
+
+	if WorktreeSnapshotKey(wt, model.CompareBasisUpstream) == WorktreeSnapshotKey(otherBranch, model.CompareBasisUpstream) {
+		t.Fatal("snapshot key should change when the worktree branch changes")
+	}
+}
+
 func TestDashboardPreview_BareWorktreeDoesNotLoad(t *testing.T) {
 	t.Parallel()
 
@@ -250,9 +260,9 @@ func TestDashboardPreview_StaleSnapshotDiscarded(t *testing.T) {
 	// (e.g., worktree state changed between request and response).
 	staleSnap := currentSnap + "|stale"
 	staleMsg := PreviewLoadedMsg{
-		Path:  wt.Path,
-		Snap:  staleSnap,
-		Files: previewFiles(),
+		Path:   wt.Path,
+		Snap:   staleSnap,
+		Result: PreviewResult{Files: previewFiles()},
 	}
 
 	updated, _ := m.handlePreviewLoaded(staleMsg)
@@ -284,7 +294,7 @@ func TestDashboardPreview_CacheEviction(t *testing.T) {
 	// Add one more entry via handlePreviewLoaded.
 	wt := state.DashboardState.Worktrees[0]
 	snap := WorktreeSnapshotKey(wt, state.CompareBasis)
-	msg := PreviewLoadedMsg{Path: wt.Path, Snap: snap, Files: previewFiles()}
+	msg := PreviewLoadedMsg{Path: wt.Path, Snap: snap, Result: PreviewResult{Files: previewFiles()}}
 	updated, _ := m.handlePreviewLoaded(msg)
 	um := updated.(Model)
 

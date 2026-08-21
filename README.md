@@ -88,6 +88,7 @@ scry --no-dashboard
 | `b` | Cycle compare basis |
 | `Tab` | Toggle split/modal layout |
 | `o` | Open selected file in nvim |
+| `H` | Open the current comparison in Hunk |
 | `c` | Generate commit message (when `--commit`) |
 | `e` | Edit generated commit message |
 | `r` | Refresh / regenerate commit message |

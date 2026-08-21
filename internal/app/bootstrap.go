@@ -187,7 +187,8 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	removeRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot, Timeout: gitexec.RemoveTimeout})
 	remover := &worktreeRemoverImpl{runner: removeRunner}
 	preview := &previewLoaderImpl{}
-	m := ui.NewModel(state, ui.WithColorProfile(colorProfile), ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover), ui.WithPreviewLoader(preview))
+	compareLoader := &worktreeCompareLoaderImpl{}
+	m := ui.NewModel(state, ui.WithColorProfile(colorProfile), ui.WithWorktreeLoader(loader), ui.WithDrillDownProvider(drillDown), ui.WithWorktreeRemover(remover), ui.WithPreviewLoader(preview), ui.WithWorktreeCompareLoader(compareLoader))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -254,38 +255,23 @@ func (w *worktreeRemoverImpl) Remove(ctx context.Context, path string, force boo
 type drillDownProviderImpl struct{}
 
 func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath string, basis model.CompareBasis) (ui.DrillDownResult, error) {
-	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
-
-	repo, err := source.ResolveRepoContext(ctx, runner)
+	resolved, err := resolveWorktreeCompare(ctx, worktreePath, basis)
 	if err != nil {
-		return ui.DrillDownResult{}, fmt.Errorf("resolve repo for %s: %w", worktreePath, err)
+		return ui.DrillDownResult{}, err
 	}
 
-	resolver := &source.CompareResolver{Runner: runner}
-	req := model.CompareRequest{
-		Repo:    repo,
-		BaseRef: "",
-		Basis:   basis,
-		HeadRef: "", // working tree mode
-		Mode:    model.CompareThreeDot,
-	}
-	cmp, err := resolver.Resolve(ctx, req)
-	if err != nil {
-		return ui.DrillDownResult{}, fmt.Errorf("resolve compare for %s: %w", worktreePath, err)
-	}
-
-	metaSvc := &diff.MetadataService{Runner: runner}
-	files, err := metaSvc.ListFiles(ctx, cmp)
+	metaSvc := &diff.MetadataService{Runner: resolved.runner}
+	files, err := metaSvc.ListFiles(ctx, resolved.compare)
 	if err != nil {
 		return ui.DrillDownResult{}, fmt.Errorf("list files for %s: %w", worktreePath, err)
 	}
 
-	patchSvc := &diff.PatchService{Runner: runner}
+	patchSvc := &diff.PatchService{Runner: resolved.runner}
 	return ui.DrillDownResult{
-		Compare:       cmp,
+		Compare:       resolved.compare,
 		Files:         files,
 		PatchLoader:   patchSvc,
-		FileDiscarder: &fileDiscarderImpl{runner: runner, workdir: repo.WorktreeRoot},
+		FileDiscarder: &fileDiscarderImpl{runner: resolved.runner, workdir: resolved.repo.WorktreeRoot},
 	}, nil
 }
 
@@ -301,24 +287,51 @@ func (f *fileDiscarderImpl) Discard(ctx context.Context, path string, untracked 
 
 type previewLoaderImpl struct{}
 
-func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string, basis model.CompareBasis) ([]model.FileSummary, error) {
+func (p *previewLoaderImpl) LoadPreview(ctx context.Context, worktreePath string, basis model.CompareBasis) (ui.PreviewResult, error) {
+	resolved, err := resolveWorktreeCompare(ctx, worktreePath, basis)
+	if err != nil {
+		return ui.PreviewResult{}, err
+	}
+	metaSvc := &diff.MetadataService{Runner: resolved.runner}
+	files, err := metaSvc.ListFiles(ctx, resolved.compare)
+	if err != nil {
+		return ui.PreviewResult{}, err
+	}
+	return ui.PreviewResult{Compare: resolved.compare, Files: files}, nil
+}
+
+type worktreeCompareLoaderImpl struct{}
+
+func (w *worktreeCompareLoaderImpl) LoadCompare(ctx context.Context, worktreePath string, basis model.CompareBasis) (model.ResolvedCompare, error) {
+	resolved, err := resolveWorktreeCompare(ctx, worktreePath, basis)
+	if err != nil {
+		return model.ResolvedCompare{}, err
+	}
+	return resolved.compare, nil
+}
+
+type resolvedWorktreeCompare struct {
+	runner  gitexec.GitRunner
+	repo    model.RepoContext
+	compare model.ResolvedCompare
+}
+
+func resolveWorktreeCompare(ctx context.Context, worktreePath string, basis model.CompareBasis) (resolvedWorktreeCompare, error) {
 	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
 	repo, err := source.ResolveRepoContext(ctx, runner)
 	if err != nil {
-		return nil, fmt.Errorf("resolve repo for %s: %w", worktreePath, err)
+		return resolvedWorktreeCompare{}, fmt.Errorf("resolve repo for %s: %w", worktreePath, err)
 	}
+
 	resolver := &source.CompareResolver{Runner: runner}
-	req := model.CompareRequest{
-		Repo:    repo,
-		BaseRef: "",
-		Basis:   basis,
-		HeadRef: "",
-		Mode:    model.CompareThreeDot,
-	}
-	cmp, err := resolver.Resolve(ctx, req)
+	cmp, err := resolver.Resolve(ctx, model.CompareRequest{
+		Repo:  repo,
+		Basis: basis,
+		Mode:  model.CompareThreeDot,
+	})
 	if err != nil {
-		return nil, err
+		return resolvedWorktreeCompare{}, fmt.Errorf("resolve compare for %s: %w", worktreePath, err)
 	}
-	metaSvc := &diff.MetadataService{Runner: runner}
-	return metaSvc.ListFiles(ctx, cmp)
+
+	return resolvedWorktreeCompare{runner: runner, repo: repo, compare: cmp}, nil
 }

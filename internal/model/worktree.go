@@ -17,7 +17,8 @@ type WorktreeInfo struct {
 
 // PreviewEntry holds cached preview data for a worktree.
 type PreviewEntry struct {
-	Files []FileSummary
+	Compare ResolvedCompare
+	Files   []FileSummary
 }
 
 // PaneDashboard is the focus pane for worktree dashboard mode.
