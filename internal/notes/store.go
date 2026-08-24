@@ -73,43 +73,167 @@ func (s *Store) Add(input AddInput) (Note, error) {
 		return Note{}, err
 	}
 
+	var note Note
+	if err := s.mutate(func(ledger *ledger) (bool, error) {
+		id, err := newID()
+		if err != nil {
+			return false, noteError("storage", err.Error())
+		}
+		now := time.Now().UTC()
+		note = Note{
+			ID:              id,
+			File:            file,
+			Line:            input.Line,
+			LineFingerprint: fingerprint,
+			Body:            input.Body,
+			Author:          input.Author,
+			State:           StateOpen,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		ledger.Notes = append(ledger.Notes, note)
+		return true, nil
+	}); err != nil {
+		return Note{}, err
+	}
+	return note, nil
+}
+
+func (s *Store) Edit(id string, input EditInput) (Note, error) {
+	if input.Body == nil && input.File == nil && input.Line == nil && input.State == nil {
+		return Note{}, noteError("invalid_arguments", "no note fields supplied")
+	}
+	if input.Body != nil && *input.Body == "" {
+		return Note{}, noteError("invalid_arguments", "body must not be empty")
+	}
+	if (input.File == nil) != (input.Line == nil) {
+		return Note{}, noteError("invalid_arguments", "file and line must be supplied together")
+	}
+	if input.State != nil && !validState(*input.State) {
+		return Note{}, noteError("invalid_state", fmt.Sprintf("invalid state %q", *input.State))
+	}
+
+	file, fingerprint := "", ""
+	if input.File != nil {
+		var err error
+		file, fingerprint, err = s.fingerprint(*input.File, *input.Line)
+		if err != nil {
+			return Note{}, err
+		}
+	}
+
+	var edited Note
+	err := s.mutate(func(ledger *ledger) (bool, error) {
+		for index := range ledger.Notes {
+			note := &ledger.Notes[index]
+			if note.ID != id {
+				continue
+			}
+			changed := false
+			if input.Body != nil && note.Body != *input.Body {
+				note.Body = *input.Body
+				changed = true
+			}
+			if input.File != nil && (note.File != file || note.Line != *input.Line || note.LineFingerprint != fingerprint) {
+				note.File = file
+				note.Line = *input.Line
+				note.LineFingerprint = fingerprint
+				changed = true
+			}
+			if input.State != nil && note.State != *input.State {
+				note.State = *input.State
+				changed = true
+			}
+			if changed {
+				note.UpdatedAt = time.Now().UTC()
+			}
+			edited = *note
+			return changed, nil
+		}
+		return false, noteError("not_found", fmt.Sprintf("note %q does not exist", id))
+	})
+	if err != nil {
+		return Note{}, err
+	}
+	return edited, nil
+}
+
+func (s *Store) Remove(id string) (Note, error) {
+	var removed Note
+	err := s.mutate(func(ledger *ledger) (bool, error) {
+		for index, note := range ledger.Notes {
+			if note.ID != id {
+				continue
+			}
+			removed = note
+			ledger.Notes = append(ledger.Notes[:index], ledger.Notes[index+1:]...)
+			return true, nil
+		}
+		return false, noteError("not_found", fmt.Sprintf("note %q does not exist", id))
+	})
+	if err != nil {
+		return Note{}, err
+	}
+	return removed, nil
+}
+
+func (s *Store) Sync() (SyncResult, error) {
+	var result SyncResult
+	err := s.mutate(func(ledger *ledger) (bool, error) {
+		changed := false
+		for index := range ledger.Notes {
+			note := &ledger.Notes[index]
+			if note.State != StateOpen {
+				continue
+			}
+			result.Checked++
+			_, fingerprint, err := s.fingerprint(note.File, note.Line)
+			if err != nil && !hasErrorCode(err, "invalid_anchor") {
+				return false, err
+			}
+			if err == nil && fingerprint == note.LineFingerprint {
+				continue
+			}
+			note.State = StateStale
+			note.UpdatedAt = time.Now().UTC()
+			result.Staled = append(result.Staled, *note)
+			changed = true
+		}
+		return changed, nil
+	})
+	if err != nil {
+		return SyncResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) mutate(change func(*ledger) (bool, error)) error {
 	if err := os.MkdirAll(filepath.Dir(s.ledgerPath), 0o700); err != nil {
-		return Note{}, noteError("storage", err.Error())
+		return noteError("storage", err.Error())
 	}
 	if err := os.Chmod(filepath.Dir(s.ledgerPath), 0o700); err != nil {
-		return Note{}, noteError("storage", err.Error())
+		return noteError("storage", err.Error())
 	}
 	lock, err := acquireLock(s.lockPath)
 	if err != nil {
-		return Note{}, err
+		return err
 	}
 	defer lock.Close()
 
 	ledger, err := s.load()
 	if err != nil {
-		return Note{}, err
+		return err
 	}
-	id, err := newID()
-	if err != nil {
-		return Note{}, noteError("storage", err.Error())
+	changed, err := change(&ledger)
+	if err != nil || !changed {
+		return err
 	}
-	now := time.Now().UTC()
-	note := Note{
-		ID:              id,
-		File:            file,
-		Line:            input.Line,
-		LineFingerprint: fingerprint,
-		Body:            input.Body,
-		Author:          input.Author,
-		State:           StateOpen,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
-	ledger.Notes = append(ledger.Notes, note)
-	if err := s.save(ledger); err != nil {
-		return Note{}, err
-	}
-	return note, nil
+	return s.save(ledger)
+}
+
+func hasErrorCode(err error, code string) bool {
+	var noteErr *Error
+	return errors.As(err, &noteErr) && noteErr.Code == code
 }
 
 func (s *Store) load() (ledger, error) {

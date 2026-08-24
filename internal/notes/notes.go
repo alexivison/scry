@@ -44,6 +44,11 @@ type EditInput struct {
 	State *State
 }
 
+type SyncResult struct {
+	Checked int
+	Staled  []Note
+}
+
 type Store struct {
 	worktree   string
 	ledgerPath string
