@@ -70,6 +70,21 @@ scry --base origin/main --commit --commit-auto
 scry --no-dashboard
 ```
 
+### Persistent notes (CLI)
+
+Persistent notes are private to Scry and the selected local worktree. They are
+stored outside the repository, use JSON by default, and are currently
+CLI-only.
+
+```bash
+# Add a note; the JSON response includes its note ID
+scry note add --file cmd/scry/main.go --line 20 --body "Check this path" --author user
+scry note list
+scry note edit <note-id> --body "Updated reminder"
+scry note sync
+scry note remove <note-id>
+```
+
 ## Keymap
 
 | Key | Action |
@@ -108,7 +123,7 @@ These are intentional omissions, not missing features:
 
 - No staging, rebasing, cherry-picking, or conflict resolution. Commit is opt-in via `--commit`; per-file `X` discard is the only other write op and is gated behind a modal y/N confirmation.
 - No hunk-level or bulk discard
-- No inline PR comments or review thread management
+- No GitHub review comments or review-thread management; persistent notes are private Scry-local notes for the selected worktree, stored outside the repository, and managed through the CLI.
 - No plugin system
 - No syntax-aware / AST diff mode
 
