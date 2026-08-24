@@ -7,6 +7,7 @@ import (
 
 	"github.com/alexivison/scry/internal/app"
 	"github.com/alexivison/scry/internal/config"
+	"github.com/alexivison/scry/internal/notescli"
 	flag "github.com/spf13/pflag"
 )
 
@@ -23,6 +24,20 @@ func runWith(args []string) int {
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Printf("scry %s (%s)\n", version, commit)
 		return 0
+	}
+	if len(args) > 0 && args[0] == "note" {
+		workingDir, setupErr := os.Getwd()
+		configDir, err := os.UserConfigDir()
+		if setupErr == nil {
+			setupErr = err
+		}
+		return notescli.Run(args[1:], notescli.Options{
+			WorkingDir: workingDir,
+			ConfigDir:  configDir,
+			SetupErr:   setupErr,
+			Stdout:     os.Stdout,
+			Stderr:     os.Stderr,
+		})
 	}
 
 	cfg, err := config.Parse(args)

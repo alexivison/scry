@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -162,4 +165,69 @@ func TestVersionFlagBinary(t *testing.T) {
 	if got := buf.String(); got != "scry 9.9.9 (deadbee)\n" {
 		t.Fatalf("output = %q, want %q", got, "scry 9.9.9 (deadbee)\n")
 	}
+}
+
+func TestNoteCommandsPersistAndDefaultWorktreesAreIsolated(t *testing.T) {
+	bin := buildBinary(t)
+	config := t.TempDir()
+	first := t.TempDir()
+	second := t.TempDir()
+	for _, worktree := range []string{first, second} {
+		if err := os.WriteFile(filepath.Join(worktree, "source.go"), []byte("line\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	add := noteCommand(t, bin, first, config, "add", "--file", "source.go", "--line", "1", "--body", "persisted", "--author", "user")
+	if err := add.cmd.Run(); err != nil {
+		t.Fatalf("note add: %v\n%s", err, add.stderr)
+	}
+	if !json.Valid(add.stdout.Bytes()) {
+		t.Fatalf("note add stdout is not JSON: %q", add.stdout.String())
+	}
+
+	list := noteCommand(t, bin, first, config, "list")
+	if err := list.cmd.Run(); err != nil {
+		t.Fatalf("note list: %v\n%s", err, list.stderr)
+	}
+	var persisted struct {
+		Notes []json.RawMessage `json:"notes"`
+	}
+	if err := json.Unmarshal(list.stdout.Bytes(), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Notes) != 1 {
+		t.Fatalf("persisted notes = %s, want one", list.stdout.String())
+	}
+
+	isolate := noteCommand(t, bin, second, config, "list")
+	if err := isolate.cmd.Run(); err != nil {
+		t.Fatalf("isolated note list: %v\n%s", err, isolate.stderr)
+	}
+	var isolated struct {
+		Notes []json.RawMessage `json:"notes"`
+	}
+	if err := json.Unmarshal(isolate.stdout.Bytes(), &isolated); err != nil {
+		t.Fatal(err)
+	}
+	if len(isolated.Notes) != 0 {
+		t.Fatalf("isolated notes = %s, want empty", isolate.stdout.String())
+	}
+}
+
+type commandBuffers struct {
+	cmd            *exec.Cmd
+	stdout, stderr *bytes.Buffer
+}
+
+func noteCommand(t *testing.T, bin, worktree, config string, args ...string) commandBuffers {
+	t.Helper()
+	cmd := exec.Command(bin, append([]string{"note"}, args...)...)
+	cmd.Dir = worktree
+	cmd.Env = append(os.Environ(), "HOME="+filepath.Join(config, "home"), "XDG_CONFIG_HOME="+config)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return commandBuffers{cmd, stdout, stderr}
 }
