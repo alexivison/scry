@@ -1,7 +1,10 @@
 package notes
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -119,6 +122,7 @@ func TestRejectedAddsLeaveLedgerUnchanged(t *testing.T) {
 	tests := map[string]AddInput{
 		"empty body":     {File: "source.go", Line: 1, Body: "", Author: AuthorUser},
 		"invalid author": {File: "source.go", Line: 1, Body: "bad", Author: "bot"},
+		"negative line":  {File: "source.go", Line: -1, Body: "bad", Author: AuthorUser},
 		"zero line":      {File: "source.go", Line: 0, Body: "bad", Author: AuthorUser},
 		"missing line":   {File: "source.go", Line: 9, Body: "bad", Author: AuthorUser},
 		"absolute path":  {File: filepath.Join(root, "source.go"), Line: 1, Body: "bad", Author: AuthorUser},
@@ -155,6 +159,53 @@ func TestRejectedAddsLeaveLedgerUnchanged(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLineFingerprintStreamsTargetLine(t *testing.T) {
+	t.Parallel()
+
+	const lineLength = 8 << 20
+	fingerprint, err := lineFingerprint(&longLineReader{remaining: lineLength, suffix: []byte("\nnext\n")}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hash := sha256.New()
+	chunk := make([]byte, 1024)
+	for i := range chunk {
+		chunk[i] = 'x'
+	}
+	for written := 0; written < lineLength; written += len(chunk) {
+		if _, err := hash.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	if fingerprint != want {
+		t.Fatalf("fingerprint = %q, want %q", fingerprint, want)
+	}
+}
+
+type longLineReader struct {
+	remaining int
+	suffix    []byte
+}
+
+func (r *longLineReader) Read(p []byte) (int, error) {
+	if r.remaining > 0 {
+		n := min(min(len(p), 1024), r.remaining)
+		for i := range p[:n] {
+			p[i] = 'x'
+		}
+		r.remaining -= n
+		return n, nil
+	}
+	if len(r.suffix) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.suffix)
+	r.suffix = r.suffix[n:]
+	return n, nil
 }
 
 func newTestStore(t *testing.T) (*Store, string) {

@@ -189,47 +189,79 @@ func (s *Store) fingerprint(file string, line int) (string, string, error) {
 		return "", "", noteError("invalid_anchor", fmt.Sprintf("file %s is not a regular file", stored))
 	}
 
-	content, err := sourceLine(canonical, line)
+	fingerprint, err := sourceLineFingerprint(canonical, line)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return "", "", noteError("invalid_anchor", fmt.Sprintf("line %d does not exist in %s", line, stored))
 		}
 		return "", "", noteError("storage", err.Error())
 	}
-	digest := sha256.Sum256(content)
-	return stored, "sha256:" + hex.EncodeToString(digest[:]), nil
+	return stored, fingerprint, nil
 }
 
-func sourceLine(path string, target int) ([]byte, error) {
+func sourceLineFingerprint(path string, target int) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer file.Close()
-
-	reader := bufio.NewReader(file)
-	for line := 1; ; line++ {
-		content, err := reader.ReadBytes('\n')
-		if line == target {
-			if len(content) == 0 && errors.Is(err, io.EOF) {
-				return nil, io.EOF
-			}
-			content = bytesWithoutLineEnding(content)
-			return content, nil
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil, io.EOF
-			}
-			return nil, err
-		}
-	}
+	return lineFingerprint(file, target)
 }
 
-func bytesWithoutLineEnding(content []byte) []byte {
-	text := strings.TrimSuffix(string(content), "\n")
-	text = strings.TrimSuffix(text, "\r")
-	return []byte(text)
+func lineFingerprint(source io.Reader, target int) (string, error) {
+	reader := bufio.NewReader(source)
+	hash := sha256.New()
+	pendingCR := false
+	seenTarget := false
+	for line := 1; ; {
+		content, err := reader.ReadSlice('\n')
+		if line != target {
+			if err == nil {
+				line++
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				return "", io.EOF
+			}
+			if errors.Is(err, bufio.ErrBufferFull) {
+				continue
+			}
+			return "", err
+		}
+
+		seenTarget = seenTarget || len(content) > 0
+		lineEnded := err == nil
+		if lineEnded {
+			content = content[:len(content)-1]
+		}
+		if pendingCR {
+			if !lineEnded || len(content) > 0 {
+				hash.Write([]byte{'\r'})
+			}
+			pendingCR = false
+		}
+		if len(content) > 0 && content[len(content)-1] == '\r' {
+			content = content[:len(content)-1]
+			pendingCR = true
+		}
+		hash.Write(content)
+
+		if lineEnded {
+			return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+		}
+		if errors.Is(err, io.EOF) {
+			if !seenTarget {
+				return "", io.EOF
+			}
+			if pendingCR {
+				hash.Write([]byte{'\r'})
+			}
+			return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return "", err
+		}
+	}
 }
 
 func validateLedger(ledger ledger, worktree string) error {
