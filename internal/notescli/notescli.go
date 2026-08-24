@@ -46,7 +46,7 @@ func Run(args []string, options Options) int {
 func runList(args []string, options Options) int {
 	fs, worktree := newFlagSet("list", options)
 	state := fs.String("state", "", "filter by state")
-	if code := parse(fs, args, options); code != 0 {
+	if code, done := parse(fs, args, options); done {
 		return code
 	}
 	if fs.NArg() != 0 {
@@ -77,7 +77,7 @@ func runAdd(args []string, options Options) int {
 	line := fs.Int("line", 0, "source line")
 	body := fs.String("body", "", "note text")
 	author := fs.String("author", "", "note author")
-	if code := parse(fs, args, options); code != 0 {
+	if code, done := parse(fs, args, options); done {
 		return code
 	}
 	if fs.NArg() != 0 {
@@ -105,7 +105,7 @@ func runEdit(args []string, options Options) int {
 	file := fs.String("file", "", "repository-relative file")
 	line := fs.Int("line", 0, "source line")
 	state := fs.String("state", "", "note state")
-	if code := parse(fs, args, options); code != 0 {
+	if code, done := parse(fs, args, options); done {
 		return code
 	}
 	if fs.NArg() != 1 {
@@ -138,7 +138,7 @@ func runEdit(args []string, options Options) int {
 
 func runRemove(args []string, options Options) int {
 	fs, worktree := newFlagSet("remove", options)
-	if code := parse(fs, args, options); code != 0 {
+	if code, done := parse(fs, args, options); done {
 		return code
 	}
 	if fs.NArg() != 1 {
@@ -157,7 +157,7 @@ func runRemove(args []string, options Options) int {
 
 func runSync(args []string, options Options) int {
 	fs, worktree := newFlagSet("sync", options)
-	if code := parse(fs, args, options); code != 0 {
+	if code, done := parse(fs, args, options); done {
 		return code
 	}
 	if fs.NArg() != 0 {
@@ -188,16 +188,16 @@ func newFlagSet(name string, options Options) (*flag.FlagSet, *string) {
 	return fs, fs.String("worktree", options.WorkingDir, "local worktree")
 }
 
-func parse(fs *flag.FlagSet, args []string, options Options) int {
+func parse(fs *flag.FlagSet, args []string, options Options) (int, bool) {
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(output(options.Stdout))
 			fs.PrintDefaults()
-			return 0
+			return 0, true
 		}
-		return writeError(options, "invalid_arguments", err.Error())
+		return writeError(options, "invalid_arguments", err.Error()), true
 	}
-	return 0
+	return 0, false
 }
 
 func openStore(worktree string, options Options) (*notes.Store, string, int) {

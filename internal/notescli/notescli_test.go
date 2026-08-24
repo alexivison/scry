@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -136,6 +137,60 @@ func TestRunSetupErrorIsStorageJSON(t *testing.T) {
 	errDoc := decodeObject(t, []byte(result.Stderr))
 	if got := decodeString(t, decodeObject(t, errDoc["error"])["code"]); got != "storage" {
 		t.Fatalf("error code = %v, want storage", got)
+	}
+}
+
+func TestRunHelpStopsEveryCommandWithoutMutatingNotes(t *testing.T) {
+	t.Parallel()
+
+	options, worktree := testOptions(t)
+	source := filepath.Join(worktree, "source.go")
+	if err := os.WriteFile(source, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	added := run(t, []string{"add", "--file", "source.go", "--line", "1", "--body", "keep", "--author", "user"}, options)
+	if added.Code != 0 {
+		t.Fatalf("add exit code = %d, stderr = %s", added.Code, added.Stderr)
+	}
+	id := decodeString(t, decodeObject(t, decodeObject(t, []byte(added.Stdout))["note"])["id"])
+	if err := os.WriteFile(source, []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, args := range map[string][]string{
+		"list":   {"list", "--help"},
+		"add":    {"add", "--help"},
+		"edit":   {"edit", id, "--help"},
+		"remove": {"remove", id, "--help"},
+		"sync":   {"sync", "--help"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := run(t, args, options)
+			if result.Code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", result.Code, result.Stderr)
+			}
+			if result.Stderr != "" {
+				t.Fatalf("stderr = %q, want empty", result.Stderr)
+			}
+			if result.Stdout == "" || json.Valid([]byte(result.Stdout)) || strings.Contains(result.Stdout, "{") {
+				t.Fatalf("stdout = %q, want normal non-JSON help", result.Stdout)
+			}
+		})
+	}
+
+	listed := run(t, []string{"list"}, options)
+	if listed.Code != 0 {
+		t.Fatalf("list exit code = %d, stderr = %s", listed.Code, listed.Stderr)
+	}
+	var notes []struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(decodeObject(t, []byte(listed.Stdout))["notes"], &notes); err != nil {
+		t.Fatal(err)
+	}
+	if len(notes) != 1 || notes[0].ID != id || notes[0].State != "open" {
+		t.Fatalf("notes after help = %s, want the unchanged open note", listed.Stdout)
 	}
 }
 
