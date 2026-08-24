@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,6 +28,53 @@ func TestListFreshLedgerDoesNotCreateFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "source.go")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMalformedNotesFieldLeavesLedgerUnchanged(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newTestStore(t)
+	for name, document := range map[string]string{
+		"omitted": fmt.Sprintf(`{"version":1,"worktree":%q}`, store.worktree),
+		"null":    fmt.Sprintf(`{"version":1,"worktree":%q,"notes":null}`, store.worktree),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := []byte(document)
+			if err := os.MkdirAll(filepath.Dir(store.ledgerPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.ledgerPath, before, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := store.List(nil); errorCode(err) != "corrupt_ledger" {
+				t.Fatalf("List error = %v, want corrupt_ledger", err)
+			}
+			if _, err := store.Add(AddInput{File: "source.go", Line: 1, Body: "blocked", Author: AuthorUser}); errorCode(err) != "corrupt_ledger" {
+				t.Fatalf("Add error = %v, want corrupt_ledger", err)
+			}
+			after, err := os.ReadFile(store.ledgerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatal("malformed ledger changed")
+			}
+		})
+	}
+}
+
+func TestStoreWorktreeReturnsCanonicalIdentity(t *testing.T) {
+	t.Parallel()
+
+	store, root := newTestStore(t)
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Worktree(); got != canonical {
+		t.Fatalf("Worktree() = %q, want %q", got, canonical)
 	}
 }
 
@@ -466,6 +514,14 @@ func notesByID(t *testing.T, store *Store) map[string]Note {
 		byID[note.ID] = note
 	}
 	return byID
+}
+
+func errorCode(err error) string {
+	var noteErr *Error
+	if errors.As(err, &noteErr) {
+		return noteErr.Code
+	}
+	return ""
 }
 
 func newTestStore(t *testing.T) (*Store, string) {

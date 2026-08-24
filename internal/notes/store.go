@@ -150,7 +150,7 @@ func (s *Store) Edit(id string, input EditInput) (Note, error) {
 			edited = *note
 			return changed, nil
 		}
-		return false, noteError("not_found", fmt.Sprintf("note %q does not exist", id))
+		return false, noteError("note_not_found", fmt.Sprintf("note %q does not exist", id))
 	})
 	if err != nil {
 		return Note{}, err
@@ -169,7 +169,7 @@ func (s *Store) Remove(id string) (Note, error) {
 			ledger.Notes = append(ledger.Notes[:index], ledger.Notes[index+1:]...)
 			return true, nil
 		}
-		return false, noteError("not_found", fmt.Sprintf("note %q does not exist", id))
+		return false, noteError("note_not_found", fmt.Sprintf("note %q does not exist", id))
 	})
 	if err != nil {
 		return Note{}, err
@@ -394,6 +394,9 @@ func validateLedger(ledger ledger, worktree string) error {
 	}
 	if ledger.Worktree != worktree {
 		return fmt.Errorf("ledger worktree does not match store")
+	}
+	if ledger.Notes == nil {
+		return fmt.Errorf("ledger notes are missing")
 	}
 	ids := make(map[string]struct{}, len(ledger.Notes))
 	for _, note := range ledger.Notes {

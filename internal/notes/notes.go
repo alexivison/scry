@@ -55,6 +55,8 @@ type Store struct {
 	lockPath   string
 }
 
+func (s *Store) Worktree() string { return s.worktree }
+
 type ledger struct {
 	Version  int    `json:"version"`
 	Worktree string `json:"worktree"`

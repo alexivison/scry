@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 
 	"github.com/alexivison/scry/internal/notes"
 	flag "github.com/spf13/pflag"
@@ -205,15 +204,7 @@ func openStore(worktree string, options Options) (*notes.Store, string, int) {
 	if err != nil {
 		return nil, "", writeNotesError(options, err)
 	}
-	abs, err := filepath.Abs(worktree)
-	if err != nil {
-		return nil, "", writeError(options, "storage", err.Error())
-	}
-	canonical, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return nil, "", writeError(options, "storage", err.Error())
-	}
-	return store, canonical, 0
+	return store, store.Worktree(), 0
 }
 
 func writeNote(options Options, worktree string, note notes.Note) int {
@@ -228,11 +219,7 @@ func writeNotesError(options Options, err error) int {
 	if !errors.As(err, &noteErr) {
 		return writeError(options, "storage", err.Error())
 	}
-	code := noteErr.Code
-	if code == "not_found" {
-		code = "note_not_found"
-	}
-	return writeError(options, code, noteErr.Message)
+	return writeError(options, noteErr.Code, noteErr.Message)
 }
 
 func writeError(options Options, code, message string) int {
