@@ -327,7 +327,7 @@ func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 		m.State.FileTreeCollapsed = make(map[string]bool)
 		// Clear freshness state so stale generations from a previous worktree don't leak.
 		m.State.FileChangeGen = make(map[string]int)
-		m.noteState = noteUIState{}
+		m.setNoteStore(nil, nil)
 	}
 
 	if m.drillDownProvider == nil {
@@ -412,7 +412,7 @@ func (m *Model) returnToDashboard() {
 	m.searchIndex = nil
 	m.State.SearchQuery = ""
 	m.searchNotFound = ""
-	m.noteState = noteUIState{}
+	m.setNoteStore(nil, nil)
 }
 
 // updateDrillDown handles keys when in worktree drill-down (file/patch view for a single worktree).

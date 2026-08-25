@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/alexivison/scry/internal/model"
-	"github.com/alexivison/scry/internal/notes"
 )
 
 func TestStatusBar_Segments(t *testing.T) {
@@ -151,9 +150,7 @@ func TestSuccessfulNoteMutationClearsPriorStatus(t *testing.T) {
 	m := notePatchModel()
 	m.noteState.err = "old note failure"
 	m.noteState.mutating = true
-	note := uiNote("note", "main.go", 2, notes.StateOpen, "body")
-
-	updated, _ := m.Update(noteMutationMsg{note: note})
+	updated, _ := m.Update(noteMutationMsg{storeGeneration: m.noteStoreGeneration})
 	m = updated.(Model)
 	if m.noteState.err != "" {
 		t.Fatalf("successful mutation kept status %q", m.noteState.err)

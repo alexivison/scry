@@ -57,6 +57,58 @@ func TestNoteLoadFailureKeepsLastGoodSnapshot(t *testing.T) {
 	}
 }
 
+func TestLateNoteLoadCannotCrossWorktrees(t *testing.T) {
+	storeA, noteA := noteStoreWithOneNote(t)
+	storeB, noteB := noteStoreWithOneNote(t)
+	m := NewModel(sampleState(), WithNoteStore(storeA, nil))
+	lateLoad := m.loadNotes()
+	m.setNoteStore(storeB, nil)
+	m.noteState.items = []notes.Note{noteB}
+
+	updated, _ := m.Update(lateLoad())
+	m = updated.(Model)
+	if m.noteState.store != storeB || len(m.noteState.items) != 1 || m.noteState.items[0].ID != noteB.ID {
+		t.Fatalf("late worktree A load replaced B: A=%q state=%#v", noteA.ID, m.noteState)
+	}
+}
+
+func TestLateNoteMutationCannotCrossWorktrees(t *testing.T) {
+	storeA, noteA := noteStoreWithOneNote(t)
+	storeB, noteB := noteStoreWithOneNote(t)
+	m := NewModel(sampleState(), WithNoteStore(storeA, nil))
+	m.noteState.items = []notes.Note{noteA}
+	m.noteState.selectedID = noteA.ID
+	updated, mutation := m.resolveSelectedNote()
+	m = updated.(Model)
+	m.setNoteStore(storeB, nil)
+	m.noteState.items = []notes.Note{noteB}
+
+	updated, _ = m.Update(mutation())
+	m = updated.(Model)
+	if m.noteState.store != storeB || len(m.noteState.items) != 1 || m.noteState.items[0].ID != noteB.ID {
+		t.Fatalf("late worktree A mutation altered B: %#v", m.noteState)
+	}
+}
+
+func TestSameWorktreeRefreshDoesNotLoseLateMutation(t *testing.T) {
+	store, note := noteStoreWithOneNote(t)
+	m := NewModel(sampleState(), WithNoteStore(store, nil))
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	updated, mutation := m.resolveSelectedNote()
+	m = updated.(Model)
+	refresh := m.setNoteStore(store, nil)
+	m = deepDrain(t, m, refresh)
+
+	updated, reload := m.Update(mutation())
+	m = updated.(Model)
+	m = deepDrain(t, m, reload)
+	selected, ok := m.selectedNote()
+	if !ok || selected.State != notes.StateResolved {
+		t.Fatalf("late same-worktree mutation was lost: %#v", m.noteState)
+	}
+}
+
 func TestNoteSuccessfulReloadClearsPriorError(t *testing.T) {
 	_, note := noteStoreWithOneNote(t)
 	m := NewModel(sampleState())
@@ -85,6 +137,24 @@ func TestNoteReloadKeepsSelectedNoteReachableWhenItBecomesStale(t *testing.T) {
 	row, ok := m.currentFileTreeRow()
 	if !ok || row.Kind != panes.FileTreeRowNotes || m.noteState.selectedID != note.ID {
 		t.Fatalf("selected stale note became unreachable: row=%#v id=%q", row, m.noteState.selectedID)
+	}
+}
+
+func TestNoteReloadLoadsRepairedAnchorFile(t *testing.T) {
+	m := notePatchModel()
+	note := uiNote("note", "main.go", 2, notes.StateOpen, "body")
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	repaired := note
+	repaired.File = "new.go"
+	newPatch := samplePatch()
+	newPatch.Summary.Path = "new.go"
+	m.State.Patches["new.go"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &newPatch, Generation: m.State.CacheGeneration}
+
+	updated, cmd := m.Update(notesLoadedMsg{notes: []notes.Note{repaired}, generation: m.noteState.generation})
+	m = updated.(Model)
+	if cmd != nil || m.patchViewport == nil || m.patchViewport.Patch.Summary.Path != "new.go" || m.State.SelectedFile != 1 {
+		t.Fatalf("repaired anchor did not load new file: cmd=%v file=%d patch=%#v", cmd != nil, m.State.SelectedFile, m.patchViewport)
 	}
 }
 
@@ -145,15 +215,23 @@ func TestStaleNotesViewScrollsWithoutPatchViewport(t *testing.T) {
 	state.Files = nil
 	state.SelectedFile = -1
 	m := NewModel(state)
-	note := uiNote("stale", "gone.go", 7, notes.StateStale, strings.Repeat("line\n", 20))
+	note := uiNote("stale", "gone.go", 7, notes.StateStale, strings.Repeat("line\n", 80))
 	m.noteState.items = []notes.Note{note}
 	m.noteState.selectedID = note.ID
 	m.positionSelectedNote()
 	m.State.FocusPane = model.PanePatch
 
-	m, _ = sendKey(m, "j")
-	if m.noteState.selectedID != note.ID || m.noteState.listScroll != 1 {
-		t.Fatalf("stale scroll lost selection or offset: id=%q offset=%d", m.noteState.selectedID, m.noteState.listScroll)
+	for range 200 {
+		m, _ = sendKey(m, "j")
+	}
+	width, height := m.staleNoteListSize()
+	want := panes.NoteListMaxOffset(m.staleNotes(), width, height)
+	if m.noteState.selectedID != "" || m.noteState.listScroll != want {
+		t.Fatalf("stale scroll selection/offset = %q/%d, want empty/%d", m.noteState.selectedID, m.noteState.listScroll, want)
+	}
+	m, _ = sendKey(m, "k")
+	if m.noteState.listScroll != max(want-1, 0) {
+		t.Fatalf("reverse stale scroll remained sticky at %d", m.noteState.listScroll)
 	}
 }
 
@@ -239,7 +317,7 @@ func TestNoteComposerCreatesMultilineUserNote(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Alt+S did not save the composer")
 	}
-	m = drainCmd(t, m, cmd)
+	m = deepDrain(t, m, cmd)
 
 	items, err := store.List(nil)
 	if err != nil {
@@ -330,9 +408,59 @@ func TestNoteMutationFailureKeepsComposerText(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
 	m = updated.(Model)
-	m = drainCmd(t, m, cmd)
+	m = deepDrain(t, m, cmd)
 	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "keep me" || m.noteState.err == "" {
 		t.Fatalf("failed save lost draft: composer %#v, err %q", m.noteState.composer, m.noteState.err)
+	}
+}
+
+func TestSuccessfulMutationReloadsConcurrentCLINotes(t *testing.T) {
+	store := noteActionStore(t)
+	note, err := store.Add(notes.AddInput{File: "main.go", Line: 2, Body: "original", Author: notes.AuthorAgent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	updated, mutation := m.resolveSelectedNote()
+	m = updated.(Model)
+	mutationMsg := mutation()
+	if _, err := store.Add(notes.AddInput{File: "main.go", Line: 1, Body: "from CLI", Author: notes.AuthorAgent}); err != nil {
+		t.Fatal(err)
+	}
+	updated, reload := m.Update(mutationMsg)
+	m = updated.(Model)
+	if reload == nil {
+		t.Fatal("successful mutation did not request an authoritative reload")
+	}
+	m = deepDrain(t, m, reload)
+	if len(m.noteState.items) != 2 {
+		t.Fatalf("authoritative reload lost concurrent note: %#v", m.noteState.items)
+	}
+}
+
+func TestDeleteSelectsNearestRemainingNote(t *testing.T) {
+	store := noteActionStore(t)
+	first, err := store.Add(notes.AddInput{File: "main.go", Line: 1, Body: "first", Author: notes.AuthorUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Add(notes.AddInput{File: "main.go", Line: 2, Body: "second", Author: notes.AuthorUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = []notes.Note{first, second}
+	m.noteState.selectedID = first.ID
+
+	updated, cmd := m.deleteSelectedNote()
+	m = updated.(Model)
+	m = deepDrain(t, m, cmd)
+	if m.noteState.selectedID != second.ID {
+		t.Fatalf("delete selected %q, want nearest %q", m.noteState.selectedID, second.ID)
 	}
 }
 
@@ -395,7 +523,7 @@ func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("R did not resolve an open note")
 	}
-	m = drainCmd(t, m, cmd)
+	m = deepDrain(t, m, cmd)
 	if m.noteState.items[0].State != notes.StateResolved {
 		t.Fatalf("resolved state = %q", m.noteState.items[0].State)
 	}
@@ -408,7 +536,7 @@ func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("confirmed delete did not execute")
 	}
-	m = drainCmd(t, m, cmd)
+	m = deepDrain(t, m, cmd)
 	if len(m.noteState.items) != 0 || m.noteState.selectedID != "" {
 		t.Fatalf("delete left note state: %#v", m.noteState)
 	}
@@ -451,7 +579,7 @@ func saveNoteComposer(t *testing.T, m Model) Model {
 	if cmd == nil {
 		t.Fatal("Alt+S did not produce a save command")
 	}
-	return drainCmd(t, m, cmd)
+	return deepDrain(t, m, cmd)
 }
 
 func uiNote(id, file string, line int, state notes.State, body string) notes.Note {

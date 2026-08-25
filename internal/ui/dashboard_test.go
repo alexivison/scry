@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -251,6 +252,36 @@ func TestDashboardDrillDownLoadsWorktreeNotes(t *testing.T) {
 	}
 	if m.noteState.store != store {
 		t.Fatal("drill-down did not install the worktree note store")
+	}
+}
+
+func TestDashboardDrillDownRefreshKeepsLastGoodNotesOnLoadFailure(t *testing.T) {
+	store, note := noteStoreWithOneNote(t)
+	state := dashboardState()
+	state.DashboardState.DrillDown = true
+	state.DashboardState.DrillGeneration = 1
+	state.FocusPane = model.PaneFiles
+	m := NewModel(state, WithNoteStore(store, nil))
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+
+	updated, _ := m.Update(DrillDownLoadedMsg{
+		Result: DrillDownResult{
+			Compare:   model.ResolvedCompare{BaseRef: "abc", WorkingTree: true, DiffRange: "abc"},
+			Files:     []model.FileSummary{{Path: "main.go", Status: model.StatusModified}},
+			NoteStore: store,
+		},
+		Generation: 1,
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(notesLoadedMsg{
+		generation:      m.noteState.generation,
+		storeGeneration: m.noteStoreGeneration,
+		err:             errors.New("ledger unavailable"),
+	})
+	m = updated.(Model)
+	if len(m.noteState.items) != 1 || m.noteState.items[0].ID != note.ID || m.noteState.selectedID != note.ID {
+		t.Fatalf("same-worktree refresh lost last good notes: %#v", m.noteState)
 	}
 }
 

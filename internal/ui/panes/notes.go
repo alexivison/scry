@@ -85,6 +85,14 @@ func NoteListOffset(items []notes.Note, selectedID string, width int) (int, bool
 	return 0, false
 }
 
+func NoteListMaxOffset(items []notes.Note, width, height int) int {
+	rows := 0
+	for _, note := range orderedNotes(items) {
+		rows += len(renderNoteCard(note, width, false))
+	}
+	return max(rows-height, 0)
+}
+
 func orderedNotes(items []notes.Note) []notes.Note {
 	ordered := append([]notes.Note(nil), items...)
 	sort.SliceStable(ordered, func(i, j int) bool {

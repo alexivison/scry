@@ -35,16 +35,17 @@ type noteComposer struct {
 }
 
 type notesLoadedMsg struct {
-	notes      []notes.Note
-	generation int
-	err        error
+	notes           []notes.Note
+	generation      int
+	storeGeneration int
+	err             error
 }
 
 type noteMutationMsg struct {
-	note          notes.Note
-	removedID     string
-	closeComposer bool
-	err           error
+	selectedID      string
+	storeGeneration int
+	closeComposer   bool
+	err             error
 }
 
 func WithNoteStore(store *notes.Store, setupErr error) ModelOption {
@@ -54,7 +55,16 @@ func WithNoteStore(store *notes.Store, setupErr error) ModelOption {
 }
 
 func (m *Model) setNoteStore(store *notes.Store, setupErr error) tea.Cmd {
-	m.noteState = noteUIState{store: store}
+	previous := m.noteState
+	sameWorktree := previous.store != nil && store != nil && previous.store.Worktree() == store.Worktree()
+	if sameWorktree {
+		m.noteState.store = store
+		m.noteState.generation++
+	} else {
+		m.noteStoreGeneration++
+		m.noteState = noteUIState{store: store, generation: 1}
+	}
+	m.noteState.loading = false
 	if setupErr != nil {
 		m.noteState.err = fmt.Sprintf("notes unavailable: %v", setupErr)
 		return nil
@@ -62,7 +72,6 @@ func (m *Model) setNoteStore(store *notes.Store, setupErr error) tea.Cmd {
 	if store == nil {
 		return nil
 	}
-	m.noteState.generation = 1
 	m.noteState.loading = true
 	return m.loadNotes()
 }
@@ -73,12 +82,13 @@ func (m Model) loadNotes() tea.Cmd {
 	}
 	store := m.noteState.store
 	generation := m.noteState.generation
+	storeGeneration := m.noteStoreGeneration
 	return func() tea.Msg {
 		if _, err := store.Sync(); err != nil {
-			return notesLoadedMsg{generation: generation, err: err}
+			return notesLoadedMsg{generation: generation, storeGeneration: storeGeneration, err: err}
 		}
 		items, err := store.List(nil)
-		return notesLoadedMsg{notes: items, generation: generation, err: err}
+		return notesLoadedMsg{notes: items, generation: generation, storeGeneration: storeGeneration, err: err}
 	}
 }
 
@@ -92,7 +102,7 @@ func (m *Model) startNoteLoad() tea.Cmd {
 }
 
 func (m Model) handleNotesLoaded(msg notesLoadedMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.noteState.generation {
+	if msg.storeGeneration != m.noteStoreGeneration || msg.generation != m.noteState.generation {
 		return m, nil
 	}
 	m.noteState.loading = false
@@ -103,7 +113,13 @@ func (m Model) handleNotesLoaded(msg notesLoadedMsg) (tea.Model, tea.Cmd) {
 	m.noteState.items = msg.notes
 	m.noteState.err = ""
 	m.positionSelectedNote()
-	return m, nil
+	if m.noteState.selectedID == "" {
+		return m, nil
+	}
+	updated, cmd := m.loadSelectedPatch()
+	m = updated.(Model)
+	m.syncSelectedNoteViewport()
+	return m, cmd
 }
 
 func (m *Model) positionSelectedNote() {
@@ -343,16 +359,17 @@ func (m Model) saveNoteComposer() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	store := m.noteState.store
+	storeGeneration := m.noteStoreGeneration
 	composer := *m.noteState.composer
 	m.noteState.mutating = true
 	m.noteState.err = ""
 	return m, func() tea.Msg {
 		if composer.noteID == "" {
 			note, err := store.Add(notes.AddInput{File: composer.file, Line: composer.line, Body: body, Author: notes.AuthorUser})
-			return noteMutationMsg{note: note, closeComposer: true, err: err}
+			return noteMutationMsg{selectedID: note.ID, storeGeneration: storeGeneration, closeComposer: true, err: err}
 		}
-		note, err := store.Edit(composer.noteID, notes.EditInput{Body: &body})
-		return noteMutationMsg{note: note, closeComposer: true, err: err}
+		_, err := store.Edit(composer.noteID, notes.EditInput{Body: &body})
+		return noteMutationMsg{selectedID: composer.noteID, storeGeneration: storeGeneration, closeComposer: true, err: err}
 	}
 }
 
@@ -370,12 +387,13 @@ func (m Model) resolveSelectedNote() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	store := m.noteState.store
+	storeGeneration := m.noteStoreGeneration
 	state := notes.StateResolved
 	m.noteState.mutating = true
 	m.noteState.err = ""
 	return m, func() tea.Msg {
-		edited, err := store.Edit(note.ID, notes.EditInput{State: &state})
-		return noteMutationMsg{note: edited, err: err}
+		_, err := store.Edit(note.ID, notes.EditInput{State: &state})
+		return noteMutationMsg{selectedID: note.ID, storeGeneration: storeGeneration, err: err}
 	}
 }
 
@@ -406,11 +424,30 @@ func (m Model) deleteSelectedNote() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	store := m.noteState.store
+	storeGeneration := m.noteStoreGeneration
+	selectedID := m.nearestNoteAfter(note.ID)
 	m.noteState.mutating = true
 	return m, func() tea.Msg {
 		_, err := store.Remove(note.ID)
-		return noteMutationMsg{removedID: note.ID, err: err}
+		return noteMutationMsg{selectedID: selectedID, storeGeneration: storeGeneration, err: err}
 	}
+}
+
+func (m Model) nearestNoteAfter(id string) string {
+	targets := m.noteTargets()
+	for i, note := range targets {
+		if note.ID != id {
+			continue
+		}
+		if i+1 < len(targets) {
+			return targets[i+1].ID
+		}
+		if i > 0 {
+			return targets[i-1].ID
+		}
+		break
+	}
+	return ""
 }
 
 func (m Model) selectedNote() (notes.Note, bool) {
@@ -423,40 +460,21 @@ func (m Model) selectedNote() (notes.Note, bool) {
 }
 
 func (m Model) handleNoteMutation(msg noteMutationMsg) (tea.Model, tea.Cmd) {
+	if msg.storeGeneration != m.noteStoreGeneration {
+		return m, nil
+	}
 	m.noteState.mutating = false
 	if msg.err != nil {
 		m.noteState.err = fmt.Sprintf("note action failed: %v", msg.err)
 		return m, nil
 	}
-	if msg.removedID != "" {
-		for i, note := range m.noteState.items {
-			if note.ID == msg.removedID {
-				m.noteState.items = append(m.noteState.items[:i], m.noteState.items[i+1:]...)
-				break
-			}
-		}
-		m.noteState.selectedID = ""
-		m.noteState.listScroll = 0
-	} else {
-		replaced := false
-		for i := range m.noteState.items {
-			if m.noteState.items[i].ID == msg.note.ID {
-				m.noteState.items[i] = msg.note
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			m.noteState.items = append(m.noteState.items, msg.note)
-			m.noteState.selectedID = msg.note.ID
-		}
-	}
+	m.noteState.selectedID = msg.selectedID
+	m.noteState.listScroll = 0
 	if msg.closeComposer {
 		m.noteState.composer = nil
 	}
 	m.noteState.err = ""
-	m.syncSelectedNoteViewport()
-	return m, nil
+	return m, m.startNoteLoad()
 }
 
 func (m Model) noteDraftView() *panes.NoteDraftView {

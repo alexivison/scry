@@ -100,12 +100,13 @@ type Model struct {
 	commitExecutor CommitExecutor     // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
-	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
-	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
-	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
-	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
-	fileDiscarder     FileDiscarder     // optional discarder for "discard changes" action
-	noteState         noteUIState
+	worktreeLoader      WorktreeLoader    // optional loader for worktree dashboard
+	drillDownProvider   DrillDownProvider // optional provider for worktree drill-down
+	worktreeRemover     WorktreeRemover   // optional remover for worktree deletion
+	previewLoader       PreviewLoader     // optional loader for dashboard preview pane
+	fileDiscarder       FileDiscarder     // optional discarder for "discard changes" action
+	noteState           noteUIState
+	noteStoreGeneration int
 
 	spinner spinner.Model // shared spinner for loading states
 }
@@ -1417,7 +1418,12 @@ func buildFallback(summary model.FileSummary, err error) string {
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	row, _ := m.currentFileTreeRow()
 	staleNotes := row.Kind == panes.FileTreeRowNotes
-	if !staleNotes {
+	if staleNotes {
+		switch msg.String() {
+		case "h", "esc", "n", "p", "N", "enter", "/":
+			m.noteState.selectedID = ""
+		}
+	} else {
 		switch msg.String() {
 		case "g", "G", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "esc", "n", "p", "N", "enter", "/":
 			m.noteState.selectedID = ""
@@ -1429,7 +1435,10 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingKey = 0
 		switch {
 		case pending == 'g' && msg.String() == "g":
-			if m.patchViewport != nil {
+			if staleNotes {
+				m.noteState.selectedID = ""
+				m.noteState.listScroll = 0
+			} else if m.patchViewport != nil {
 				m.patchViewport.ScrollToTop()
 			}
 			return m, nil
@@ -1458,7 +1467,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "j", "down":
 		if staleNotes {
-			m.noteState.listScroll++
+			m.scrollStaleNotes(1)
 			return m, nil
 		}
 		if m.patchViewport != nil {
@@ -1466,7 +1475,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "k", "up":
 		if staleNotes {
-			m.noteState.listScroll = max(m.noteState.listScroll-1, 0)
+			m.scrollStaleNotes(-1)
 			return m, nil
 		}
 		if m.patchViewport != nil {
@@ -1483,12 +1492,16 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingKeySeq++
 		return m, m.pendingKeyTimeout()
 	case "G":
-		if m.patchViewport != nil {
+		if staleNotes {
+			m.noteState.selectedID = ""
+			width, height := m.staleNoteListSize()
+			m.noteState.listScroll = panes.NoteListMaxOffset(m.staleNotes(), width, height)
+		} else if m.patchViewport != nil {
 			m.patchViewport.ScrollToBottom()
 		}
 	case "ctrl+d":
 		if staleNotes {
-			m.noteState.listScroll += max(m.height/2, 1)
+			m.scrollStaleNotes(max(m.height/2, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
@@ -1496,7 +1509,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "ctrl+u":
 		if staleNotes {
-			m.noteState.listScroll = max(m.noteState.listScroll-max(m.height/2, 1), 0)
+			m.scrollStaleNotes(-max(m.height/2, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
@@ -1504,7 +1517,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "ctrl+f":
 		if staleNotes {
-			m.noteState.listScroll += max(m.height-3, 1)
+			m.scrollStaleNotes(max(m.height-3, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
@@ -1512,7 +1525,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "ctrl+b":
 		if staleNotes {
-			m.noteState.listScroll = max(m.noteState.listScroll-max(m.height-3, 1), 0)
+			m.scrollStaleNotes(-max(m.height-3, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
@@ -1541,6 +1554,25 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = true
 	}
 	return m, nil
+}
+
+func (m *Model) scrollStaleNotes(delta int) {
+	items := m.staleNotes()
+	width, height := m.staleNoteListSize()
+	if offset, ok := panes.NoteListOffset(items, m.noteState.selectedID, width); ok {
+		m.noteState.listScroll = offset
+	}
+	m.noteState.selectedID = ""
+	m.noteState.listScroll = min(max(m.noteState.listScroll+delta, 0), panes.NoteListMaxOffset(items, width, height))
+}
+
+func (m Model) staleNoteListSize() (int, int) {
+	outerWidth := m.width
+	if m.State.Layout == model.LayoutSplit && m.widthTierNow() >= terminal.WidthCompactSplit {
+		availableWidth := m.width - 1
+		outerWidth = availableWidth - min(fileListWidth(availableWidth), availableWidth-1)
+	}
+	return panes.UnboxedSectionDimensions(outerWidth, max(m.height-1, 3))
 }
 
 func (m *Model) togglePatchDiffMode() {
