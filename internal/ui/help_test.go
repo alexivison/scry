@@ -43,6 +43,16 @@ func TestViewHelp_ContainsNewKeys(t *testing.T) {
 	}
 }
 
+func TestHelpDocumentsNoteAndComposerKeys(t *testing.T) {
+	m := NewModel(sampleState())
+	help := m.viewHelp()
+	for _, key := range []string{"}/{", "C/E/R/D", "Alt+S", "Ctrl+G"} {
+		if !strings.Contains(help, key) {
+			t.Errorf("help should contain %q", key)
+		}
+	}
+}
+
 func TestGGChord_JumpsToTop(t *testing.T) {
 	t.Parallel()
 

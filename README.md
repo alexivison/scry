@@ -73,8 +73,7 @@ scry --no-dashboard
 ### Persistent notes (CLI)
 
 Persistent notes are private to Scry and the selected local worktree. They are
-stored outside the repository, use JSON by default, and are currently
-CLI-only.
+stored outside the repository and use JSON by default.
 
 ```bash
 # Add a note; the JSON response includes its note ID
@@ -85,6 +84,13 @@ scry note sync
 scry note remove <note-id>
 ```
 
+Scry shows open and resolved notes inline with the diff and keeps displaced
+notes in a `Stale notes` view. Use `C` to create a note on the current source
+line, `E`, `R`, and `D` to edit, resolve, or delete the selected note, and
+`{` / `}` to move between notes. The existing `r` refresh also loads notes
+created by an agent through the CLI. Anchor and state repair remain CLI
+operations.
+
 ## Keymap
 
 | Key | Action |
@@ -94,6 +100,7 @@ scry note remove <note-id>
 | `Enter` | Focus selected diff / drill into worktree |
 | `h` / `Esc` | Back to file list / dashboard |
 | `n` / `p` | Next / previous hunk |
+| `{` / `}` | Previous / next note |
 | `/` | Search in current patch |
 | `Enter` | Next search match |
 | `N` | Previous search match |
@@ -107,6 +114,10 @@ scry note remove <note-id>
 | `e` | Edit generated commit message |
 | `r` | Refresh / regenerate commit message |
 | `X` | Discard selected file's changes (modal y/N confirmation) |
+| `C` | Create a note on the current source line |
+| `E` / `R` / `D` | Edit / resolve / delete the selected note |
+| `Alt+S` | Save the note composer |
+| `Ctrl+G` | Open the note composer in `$EDITOR` |
 | `?` | Show help |
 | `q` | Quit |
 
@@ -123,7 +134,7 @@ These are intentional omissions, not missing features:
 
 - No staging, rebasing, cherry-picking, or conflict resolution. Commit is opt-in via `--commit`; per-file `X` discard is the only other write op and is gated behind a modal y/N confirmation.
 - No hunk-level or bulk discard
-- No GitHub review comments or review-thread management; persistent notes are private Scry-local notes for the selected worktree, stored outside the repository, and managed through the CLI.
+- No GitHub review comments or review-thread management; persistent notes are private Scry-local notes for the selected worktree and stored outside the repository.
 - No plugin system
 - No syntax-aware / AST diff mode
 

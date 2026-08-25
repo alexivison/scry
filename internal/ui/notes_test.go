@@ -299,6 +299,38 @@ func TestNoteMutationFailureKeepsComposerText(t *testing.T) {
 	}
 }
 
+func TestNotePersistenceAcrossModels(t *testing.T) {
+	worktree := t.TempDir()
+	configDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(worktree, "main.go"), []byte("package main\nimport \"os\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := notes.NewStore(worktree, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := notePatchModel()
+	m.noteState.store = store
+	m, _ = sendKey(m, "C")
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("survives restart")})
+	m = saveNoteComposer(t, m)
+
+	reopened, err := notes.NewStore(worktree, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := NewModel(sampleState(), WithNoteStore(reopened, nil))
+	msg, ok := findMsg[notesLoadedMsg](execAndCollect(second.Init()))
+	if !ok {
+		t.Fatal("reopened model did not load notes")
+	}
+	updated, _ := second.Update(msg)
+	second = updated.(Model)
+	if len(second.noteState.items) != 1 || second.noteState.items[0].Body != "survives restart" {
+		t.Fatalf("reopened notes = %#v", second.noteState.items)
+	}
+}
+
 func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
 	store := noteActionStore(t)
 	note, err := store.Add(notes.AddInput{File: "main.go", Line: 2, Body: "original", Author: notes.AuthorAgent})

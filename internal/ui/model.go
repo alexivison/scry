@@ -1839,10 +1839,8 @@ func (m Model) viewHelp() string {
 	}
 	help = append(help,
 		"  n/p hunk  }/{ note navigation",
-		"  gg        jump to top",
-		"  G         jump to bottom",
-		"  ctrl+d/u  half-page down/up",
-		"  ctrl+f/b  full page down/up",
+		"  gg/G      jump to top/bottom",
+		"  ctrl+d/u · ctrl+f/b page navigation",
 		"  t         cycle file filter",
 		"  s         unified/side-by-side diff",
 		"  L         toggle line numbers",
@@ -1858,7 +1856,9 @@ func (m Model) viewHelp() string {
 		"  o         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
-		"  X discard · C/E/R/D create/edit/resolve/delete note",
+		"  X         discard selected file's changes",
+		"  C/E/R/D   create/edit/resolve/delete note",
+		"  Alt+S save · Ctrl+G editor · Esc cancel composer",
 	)
 	if m.State.CommitEnabled {
 		help = append(help, "  c         generate commit message")
@@ -2041,7 +2041,7 @@ func (m Model) patchFooter() string {
 			pct = 100
 		}
 	}
-	return fmt.Sprintf("%s · %d%%", hunkInfo, pct)
+	return fmt.Sprintf("%s · %d%% · C note · }/{ navigate", hunkInfo, pct)
 }
 
 // syncFileListScroll adjusts fileListScroll so the selected file stays visible
