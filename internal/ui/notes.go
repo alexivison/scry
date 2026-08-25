@@ -147,6 +147,7 @@ func (m Model) attachedNotes(path string) []notes.Note {
 			items = append(items, note)
 		}
 	}
+	sortNotes(items)
 	return items
 }
 
@@ -280,6 +281,10 @@ func (m Model) startNoteComposer(noteID string) (tea.Model, tea.Cmd) {
 
 	file, line, body := "", 0, ""
 	if noteID == "" {
+		if m.noteState.selectedID != "" {
+			m.noteState.err = "Select a current source line to add a note"
+			return m, nil
+		}
 		row, ok := m.currentFileTreeRow()
 		if !ok || row.Kind != panes.FileTreeRowFile || m.patchViewport == nil {
 			m.noteState.err = "Select a current source line to add a note"
@@ -311,7 +316,13 @@ func (m Model) startNoteComposer(noteID string) (tea.Model, tea.Cmd) {
 	input.SetValue(body)
 	m.noteState.composer = &noteComposer{input: input, noteID: noteID, file: file, line: line}
 	m.noteState.err = ""
-	return m, m.noteState.composer.input.Focus()
+	focus := m.noteState.composer.input.Focus()
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile && m.patchViewport != nil {
+		path := m.State.Files[row.FileIndex].Path
+		m.patchViewport.SetNotes(m.attachedNotes(path), m.noteState.selectedID, m.noteDraftView())
+		m.patchViewport.ScrollToNote(noteID)
+	}
+	return m, focus
 }
 
 func (m Model) editSelectedNote() (tea.Model, tea.Cmd) {
@@ -339,8 +350,10 @@ func (m Model) updateNoteComposer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.noteState.composer = nil
 		m.noteState.err = ""
 		return m, nil
-	case "alt+s":
+	case "enter":
 		return m.saveNoteComposer()
+	case "alt+enter":
+		msg.Alt = false
 	case "ctrl+g":
 		return m.startNoteEditor()
 	}

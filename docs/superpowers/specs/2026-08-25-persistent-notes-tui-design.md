@@ -84,9 +84,13 @@ R       resolve the selected open note
 D       delete the selected note after confirmation
 ```
 
-`C` on a header, hunk separator, deleted-only row, or stale-notes view leaves
-the UI unchanged and reports that a current-source line is required. `E`, `R`,
-or `D` without a selected compatible note reports a short status message.
+The patch pane shows a gutter cursor on the selected current-source line.
+`j` and `k` move it between context and added lines while skipping headers,
+separators, note cards, and deleted-only rows. The cursor survives unified,
+side-by-side, split, and modal layout changes. `C` without a selectable source
+line leaves the UI unchanged and reports that a current-source line is
+required. `E`, `R`, or `D` without a selected compatible note reports a short
+status message.
 Resolved and stale notes support `E` and `D`; `R` is only valid for open notes.
 
 Deletion reuses Scry's confirmation-dialog pattern. Cancelling makes no ledger
@@ -99,8 +103,8 @@ the same composer with the selected note body. The composer owns keyboard input
 while active and uses the already-installed Bubbles textarea component.
 
 ```text
-Enter     insert a newline
-Alt+S     save
+Enter     save
+Alt+Enter insert a newline
 Ctrl+G    continue editing in $EDITOR
 Esc       cancel
 ```
@@ -182,7 +186,7 @@ Focused tests cover:
 - open, resolved, selected, and stale presentation;
 - the virtual stale-notes row without contaminating Git file operations;
 - create and body-only edit composer behavior;
-- `Alt+S`, `Ctrl+G`, and `Esc` draft lifecycle;
+- `Enter`, `Alt+Enter`, `Ctrl+G`, and `Esc` draft lifecycle;
 - direct `E`, `R`, and `D` actions and delete confirmation;
 - note refresh, mutation failure preservation, and worktree store switching.
 

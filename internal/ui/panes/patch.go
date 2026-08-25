@@ -3,6 +3,7 @@ package panes
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -39,6 +40,11 @@ type PatchViewport struct {
 	notes             []notes.Note
 	selectedNoteID    string
 	noteDraft         *NoteDraftView
+	sourceCursor      int
+	renderWidth       int
+	renderHeight      int
+	visibilityDirty   bool
+	manualScroll      bool
 }
 
 const bodyOffsetStep = 8
@@ -127,6 +133,9 @@ func NewPatchViewport(patch model.FilePatch) *PatchViewport {
 		DiffMode:      model.PatchDiffModeUnified,
 		SearchMatch:   NoSearchMatch(),
 		GutterVisible: true,
+		sourceCursor:  -1,
+		renderWidth:   -1,
+		renderHeight:  -1,
 	}
 	vp.lines = vp.buildLines()
 	vp.gutterDigits = vp.computeGutterDigits()
@@ -139,18 +148,33 @@ func (vp *PatchViewport) SetSyntaxHighlighter(lines *syntax.LineCache) {
 }
 
 func (vp *PatchViewport) SetNotes(items []notes.Note, selectedID string, draft *NoteDraftView) {
-	vp.notes = append(vp.notes[:0], items...)
-	sort.SliceStable(vp.notes, func(i, j int) bool {
-		if vp.notes[i].Line != vp.notes[j].Line {
-			return vp.notes[i].Line < vp.notes[j].Line
+	changed := vp.selectedNoteID != selectedID || !sameNoteDraft(vp.noteDraft, draft)
+	if !slices.Equal(vp.notes, items) {
+		next := append([]notes.Note(nil), items...)
+		sort.SliceStable(next, func(i, j int) bool {
+			if next[i].Line != next[j].Line {
+				return next[i].Line < next[j].Line
+			}
+			if !next[i].CreatedAt.Equal(next[j].CreatedAt) {
+				return next[i].CreatedAt.Before(next[j].CreatedAt)
+			}
+			return next[i].ID < next[j].ID
+		})
+		if !slices.Equal(vp.notes, next) {
+			vp.notes = next
+			changed = true
 		}
-		if !vp.notes[i].CreatedAt.Equal(vp.notes[j].CreatedAt) {
-			return vp.notes[i].CreatedAt.Before(vp.notes[j].CreatedAt)
-		}
-		return vp.notes[i].ID < vp.notes[j].ID
-	})
+	}
 	vp.selectedNoteID = selectedID
 	vp.noteDraft = draft
+	vp.visibilityDirty = vp.visibilityDirty || changed
+}
+
+func sameNoteDraft(a, b *NoteDraftView) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // computeGutterDigits returns the number of digits needed for the largest
@@ -454,6 +478,7 @@ func (vp *PatchViewport) NextHunk() {
 	}
 	vp.CurrentHunk++
 	vp.ScrollOffset = vp.hunkLineOffset(vp.CurrentHunk)
+	vp.sourceCursor = -1
 }
 
 // PrevHunk moves to the previous hunk. No-op at the first hunk.
@@ -463,12 +488,39 @@ func (vp *PatchViewport) PrevHunk() {
 	}
 	vp.CurrentHunk--
 	vp.ScrollOffset = vp.hunkLineOffset(vp.CurrentHunk)
+	vp.sourceCursor = -1
+}
+
+func (vp *PatchViewport) MoveSourceCursor(delta int) {
+	vp.manualScroll = false
+	rows := vp.visualRows()
+	vp.ensureSourceCursor(rows)
+	indexes := sourceDiffIndexes(rows)
+	if len(indexes) == 0 {
+		return
+	}
+	position := 0
+	for i, index := range indexes {
+		if index == vp.sourceCursor {
+			position = i
+			break
+		}
+	}
+	target := position + delta
+	if target < 0 || target >= len(indexes) {
+		return
+	}
+	vp.sourceCursor = indexes[target]
+	vp.ensureSourceCursorVisible(rows)
+	vp.SyncCurrentHunk()
 }
 
 // ScrollDown moves the viewport one line down. No-op at the bottom.
 func (vp *PatchViewport) ScrollDown() {
 	if vp.ScrollOffset < vp.TotalLines()-1 {
 		vp.ScrollOffset++
+		vp.sourceCursor = -1
+		vp.manualScroll = true
 		vp.SyncCurrentHunk()
 	}
 }
@@ -477,6 +529,8 @@ func (vp *PatchViewport) ScrollDown() {
 func (vp *PatchViewport) ScrollUp() {
 	if vp.ScrollOffset > 0 {
 		vp.ScrollOffset--
+		vp.sourceCursor = -1
+		vp.manualScroll = true
 		vp.SyncCurrentHunk()
 	}
 }
@@ -491,6 +545,8 @@ func (vp *PatchViewport) PageDown() {
 	if vp.ScrollOffset > total-1 {
 		vp.ScrollOffset = total - 1
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -500,6 +556,8 @@ func (vp *PatchViewport) PageUp() {
 	if vp.ScrollOffset < 0 {
 		vp.ScrollOffset = 0
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -513,6 +571,8 @@ func (vp *PatchViewport) HalfPageDown() {
 	if vp.ScrollOffset > total-1 {
 		vp.ScrollOffset = total - 1
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -522,6 +582,8 @@ func (vp *PatchViewport) HalfPageUp() {
 	if vp.ScrollOffset < 0 {
 		vp.ScrollOffset = 0
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -529,6 +591,8 @@ func (vp *PatchViewport) HalfPageUp() {
 func (vp *PatchViewport) ScrollToTop() {
 	vp.ScrollOffset = 0
 	vp.CurrentHunk = 0
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 }
 
 // ScrollToBottom jumps to the end of the patch.
@@ -538,6 +602,8 @@ func (vp *PatchViewport) ScrollToBottom() {
 		max = 0
 	}
 	vp.ScrollOffset = max
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -676,6 +742,8 @@ func (vp *PatchViewport) SetLineMode(mode model.LineMode) {
 		}
 	}
 	vp.clampScrollOffset()
+	vp.manualScroll = false
+	vp.ensureActiveVisible(vp.visualRows())
 	vp.SyncCurrentHunk()
 }
 
@@ -713,6 +781,8 @@ func (vp *PatchViewport) setLayout(mode model.PatchDiffMode, gutterVisible bool)
 		vp.ScrollOffset = vp.hunkLineOffset(headerHunk)
 	}
 	vp.clampScrollOffset()
+	vp.manualScroll = false
+	vp.ensureActiveVisible(vp.visualRows())
 	vp.SyncCurrentHunk()
 }
 
@@ -802,6 +872,16 @@ func (vp *PatchViewport) Render() string {
 
 	vp.clampScrollOffset()
 	vp.ClampXOffset()
+	rows := vp.visualRows()
+	vp.ensureSourceCursor(rows)
+	resized := vp.Width != vp.renderWidth || vp.Height != vp.renderHeight
+	if resized || vp.visibilityDirty && !vp.manualScroll {
+		vp.ensureActiveVisible(rows)
+	}
+	vp.visibilityDirty = false
+	vp.manualScroll = false
+	vp.renderWidth = vp.Width
+	vp.renderHeight = vp.Height
 	visible := vp.visibleRows()
 	rendered := make([]string, 0, len(visible))
 	for _, row := range visible {
@@ -816,17 +896,29 @@ func (vp *PatchViewport) Render() string {
 			rendered = append(rendered, renderHunkSeparator(row.line.header, vp.Width))
 		case lineTypeDiff:
 			if row.side != nil {
-				rendered = append(rendered, vp.renderSideBySideVisualRow(row))
+				rendered = append(rendered, vp.renderSideBySideVisualRow(row, vp.sourceCursorOn(row)))
 				continue
 			}
 			match := NoSearchMatch()
 			if vp.SearchQuery != "" && vp.SearchMatch.Line == row.line.diffIndex {
 				match = vp.SearchMatch
 			}
-			rendered = append(rendered, vp.renderDiffVisualRow(row, match))
+			line := vp.renderDiffVisualRow(row, match)
+			if vp.sourceCursorOn(row) {
+				line = renderSourceCursor(line, vp.Width)
+			}
+			rendered = append(rendered, line)
 		}
 	}
 	return strings.Join(rendered, "\n")
+}
+
+func (vp *PatchViewport) sourceCursorOn(row visualRow) bool {
+	if vp.selectedNoteID != "" || vp.noteDraft != nil {
+		return false
+	}
+	index, ok := row.sourceDiffIndex()
+	return ok && index == vp.sourceCursor
 }
 
 func (vp *PatchViewport) visibleRows() []visualRow {
@@ -1188,15 +1280,25 @@ func (vp *PatchViewport) renderDiffVisualRow(row visualRow, match SearchMatch) s
 	)
 }
 
-func (vp *PatchViewport) renderSideBySideVisualRow(row visualRow) string {
+func (vp *PatchViewport) renderSideBySideVisualRow(row visualRow, sourceCursor bool) string {
 	leftWidth, rightWidth := sideBySideColumnWidths(vp.Width)
 	left := vp.renderSideBySideCell(row.side.old, leftWidth, sideOld)
 	right := vp.renderSideBySideCell(row.side.new, rightWidth, sideNew)
+	if sourceCursor {
+		right = renderSourceCursor(right, rightWidth)
+	}
 	line := left + sideBySideSeparator() + right
 	if vp.Width > 0 {
 		return truncateToWidth(line, vp.Width)
 	}
 	return line
+}
+
+func renderSourceCursor(line string, width int) string {
+	if width <= 0 || line == "" {
+		return line
+	}
+	return "▌" + ansi.Cut(line, 1, width)
 }
 
 type sideBySideSide int
@@ -1803,6 +1905,116 @@ func (r visualRow) newLineNo() *int {
 	return nil
 }
 
+func (r visualRow) sourceLine() (int, bool) {
+	if r.note != nil || r.line.typ != lineTypeDiff {
+		return 0, false
+	}
+	line := r.newLineNo()
+	if line == nil {
+		return 0, false
+	}
+	return *line, true
+}
+
+func (r visualRow) sourceDiffIndex() (int, bool) {
+	if _, ok := r.sourceLine(); !ok {
+		return 0, false
+	}
+	if r.side == nil {
+		return r.line.diffIndex, true
+	}
+	if r.side.new == nil {
+		return 0, false
+	}
+	return r.side.new.line.diffIndex, true
+}
+
+func sourceDiffIndexes(rows []visualRow) []int {
+	indexes := make([]int, 0)
+	last := -1
+	for _, row := range rows {
+		index, ok := row.sourceDiffIndex()
+		if !ok || index == last {
+			continue
+		}
+		indexes = append(indexes, index)
+		last = index
+	}
+	return indexes
+}
+
+func (vp *PatchViewport) ensureSourceCursor(rows []visualRow) {
+	if vp.sourceCursor >= 0 {
+		return
+	}
+	start := min(max(vp.ScrollOffset, 0), len(rows))
+	for i := start; i < len(rows); i++ {
+		if index, ok := rows[i].sourceDiffIndex(); ok {
+			vp.sourceCursor = index
+			return
+		}
+	}
+	for i := start - 1; i >= 0; i-- {
+		if index, ok := rows[i].sourceDiffIndex(); ok {
+			vp.sourceCursor = index
+			return
+		}
+	}
+}
+
+func (vp *PatchViewport) ensureSourceCursorVisible(rows []visualRow) {
+	for i, row := range rows {
+		index, ok := row.sourceDiffIndex()
+		if !ok || index != vp.sourceCursor {
+			continue
+		}
+		if i < vp.ScrollOffset {
+			vp.ScrollOffset = i
+		} else if vp.Height > 0 && i >= vp.ScrollOffset+vp.Height {
+			vp.ScrollOffset = i - vp.Height + 1
+		}
+		return
+	}
+}
+
+func (vp *PatchViewport) ensureNoteVisible(rows []visualRow, id string) {
+	first, last := -1, -1
+	for i, row := range rows {
+		if row.note == nil || row.note.id != id {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		last = i
+	}
+	if first < 0 || vp.Height <= 0 {
+		return
+	}
+	if first < vp.ScrollOffset || last-first+1 > vp.Height {
+		vp.ScrollOffset = first
+	} else if last >= vp.ScrollOffset+vp.Height {
+		vp.ScrollOffset = last - vp.Height + 1
+	}
+}
+
+func (vp *PatchViewport) ensureActiveVisible(rows []visualRow) {
+	switch {
+	case vp.noteDraft != nil:
+		vp.ensureNoteVisible(rows, vp.noteDraft.NoteID)
+	case vp.selectedNoteID != "":
+		vp.ensureNoteVisible(rows, vp.selectedNoteID)
+	default:
+		vp.ensureSourceCursorVisible(rows)
+	}
+}
+
+func (vp *PatchViewport) SyncSourceCursor() {
+	vp.manualScroll = false
+	vp.sourceCursor = -1
+	vp.ensureSourceCursor(vp.visualRows())
+}
+
 // DiffLineToViewportLine converts a DiffLine index (0-based across all hunks,
 // headers excluded) to the corresponding viewport line index (headers included).
 func (vp *PatchViewport) DiffLineToViewportLine(diffIdx int) int {
@@ -1880,27 +2092,25 @@ func (vp *PatchViewport) CurrentTargetLine() (int, bool) {
 	return 0, false
 }
 
-// CurrentSourceLine returns the current-source line at the top of the viewport.
+// CurrentSourceLine returns the line selected by the current-source cursor.
 func (vp *PatchViewport) CurrentSourceLine() (int, bool) {
 	rows := vp.visualRows()
-	if vp.ScrollOffset < 0 || vp.ScrollOffset >= len(rows) {
-		return 0, false
+	vp.ensureSourceCursor(rows)
+	for _, row := range rows {
+		index, ok := row.sourceDiffIndex()
+		if !ok || index != vp.sourceCursor {
+			continue
+		}
+		return row.sourceLine()
 	}
-	row := rows[vp.ScrollOffset]
-	if row.note != nil || row.line.typ != lineTypeDiff {
-		return 0, false
-	}
-	line := row.newLineNo()
-	if line == nil {
-		return 0, false
-	}
-	return *line, true
+	return 0, false
 }
 
 func (vp *PatchViewport) ScrollToNote(id string) bool {
 	for i, row := range vp.visualRows() {
 		if row.note != nil && row.note.id == id {
 			vp.ScrollOffset = i
+			vp.manualScroll = false
 			vp.SyncCurrentHunk()
 			return true
 		}

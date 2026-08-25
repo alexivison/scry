@@ -300,6 +300,37 @@ func TestNoteNavigationMovesAcrossCachedFiles(t *testing.T) {
 	}
 }
 
+func TestSourceCursorNavigationSkipsPatchChromeAndDeletedLines(t *testing.T) {
+	m := notePatchModel()
+	m.patchViewport.ScrollOffset = 0
+
+	assertSourceLine(t, m, 1)
+	m, _ = sendKey(m, "j")
+	assertSourceLine(t, m, 2)
+	m, _ = sendKey(m, "j")
+	assertSourceLine(t, m, 11)
+	m, _ = sendKey(m, "j")
+	assertSourceLine(t, m, 12)
+	m, _ = sendKey(m, "k")
+	assertSourceLine(t, m, 11)
+}
+
+func TestComposerOpensAfterDiffModeRoundTrip(t *testing.T) {
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m.patchViewport.ScrollOffset = 0
+	for range 3 {
+		m, _ = sendKey(m, "j")
+	}
+
+	m, _ = sendKey(m, "s")
+	m, _ = sendKey(m, "s")
+	m, _ = sendKey(m, "C")
+	if m.noteState.composer == nil || m.noteState.composer.line != 12 {
+		t.Fatalf("diff-mode round trip lost source anchor: %#v", m.noteState.composer)
+	}
+}
+
 func TestNoteComposerCreatesMultilineUserNote(t *testing.T) {
 	store := noteActionStore(t)
 	m := notePatchModel()
@@ -310,12 +341,12 @@ func TestNoteComposerCreatesMultilineUserNote(t *testing.T) {
 		t.Fatal("C did not open the composer")
 	}
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first")})
-	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("Alt+S did not save the composer")
+		t.Fatal("Enter did not save the composer")
 	}
 	m = deepDrain(t, m, cmd)
 
@@ -341,23 +372,56 @@ func TestNoteComposerRendersInlineWithControls(t *testing.T) {
 	if !strings.Contains(patch, "inline draft") {
 		t.Fatalf("composer was not rendered inline:\n%s", patch)
 	}
-	if status := m.viewStatusBar(); !strings.Contains(status, "Alt+S") || !strings.Contains(status, "Ctrl+G") {
+	if status := m.viewStatusBar(); !strings.Contains(status, "Enter save") || !strings.Contains(status, "Alt+Enter newline") || !strings.Contains(status, "Ctrl+G") {
 		t.Fatalf("composer controls missing from status: %s", status)
+	}
+}
+
+func TestNoteComposerScrollsIntoViewAtViewportBottom(t *testing.T) {
+	lines := make([]model.DiffLine, 0, 12)
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, model.DiffLine{Kind: model.LineAdded, NewNo: intP(i), Text: strings.Repeat("x", 50)})
+	}
+	patch := model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},
+		Hunks:   []model.Hunk{{Lines: lines}},
+	}
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m.patchViewport = panes.NewPatchViewport(patch)
+	m.patchViewport.Width = 72
+	m.patchViewport.Height = 5
+	for range 4 {
+		m.patchViewport.MoveSourceCursor(1)
+	}
+
+	m, _ = sendKey(m, "C")
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bottom draft")})
+	if output := m.renderPatch(30, 5, 30); !strings.Contains(output, "bottom draft") {
+		t.Fatalf("composer opened below viewport:\n%s", output)
 	}
 }
 
 func TestNoteComposerRejectsHeaderAndEmptyBody(t *testing.T) {
 	m := notePatchModel()
 	m.noteState.store = noteActionStore(t)
-	m.patchViewport.ScrollOffset = 0
+	m.patchViewport = panes.NewPatchViewport(model.FilePatch{
+		Summary: model.FileSummary{Path: "main.go", Status: model.StatusDeleted},
+		Hunks: []model.Hunk{{
+			OldStart: 1,
+			OldLen:   1,
+			Lines:    []model.DiffLine{{Kind: model.LineDeleted, OldNo: intP(1), Text: "removed"}},
+		}},
+	})
 	m, cmd := sendKey(m, "C")
 	if cmd != nil || m.noteState.composer != nil || !strings.Contains(m.noteState.err, "source line") {
-		t.Fatalf("C on header = composer %#v, err %q", m.noteState.composer, m.noteState.err)
+		t.Fatalf("C without a current-source line = composer %#v, err %q", m.noteState.composer, m.noteState.err)
 	}
 
+	m.patchViewport = panes.NewPatchViewport(samplePatch())
 	m.patchViewport.ScrollOffset = 2
 	m, _ = sendKey(m, "C")
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd != nil || m.noteState.composer == nil || !strings.Contains(m.noteState.err, "empty") {
 		t.Fatalf("empty save = cmd %v, composer %#v, err %q", cmd != nil, m.noteState.composer, m.noteState.err)
@@ -406,7 +470,7 @@ func TestNoteMutationFailureKeepsComposerText(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	m = deepDrain(t, m, cmd)
 	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "keep me" || m.noteState.err == "" {
@@ -574,12 +638,20 @@ func sendNoteKey(m Model, key tea.KeyMsg) Model {
 
 func saveNoteComposer(t *testing.T, m Model) Model {
 	t.Helper()
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("Alt+S did not produce a save command")
+		t.Fatal("Enter did not produce a save command")
 	}
 	return deepDrain(t, m, cmd)
+}
+
+func assertSourceLine(t *testing.T, m Model, want int) {
+	t.Helper()
+	got, ok := m.patchViewport.CurrentSourceLine()
+	if !ok || got != want {
+		t.Fatalf("source line = %d, %v; want %d, true", got, ok, want)
+	}
 }
 
 func uiNote(id, file string, line int, state notes.State, body string) notes.Note {

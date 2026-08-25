@@ -95,7 +95,7 @@ operations.
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Navigate file list / worktree list |
+| `j` / `k` | Navigate lists / move the current-source cursor |
 | `l` | Expand folder / select file / drill into worktree |
 | `Enter` | Focus selected diff / drill into worktree |
 | `h` / `Esc` | Back to file list / dashboard |
@@ -116,7 +116,8 @@ operations.
 | `X` | Discard selected file's changes (modal y/N confirmation) |
 | `C` | Create a note on the current source line |
 | `E` / `R` / `D` | Edit / resolve / delete the selected note |
-| `Alt+S` | Save the note composer |
+| `Enter` | Save the note composer |
+| `Alt+Enter` | Insert a newline in the note composer |
 | `Ctrl+G` | Open the note composer in `$EDITOR` |
 | `?` | Show help |
 | `q` | Quit |

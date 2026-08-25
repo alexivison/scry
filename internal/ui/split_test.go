@@ -576,6 +576,48 @@ func TestSplitToModalToSplit_LoadsPatch(t *testing.T) {
 	}
 }
 
+func TestModalToSplitPreservesLoadedSourceCursor(t *testing.T) {
+	patch := samplePatch()
+	m := NewModel(sampleState())
+	m.State.Layout = model.LayoutModal
+	m.State.FocusPane = model.PanePatch
+	m.State.Patches["main.go"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &patch}
+	m.patchViewport = panes.NewPatchViewport(patch)
+	m.patchViewport.MoveSourceCursor(1)
+	m.width = 120
+	m.height = 30
+
+	m, cmd := sendKey(m, "tab")
+	if cmd != nil {
+		t.Fatal("loaded patch reloaded during layout change")
+	}
+	if line, ok := m.patchViewport.CurrentSourceLine(); !ok || line != 2 {
+		t.Fatalf("source cursor after layout change = %d, %v; want 2, true", line, ok)
+	}
+}
+
+func TestModalToSplitLoadsNewlySelectedPatch(t *testing.T) {
+	mainPatch := samplePatch()
+	newPatch := samplePatch()
+	newPatch.Summary.Path = "new.go"
+	m := NewModel(sampleState())
+	m.State.Layout = model.LayoutModal
+	m.State.FocusPane = model.PaneFiles
+	m.State.Patches["new.go"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &newPatch}
+	m.patchViewport = panes.NewPatchViewport(mainPatch)
+	m.setFileTreeCursorByPath("new.go", 1)
+	m.width = 120
+	m.height = 30
+
+	m, cmd := sendKey(m, "tab")
+	if cmd != nil {
+		t.Fatal("cached selected patch reloaded during layout change")
+	}
+	if m.patchViewport == nil || m.patchViewport.Patch.Summary.Path != "new.go" {
+		t.Fatalf("split view kept wrong patch: %#v", m.patchViewport)
+	}
+}
+
 func TestSplitHelpOverlay(t *testing.T) {
 	t.Parallel()
 

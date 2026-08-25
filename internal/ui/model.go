@@ -1471,7 +1471,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.patchViewport != nil {
-			m.patchViewport.ScrollDown()
+			m.patchViewport.MoveSourceCursor(1)
 		}
 	case "k", "up":
 		if staleNotes {
@@ -1479,7 +1479,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.patchViewport != nil {
-			m.patchViewport.ScrollUp()
+			m.patchViewport.MoveSourceCursor(-1)
 		}
 	case "s":
 		m.togglePatchDiffMode()
@@ -1627,6 +1627,7 @@ func (m *Model) searchFrom(from int, dir search.SearchDirection) {
 	m.searchNotFound = ""
 	vpLine := m.patchViewport.DiffLineToViewportLine(match.Line)
 	m.patchViewport.ScrollOffset = vpLine
+	m.patchViewport.SyncSourceCursor()
 	m.patchViewport.SyncCurrentHunk()
 	m.patchViewport.SearchMatch = panes.SearchMatch{Line: match.Line, Start: match.Start, End: match.End}
 	m.patchViewport.SearchQuery = m.State.SearchQuery
@@ -1891,7 +1892,7 @@ func (m Model) viewHelp() string {
 
 	help := []string{
 		"Navigation",
-		"  j/k       scroll / navigate",
+		"  j/k       source cursor / navigate",
 		"  l         expand folder / select file",
 		"  Enter     focus selected diff",
 	}
@@ -1921,7 +1922,7 @@ func (m Model) viewHelp() string {
 		"  Tab       toggle split/modal layout",
 		"  X         discard selected file's changes",
 		"  C/E/R/D   create/edit/resolve/delete note",
-		"  Alt+S save · Ctrl+G editor · Esc cancel composer",
+		"  Enter save · Alt+Enter newline · Ctrl+G editor · Esc cancel composer",
 	)
 	if m.State.CommitEnabled {
 		help = append(help, "  c         generate commit message")
@@ -2133,6 +2134,10 @@ func (m Model) toggleLayout() (tea.Model, tea.Cmd) {
 	}
 	m.State.Layout = model.LayoutSplit
 	m.syncFileListScroll()
+	path, selected := m.selectedPatchPath()
+	if selected && m.patchViewport != nil && m.patchViewport.Patch.Summary.Path == path {
+		return m, nil
+	}
 	return m.loadSelectedPatch()
 }
 

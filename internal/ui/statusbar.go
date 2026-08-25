@@ -48,7 +48,7 @@ func (m Model) viewStatusBar() string {
 		return m.renderErrorBar(m.noteState.err)
 	}
 	if m.noteState.composer != nil {
-		return m.renderBar("Alt+S save    Ctrl+G editor    Esc cancel", statusBarStyle)
+		return m.renderBar("Enter save    Alt+Enter newline    Ctrl+G editor    Esc cancel", statusBarStyle)
 	}
 	if m.refreshErr != "" {
 		return m.renderErrorBar(m.refreshErr)

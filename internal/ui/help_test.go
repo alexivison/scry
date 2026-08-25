@@ -46,7 +46,7 @@ func TestViewHelp_ContainsNewKeys(t *testing.T) {
 func TestHelpDocumentsNoteAndComposerKeys(t *testing.T) {
 	m := NewModel(sampleState())
 	help := m.viewHelp()
-	for _, key := range []string{"}/{", "C/E/R/D", "Alt+S", "Ctrl+G"} {
+	for _, key := range []string{"}/{", "C/E/R/D", "Enter save", "Alt+Enter newline", "Ctrl+G"} {
 		if !strings.Contains(help, key) {
 			t.Errorf("help should contain %q", key)
 		}

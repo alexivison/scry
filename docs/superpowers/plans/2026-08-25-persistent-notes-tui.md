@@ -18,7 +18,7 @@
 - The TUI never changes anchors, reopens resolved notes, or resolves stale notes.
 - Cards use Scry's current theme tokens and appear after current-source lines in unified and side-by-side patches.
 - `{` and `}` replace their existing hunk aliases; `n` and `p` remain hunk navigation.
-- `C` creates, `E` edits, `R` resolves, and `D` requests confirmed deletion. Composer controls are Enter, `Alt+S`, `Ctrl+G`, and Esc.
+- `C` creates, `E` edits, `R` resolves, and `D` requests confirmed deletion. Composer controls are Enter to save, `Alt+Enter` for a newline, `Ctrl+G`, and Esc.
 - Note I/O must run in `tea.Cmd` functions. A note failure must not block diff review or discard the last good snapshot/draft.
 - Do not add a note watcher, dashboard note counts, a note theme, timestamps, replies, or new dependencies.
 
@@ -185,7 +185,7 @@
   func (vp *PatchViewport) CurrentSourceLine() (int, bool)
   ```
 
-  Represent each rendered card line as a `visualRow` variant. After unified or side-by-side base rows are built, insert card rows only after the last wrapped row for a matching current-source line. `CurrentSourceLine` examines exactly `ScrollOffset`; it does not search forward like editor targeting.
+  Represent each rendered card line as a `visualRow` variant. After unified or side-by-side base rows are built, insert card rows only after the last wrapped row for a matching current-source line. Track the current-source cursor by logical diff index so folder patches with repeated line numbers remain unambiguous. `CurrentSourceLine` returns the selected cursor line.
 
 - [ ] **Step 5: Feed selected-file notes and stale count from the model.**
 
@@ -214,7 +214,7 @@
 
   Test that `{`/`}` select notes in file/source/creation/ID order, traverse several notes on one line and real-file boundaries, include stale notes last, stop at boundaries, and clear selection on ordinary file/patch movement. Test `C` only on `CurrentSourceLine`; `E` copies only the selected body into the composer; `R` submits only `StateResolved`; and `D` requires confirmation before removal. Assert incompatible or missing targets produce status without a command.
 
-  Add composer tests for multiline Enter, `Alt+S`, `Ctrl+G`, Esc, create author `user`, body-only edit, empty-body failure preservation, mutation failure preservation, and editor failure restoring the pre-launch draft.
+  Add composer tests for Enter save, multiline `Alt+Enter`, `Ctrl+G`, Esc, create author `user`, body-only edit, empty-body failure preservation, mutation failure preservation, and editor failure restoring the pre-launch draft.
 
 - [ ] **Step 2: Run interaction tests and verify they fail.**
 
@@ -250,7 +250,7 @@
   }
   ```
 
-  Add the textarea and draft/delete/loading flags to `noteUIState`. While a draft is active, route all keys to the composer before global commands: Esc cancels, `alt+s` starts create/edit, `ctrl+g` starts the editor, and every other key updates the textarea. Keep the draft open until a mutation succeeds.
+  Add the textarea and draft/delete/loading flags to `noteUIState`. While a draft is active, route all keys to the composer before global commands: Esc cancels, Enter saves, `alt+enter` inserts a newline, `ctrl+g` starts the editor, and every other key updates the textarea. Keep the draft open until a mutation succeeds.
 
 - [ ] **Step 4: Implement stable cross-file note selection.**
 

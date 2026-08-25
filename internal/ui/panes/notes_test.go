@@ -101,18 +101,132 @@ func TestPatchViewportNoteRowsCountTowardHeight(t *testing.T) {
 	}
 }
 
-func TestPatchViewportCurrentSourceLineRequiresExactDiffRow(t *testing.T) {
+func TestPatchViewportCurrentSourceLineSkipsPatchChrome(t *testing.T) {
 	vp := NewPatchViewport(notePatch())
 	vp.Width = 60
 	vp.Height = 20
 
-	if _, ok := vp.CurrentSourceLine(); ok {
-		t.Fatal("hunk header unexpectedly produced a source line")
+	if line, ok := vp.CurrentSourceLine(); !ok || line != 1 {
+		t.Fatalf("CurrentSourceLine = %d, %v, want first source line after header", line, ok)
 	}
-	vp.ScrollOffset = 2
-	if line, ok := vp.CurrentSourceLine(); !ok || line != 2 {
-		t.Fatalf("CurrentSourceLine = %d, %v, want 2, true", line, ok)
+}
+
+func TestPatchViewportRendersSourceCursorOnCurrentLine(t *testing.T) {
+	vp := NewPatchViewport(notePatch())
+	vp.Width = 60
+	vp.Height = 20
+
+	first := vp.Render()
+	vp.MoveSourceCursor(1)
+	second := vp.Render()
+	firstCursor := renderedLine(ansi.Strip(first), "▌")
+	secondCursor := renderedLine(ansi.Strip(second), "▌")
+	if !strings.Contains(firstCursor, "package main") || !strings.Contains(secondCursor, `import "os"`) {
+		t.Fatalf("source cursor did not move between current lines: before=%q after=%q", firstCursor, secondCursor)
 	}
+}
+
+func TestPatchViewportSourceCursorDistinguishesFolderLines(t *testing.T) {
+	patch := model.FilePatch{Hunks: []model.Hunk{
+		{FilePath: "a.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "first"}}},
+		{FilePath: "b.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "second"}}},
+	}}
+	vp := NewPatchViewport(patch)
+	vp.Width = 60
+	vp.Height = 20
+
+	first := ansi.Strip(vp.Render())
+	if strings.Count(first, "▌") != 1 || !strings.Contains(renderedLine(first, "▌"), "first") {
+		t.Fatalf("initial folder cursor is ambiguous:\n%s", first)
+	}
+	vp.MoveSourceCursor(1)
+	second := ansi.Strip(vp.Render())
+	if strings.Count(second, "▌") != 1 || !strings.Contains(renderedLine(second, "▌"), "second") {
+		t.Fatalf("folder cursor did not reach second file:\n%s", second)
+	}
+}
+
+func TestPatchViewportKeepsSourceCursorVisibleAcrossDiffModes(t *testing.T) {
+	lines := make([]model.DiffLine, 0, 24)
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, model.DiffLine{Kind: model.LineDeleted, OldNo: intP(i), Text: "old"})
+	}
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, model.DiffLine{Kind: model.LineAdded, NewNo: intP(i), Text: "new"})
+	}
+	vp := NewPatchViewport(model.FilePatch{Hunks: []model.Hunk{{Lines: lines}}})
+	vp.DiffMode = model.PatchDiffModeSideBySide
+	vp.Width = 80
+	vp.Height = 6
+	for range 10 {
+		vp.MoveSourceCursor(1)
+	}
+
+	vp.SetDiffMode(model.PatchDiffModeUnified)
+	if output := ansi.Strip(vp.Render()); strings.Count(output, "▌") != 1 {
+		t.Fatalf("source cursor left viewport after diff-mode change:\n%s", output)
+	}
+}
+
+func TestPatchViewportKeepsSelectedNoteVisibleAcrossDiffModes(t *testing.T) {
+	lines := make([]model.DiffLine, 0, 24)
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, model.DiffLine{Kind: model.LineDeleted, OldNo: intP(i), Text: "old"})
+	}
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, model.DiffLine{Kind: model.LineAdded, NewNo: intP(i), Text: "new"})
+	}
+	vp := NewPatchViewport(model.FilePatch{Hunks: []model.Hunk{{Lines: lines}}})
+	vp.DiffMode = model.PatchDiffModeSideBySide
+	vp.Width = 80
+	vp.Height = 6
+	note := noteFixture("selected", 11, notes.StateOpen, "keep me visible")
+	vp.SetNotes([]notes.Note{note}, note.ID, nil)
+	vp.ScrollToNote(note.ID)
+
+	vp.SetDiffMode(model.PatchDiffModeUnified)
+	if output := ansi.Strip(vp.Render()); !strings.Contains(output, note.Body) {
+		t.Fatalf("selected note left viewport after diff-mode change:\n%s", output)
+	}
+}
+
+func TestPatchViewportPageScrollStaysInsideLongNote(t *testing.T) {
+	vp := NewPatchViewport(notePatch())
+	vp.Width = 60
+	vp.Height = 5
+	items := []notes.Note{noteFixture("long", 1, notes.StateOpen, strings.Repeat("body row\n", 20))}
+	vp.SetNotes(items, items[0].ID, nil)
+	vp.Render()
+
+	vp.PageDown()
+	want := vp.ScrollOffset
+	vp.SetNotes(items, "", nil)
+	vp.Render()
+	if vp.ScrollOffset != want {
+		t.Fatalf("render moved page scroll from %d to %d", want, vp.ScrollOffset)
+	}
+}
+
+func TestPatchViewportNoteRefreshKeepsSourceCursorVisible(t *testing.T) {
+	vp := NewPatchViewport(notePatch())
+	vp.Width = 60
+	vp.Height = 3
+	vp.MoveSourceCursor(1)
+	vp.Render()
+
+	vp.SetNotes([]notes.Note{noteFixture("inserted", 1, notes.StateOpen, strings.Repeat("new card row\n", 10))}, "", nil)
+	if output := ansi.Strip(vp.Render()); strings.Count(output, "▌") != 1 {
+		t.Fatalf("note refresh pushed source cursor offscreen:\n%s", output)
+	}
+}
+
+func renderedLine(output, body string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, body) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestPatchViewportScrollToNote(t *testing.T) {
