@@ -27,7 +27,8 @@ func renderNoteCard(note notes.Note, width int, selected bool) []string {
 	}
 
 	body := note.Body
-	if note.State == notes.StateResolved && !selected {
+	collapsed := note.State == notes.StateResolved && !selected
+	if collapsed {
 		body, _, _ = strings.Cut(body, "\n")
 	}
 	bodyStyle := lipgloss.NewStyle().Foreground(theme.BrightText)
@@ -38,7 +39,11 @@ func renderNoteCard(note notes.Note, width int, selected bool) []string {
 	lines := []string{noteCardTitle(note, width, border)}
 	innerWidth := width - 4
 	for _, logicalLine := range strings.Split(body, "\n") {
-		for _, segment := range wrapBodySegments(logicalLine, innerWidth) {
+		segments := wrapBodySegments(logicalLine, innerWidth)
+		if collapsed {
+			segments = segments[:1]
+		}
+		for _, segment := range segments {
 			content := padOrTruncateToWidth(segment.text, innerWidth)
 			lines = append(lines, border.Render("│ ")+bodyStyle.Render(content)+border.Render(" │"))
 		}

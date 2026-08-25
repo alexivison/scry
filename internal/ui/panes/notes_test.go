@@ -68,6 +68,13 @@ func TestPatchViewportResolvedNoteExpandsOnlyWhenSelected(t *testing.T) {
 	}
 }
 
+func TestResolvedNoteCollapsesLongPreviewToOneRow(t *testing.T) {
+	note := noteFixture("note-1", 2, notes.StateResolved, strings.Repeat("long preview ", 20))
+	if rows := renderNoteCard(note, 32, false); len(rows) != 3 {
+		t.Fatalf("collapsed resolved card has %d rows, want title, preview, border", len(rows))
+	}
+}
+
 func TestPatchViewportOrdersNotesOnSameLine(t *testing.T) {
 	first := noteFixture("note-b", 2, notes.StateOpen, "first")
 	second := noteFixture("note-a", 2, notes.StateOpen, "second")
