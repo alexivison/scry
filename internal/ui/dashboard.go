@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/notes"
 	"github.com/alexivison/scry/internal/review"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
@@ -27,6 +28,8 @@ type DrillDownResult struct {
 	Files         []model.FileSummary
 	PatchLoader   PatchLoader
 	FileDiscarder FileDiscarder
+	NoteStore     *notes.Store
+	NoteErr       error
 }
 
 // DrillDownProvider creates the diff context for a specific worktree.
@@ -324,6 +327,7 @@ func (m Model) startDrillDown(wt model.WorktreeInfo) (tea.Model, tea.Cmd) {
 		m.State.FileTreeCollapsed = make(map[string]bool)
 		// Clear freshness state so stale generations from a previous worktree don't leak.
 		m.State.FileChangeGen = make(map[string]int)
+		m.noteState = noteUIState{}
 	}
 
 	if m.drillDownProvider == nil {
@@ -372,13 +376,15 @@ func (m Model) handleDrillDownLoaded(msg DrillDownLoadedMsg) (tea.Model, tea.Cmd
 	m.State.Patches = make(map[string]model.PatchLoadState)
 	m.patchLoader = msg.Result.PatchLoader
 	m.fileDiscarder = msg.Result.FileDiscarder
+	noteCmd := m.setNoteStore(msg.Result.NoteStore, msg.Result.NoteErr)
 
 	// Reconcile selection: match by path, fallback to clamped index.
 	review.ReconcileSelection(&m.State, prevPath)
 	reconcileFileTreeToSelection(&m.State)
 
 	// If in patch view, reload the selected file's patch.
-	return m.loadSelectedPatch()
+	updated, patchCmd := m.loadSelectedPatch()
+	return updated, tea.Batch(patchCmd, noteCmd)
 }
 
 // syncDashboardScroll adjusts the dashboard scroll offset so the selected worktree stays visible.
@@ -406,6 +412,7 @@ func (m *Model) returnToDashboard() {
 	m.searchIndex = nil
 	m.State.SearchQuery = ""
 	m.searchNotFound = ""
+	m.noteState = noteUIState{}
 }
 
 // updateDrillDown handles keys when in worktree drill-down (file/patch view for a single worktree).

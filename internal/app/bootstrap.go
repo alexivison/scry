@@ -15,6 +15,7 @@ import (
 	"github.com/alexivison/scry/internal/diff"
 	"github.com/alexivison/scry/internal/gitexec"
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/notes"
 	"github.com/alexivison/scry/internal/source"
 	"github.com/alexivison/scry/internal/terminal"
 	"github.com/alexivison/scry/internal/ui"
@@ -88,6 +89,8 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 	}
 
 	state := initialDiffState(cfg, cmp, basis, files)
+	configDir, configErr := os.UserConfigDir()
+	noteStore, noteErr := noteStoreForWorktree(boot.Repo.WorktreeRoot, configDir, configErr)
 
 	patchSvc := &diff.PatchService{Runner: boot.Runner}
 	opts := []ui.ModelOption{
@@ -96,6 +99,7 @@ func runDiff(ctx context.Context, cfg config.Config, boot source.BootstrapResult
 		ui.WithMetadataLoader(metaSvc),
 		ui.WithCompareResolver(resolver, req),
 		ui.WithFileDiscarder(&fileDiscarderImpl{runner: boot.Runner, workdir: boot.Repo.WorktreeRoot}),
+		ui.WithNoteStore(noteStore, noteErr),
 	}
 	if cfg.Commit {
 		provider, err := commit.NewClaudeProvider(
@@ -183,7 +187,8 @@ func runDashboard(ctx context.Context, cfg config.Config, boot source.BootstrapR
 	// Start with an empty worktree list — data loads async after TUI launches.
 	state := initialDashboardState(cfg)
 
-	drillDown := &drillDownProviderImpl{}
+	configDir, configErr := os.UserConfigDir()
+	drillDown := &drillDownProviderImpl{configDir: configDir, configErr: configErr}
 	removeRunner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: stableRoot, Timeout: gitexec.RemoveTimeout})
 	remover := &worktreeRemoverImpl{runner: removeRunner}
 	preview := &previewLoaderImpl{}
@@ -251,7 +256,10 @@ func (w *worktreeRemoverImpl) Remove(ctx context.Context, path string, force boo
 }
 
 // drillDownProviderImpl creates a diff context for a specific worktree.
-type drillDownProviderImpl struct{}
+type drillDownProviderImpl struct {
+	configDir string
+	configErr error
+}
 
 func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath string, basis model.CompareBasis) (ui.DrillDownResult, error) {
 	runner := gitexec.NewGitRunner(gitexec.GitRunnerConfig{WorkDir: worktreePath})
@@ -281,12 +289,22 @@ func (d *drillDownProviderImpl) LoadDrillDown(ctx context.Context, worktreePath 
 	}
 
 	patchSvc := &diff.PatchService{Runner: runner}
+	noteStore, noteErr := noteStoreForWorktree(repo.WorktreeRoot, d.configDir, d.configErr)
 	return ui.DrillDownResult{
 		Compare:       cmp,
 		Files:         files,
 		PatchLoader:   patchSvc,
 		FileDiscarder: &fileDiscarderImpl{runner: runner, workdir: repo.WorktreeRoot},
+		NoteStore:     noteStore,
+		NoteErr:       noteErr,
 	}, nil
+}
+
+func noteStoreForWorktree(worktree, configDir string, setupErr error) (*notes.Store, error) {
+	if setupErr != nil {
+		return nil, setupErr
+	}
+	return notes.NewStore(worktree, configDir)
 }
 
 // fileDiscarderImpl implements ui.FileDiscarder via gitexec.DiscardFile.

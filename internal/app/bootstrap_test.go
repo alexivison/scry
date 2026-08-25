@@ -1,11 +1,27 @@
 package app
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/alexivison/scry/internal/config"
 	"github.com/alexivison/scry/internal/model"
 )
+
+func TestNoteStoreForWorktree(t *testing.T) {
+	worktree := t.TempDir()
+	store, err := noteStoreForWorktree(worktree, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Worktree() != want {
+		t.Fatalf("worktree = %q, want %q", store.Worktree(), want)
+	}
+}
 
 func TestInitialDiffStateDefaultsToSplitLayout(t *testing.T) {
 	t.Parallel()

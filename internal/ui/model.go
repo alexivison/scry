@@ -105,6 +105,7 @@ type Model struct {
 	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
 	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
 	fileDiscarder     FileDiscarder     // optional discarder for "discard changes" action
+	noteState         noteUIState
 
 	spinner spinner.Model // shared spinner for loading states
 }
@@ -243,6 +244,9 @@ type FileDiscardedMsg struct {
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.spinner.Tick}
+	if cmd := m.loadNotes(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if m.State.WorktreeMode && m.worktreeLoader != nil {
 		// Fire initial async worktree load so TUI appears instantly.
 		if m.State.RefreshInFlight && len(m.State.DashboardState.Worktrees) == 0 {
@@ -331,6 +335,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FileDiscardedMsg:
 		return m.handleFileDiscarded(msg)
+
+	case notesLoadedMsg:
+		return m.handleNotesLoaded(msg)
 
 	case tea.KeyMsg:
 		if m.tooSmall {
@@ -521,6 +528,9 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // needsSpinner reports whether any loading state requires spinner animation.
 func (m Model) needsSpinner() bool {
+	if m.noteState.loading {
+		return true
+	}
 	if m.State.CommitState.InFlight || m.State.CommitState.Executing {
 		return true
 	}
@@ -1091,10 +1101,11 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 	review.PrepareRefresh(&m.State)
 	m.refreshErr = ""
+	noteCmd := m.startNoteLoad()
 
 	if m.metadataLoader == nil {
 		m.State.RefreshInFlight = false
-		return m, nil
+		return m, noteCmd
 	}
 
 	gen := m.State.CacheGeneration
@@ -1120,7 +1131,7 @@ func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 		files, err := loader.ListFiles(ctx, cmp)
 		return MetadataLoadedMsg{Compare: resolvedCmp, Files: files, Gen: gen, Err: err}
 	}
-	return m, tea.Batch(cmd, m.spinner.Tick)
+	return m, tea.Batch(cmd, noteCmd, m.spinner.Tick)
 }
 
 // toggleWhitespace flips IgnoreWhitespace, resets the patch cache, and reloads

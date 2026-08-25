@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/notes"
 )
 
 func dashboardWorktrees() []model.WorktreeInfo {
@@ -223,6 +224,48 @@ func TestDashboardDrillDownLoadsFiles(t *testing.T) {
 	}
 	if !um.State.Compare.WorkingTree {
 		t.Error("Compare.WorkingTree = false, want true")
+	}
+}
+
+func TestDashboardDrillDownLoadsWorktreeNotes(t *testing.T) {
+	store, want := noteStoreWithOneNote(t)
+	state := dashboardState()
+	state.DashboardState.DrillDown = true
+	state.DashboardState.DrillGeneration = 1
+	state.FocusPane = model.PaneFiles
+	m := NewModel(state)
+
+	updated, cmd := m.Update(DrillDownLoadedMsg{
+		Result: DrillDownResult{
+			Compare:   model.ResolvedCompare{BaseRef: "abc", WorkingTree: true, DiffRange: "abc"},
+			Files:     []model.FileSummary{{Path: "main.go", Status: model.StatusModified}},
+			NoteStore: store,
+		},
+		Generation: 1,
+	})
+	m = updated.(Model)
+	m = deepDrain(t, m, cmd)
+
+	if len(m.noteState.items) != 1 || m.noteState.items[0].ID != want.ID {
+		t.Fatalf("drill-down notes = %#v, want note %q", m.noteState.items, want.ID)
+	}
+	if m.noteState.store != store {
+		t.Fatal("drill-down did not install the worktree note store")
+	}
+}
+
+func TestReturnToDashboardClearsWorktreeNotes(t *testing.T) {
+	store, note := noteStoreWithOneNote(t)
+	state := dashboardState()
+	state.DashboardState.DrillDown = true
+	state.FocusPane = model.PaneFiles
+	m := NewModel(state, WithNoteStore(store, nil))
+	m.noteState.items = []notes.Note{note}
+
+	m.returnToDashboard()
+
+	if m.noteState.store != nil || len(m.noteState.items) != 0 {
+		t.Fatalf("note state survived dashboard return: %#v", m.noteState)
 	}
 }
 
