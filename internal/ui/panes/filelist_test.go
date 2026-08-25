@@ -85,6 +85,27 @@ func TestRenderFileList_EmptyFiles(t *testing.T) {
 	}
 }
 
+func TestRenderFileList_StaleNotesWithoutChangedFiles(t *testing.T) {
+	output, scroll := RenderFileList(nil, -1, 0, 60, 10, true, FileListOpts{StaleNotes: 3})
+	if scroll != 0 {
+		t.Fatalf("scroll = %d, want 0", scroll)
+	}
+	if plain := ansi.Strip(output); !strings.Contains(plain, "Stale notes (3)") {
+		t.Fatalf("stale-only file list missing notes row: %q", plain)
+	}
+}
+
+func TestProjectFileTree_StaleNotesRowIsNotGitFile(t *testing.T) {
+	projection := ProjectFileTree(sampleFileList(), model.FileFilterAll, nil, 99, 2)
+	row := projection.Rows[len(projection.Rows)-1]
+	if row.Kind != FileTreeRowNotes {
+		t.Fatalf("last row kind = %v, want FileTreeRowNotes", row.Kind)
+	}
+	if row.FileIndex != -1 || projection.SelectedFile != -1 {
+		t.Fatalf("stale row leaked a Git file index: row=%d selected=%d", row.FileIndex, projection.SelectedFile)
+	}
+}
+
 func TestRenderFileList_ActiveInactive(t *testing.T) {
 	t.Parallel()
 

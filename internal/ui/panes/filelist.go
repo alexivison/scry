@@ -38,6 +38,7 @@ type FileListOpts struct {
 	Cursor           int
 	UseCursor        bool
 	HideCursor       bool
+	StaleNotes       int
 }
 
 // FileTreeRowKind identifies whether a visible file tree row is a directory or file.
@@ -46,6 +47,7 @@ type FileTreeRowKind int
 const (
 	FileTreeRowDir FileTreeRowKind = iota
 	FileTreeRowFile
+	FileTreeRowNotes
 )
 
 // FileTreeRow is a visible row in the projected file tree.
@@ -79,13 +81,12 @@ type fileTreeNode struct {
 // It adjusts scrollOffset to keep selectedIdx visible and returns the rendered
 // string along with the new scroll offset.
 func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width, height int, active bool, opts ...FileListOpts) (string, int) {
-	if len(files) == 0 {
-		return "No files changed.", 0
-	}
-
 	var o FileListOpts
 	if len(opts) > 0 {
 		o = opts[0]
+	}
+	if len(files) == 0 && o.StaleNotes == 0 {
+		return "No files changed.", 0
 	}
 
 	cursor := o.Cursor
@@ -93,7 +94,7 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 		cursor, _ = FileTreeCursorForFile(files, o.Filter, o.Collapsed, selectedIdx)
 	}
 
-	proj := ProjectFileTree(files, o.Filter, o.Collapsed, cursor)
+	proj := ProjectFileTree(files, o.Filter, o.Collapsed, cursor, o.StaleNotes)
 	if len(proj.Rows) == 0 {
 		return EmptyFileListMessage(o.Filter), 0
 	}
@@ -117,7 +118,7 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 }
 
 // ProjectFileTree builds visible directory and file rows from the flat file list.
-func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collapsed map[string]bool, cursor int) FileTreeProjection {
+func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collapsed map[string]bool, cursor int, staleNotes ...int) FileTreeProjection {
 	root := &fileTreeNode{dirs: make(map[string]*fileTreeNode)}
 	filtered := 0
 	for i, file := range files {
@@ -128,8 +129,15 @@ func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collaps
 		root.addFile(file.Path, i)
 	}
 
-	rows := make([]FileTreeRow, 0, filtered)
+	rows := make([]FileTreeRow, 0, filtered+1)
 	root.appendRows(&rows, files, collapsed, nil)
+	if len(staleNotes) > 0 && staleNotes[0] > 0 {
+		rows = append(rows, FileTreeRow{
+			Kind:      FileTreeRowNotes,
+			Label:     fmt.Sprintf("Stale notes (%d)", staleNotes[0]),
+			FileIndex: -1,
+		})
+	}
 
 	if len(rows) == 0 {
 		return FileTreeProjection{
@@ -346,10 +354,22 @@ func renderFileEntry(f model.FileSummary, idx, selectedIdx, width int) string {
 }
 
 func renderFileTreeRow(files []model.FileSummary, row FileTreeRow, selected bool, width int) string {
-	if row.Kind == FileTreeRowDir {
+	switch row.Kind {
+	case FileTreeRowDir:
 		return renderFileTreeDirEntry(row, selected, width)
+	case FileTreeRowNotes:
+		return renderFileTreeNotesEntry(row, selected, width)
+	default:
+		return renderFileTreeFileEntry(files[row.FileIndex], selected, width, row)
 	}
-	return renderFileTreeFileEntry(files[row.FileIndex], selected, width, row)
+}
+
+func renderFileTreeNotesEntry(row FileTreeRow, selected bool, width int) string {
+	label := padOrTruncateToWidth(row.Label, width)
+	if selected {
+		return fileSelectedStyle.Width(width).Render(label)
+	}
+	return statusModifiedStyle.Render(label)
 }
 
 func renderFileTreeDirEntry(row FileTreeRow, selected bool, width int) string {

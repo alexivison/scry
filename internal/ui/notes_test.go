@@ -4,9 +4,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexivison/scry/internal/notes"
+	"github.com/alexivison/scry/internal/ui/panes"
 )
 
 func TestNoteInitLoadsActiveWorktree(t *testing.T) {
@@ -78,6 +81,56 @@ func TestNoteSetupFailureLeavesDiffUsable(t *testing.T) {
 	}
 	if len(m.State.Files) == 0 {
 		t.Fatal("setup failure removed diff files")
+	}
+}
+
+func TestNotesFeedSelectedFileAndStaleProjection(t *testing.T) {
+	m := NewModel(sampleState())
+	m.width = 100
+	m.height = 30
+	m.patchViewport = panes.NewPatchViewport(samplePatch())
+	m.noteState.items = []notes.Note{
+		uiNote("attached", "main.go", 2, notes.StateOpen, "Attached body"),
+		uiNote("other", "new.go", 2, notes.StateOpen, "Other body"),
+		uiNote("stale", "gone.go", 7, notes.StateStale, "Stale body"),
+	}
+
+	projection := m.fileTreeProjection()
+	if row := projection.Rows[len(projection.Rows)-1]; row.Kind != panes.FileTreeRowNotes {
+		t.Fatalf("last row kind = %v, want notes", row.Kind)
+	}
+	output := m.renderPatch(72, 30, 72)
+	if !strings.Contains(output, "Attached body") || strings.Contains(output, "Other body") || strings.Contains(output, "Stale body") {
+		t.Fatalf("selected file received wrong notes:\n%s", output)
+	}
+}
+
+func TestStaleNotesRowRendersWithoutGitTarget(t *testing.T) {
+	state := sampleState()
+	state.Files = nil
+	state.SelectedFile = -1
+	m := NewModel(state)
+	m.noteState.items = []notes.Note{uiNote("stale", "gone.go", 7, notes.StateStale, "Stale body")}
+	m.setFileTreeCursor(0)
+
+	if _, ok := m.selectedPatchPath(); ok {
+		t.Fatal("stale notes row exposed a Git patch target")
+	}
+	output := m.renderPatch(72, 30, 72)
+	if !strings.Contains(output, "gone.go:7") || !strings.Contains(output, "Stale body") {
+		t.Fatalf("stale notes view missing content:\n%s", output)
+	}
+}
+
+func uiNote(id, file string, line int, state notes.State, body string) notes.Note {
+	return notes.Note{
+		ID:        id,
+		File:      file,
+		Line:      line,
+		State:     state,
+		Body:      body,
+		Author:    notes.AuthorAgent,
+		CreatedAt: time.Unix(1, 0),
 	}
 }
 

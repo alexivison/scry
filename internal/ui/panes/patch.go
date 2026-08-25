@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/notes"
 	"github.com/alexivison/scry/internal/ui/syntax"
 	"github.com/alexivison/scry/internal/ui/theme"
 )
@@ -35,6 +36,8 @@ type PatchViewport struct {
 	lines             []patchLine
 	gutterDigits      int // width of each line-number column (min 4)
 	syntaxHighlighted *syntax.LineCache
+	notes             []notes.Note
+	selectedNoteID    string
 }
 
 const bodyOffsetStep = 8
@@ -63,6 +66,19 @@ type visualRow struct {
 	segment      bodySegment
 	continuation bool
 	side         *sideBySideRow
+	note         *noteVisualRow
+}
+
+type noteVisualRow struct {
+	id   string
+	text string
+}
+
+type NoteDraftView struct {
+	NoteID string
+	File   string
+	Line   int
+	Body   string
 }
 
 type sideBySideRow struct {
@@ -119,6 +135,20 @@ func NewPatchViewport(patch model.FilePatch) *PatchViewport {
 // SetSyntaxHighlighter enables body-only syntax highlighting for diff lines.
 func (vp *PatchViewport) SetSyntaxHighlighter(lines *syntax.LineCache) {
 	vp.syntaxHighlighted = lines
+}
+
+func (vp *PatchViewport) SetNotes(items []notes.Note, selectedID string, _ *NoteDraftView) {
+	vp.notes = append(vp.notes[:0], items...)
+	sort.SliceStable(vp.notes, func(i, j int) bool {
+		if vp.notes[i].Line != vp.notes[j].Line {
+			return vp.notes[i].Line < vp.notes[j].Line
+		}
+		if !vp.notes[i].CreatedAt.Equal(vp.notes[j].CreatedAt) {
+			return vp.notes[i].CreatedAt.Before(vp.notes[j].CreatedAt)
+		}
+		return vp.notes[i].ID < vp.notes[j].ID
+	})
+	vp.selectedNoteID = selectedID
 }
 
 // computeGutterDigits returns the number of digits needed for the largest
@@ -773,6 +803,10 @@ func (vp *PatchViewport) Render() string {
 	visible := vp.visibleRows()
 	rendered := make([]string, 0, len(visible))
 	for _, row := range visible {
+		if row.note != nil {
+			rendered = append(rendered, row.note.text)
+			continue
+		}
 		switch row.line.typ {
 		case lineTypeFileHeader:
 			rendered = append(rendered, renderFileSeparator(row.line.header, vp.Width))
@@ -811,10 +845,44 @@ func (vp *PatchViewport) visibleRows() []visualRow {
 }
 
 func (vp *PatchViewport) visualRows() []visualRow {
+	var rows []visualRow
 	if vp.DiffMode == model.PatchDiffModeSideBySide {
-		return vp.sideBySideVisualRows()
+		rows = vp.sideBySideVisualRows()
+	} else {
+		rows = vp.unifiedVisualRows()
 	}
-	return vp.unifiedVisualRows()
+	return vp.withNotes(rows)
+}
+
+func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
+	if len(vp.notes) == 0 {
+		return rows
+	}
+
+	byLine := make(map[int][]notes.Note, len(vp.notes))
+	for _, note := range vp.notes {
+		byLine[note.Line] = append(byLine[note.Line], note)
+	}
+
+	out := make([]visualRow, 0, len(rows)+len(vp.notes)*3)
+	for i, row := range rows {
+		out = append(out, row)
+		line := row.newLineNo()
+		if line == nil || i+1 < len(rows) && sameSourceLine(row, rows[i+1]) {
+			continue
+		}
+		for _, note := range byLine[*line] {
+			for _, text := range renderNoteCard(note, vp.Width, note.ID == vp.selectedNoteID) {
+				out = append(out, visualRow{note: &noteVisualRow{id: note.ID, text: text}})
+			}
+		}
+	}
+	return out
+}
+
+func sameSourceLine(a, b visualRow) bool {
+	aLine, bLine := a.newLineNo(), b.newLineNo()
+	return aLine != nil && bLine != nil && *aLine == *bLine
 }
 
 func (vp *PatchViewport) unifiedVisualRows() []visualRow {
@@ -1796,6 +1864,34 @@ func (vp *PatchViewport) CurrentTargetLine() (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// CurrentSourceLine returns the current-source line at the top of the viewport.
+func (vp *PatchViewport) CurrentSourceLine() (int, bool) {
+	rows := vp.visualRows()
+	if vp.ScrollOffset < 0 || vp.ScrollOffset >= len(rows) {
+		return 0, false
+	}
+	row := rows[vp.ScrollOffset]
+	if row.note != nil || row.line.typ != lineTypeDiff {
+		return 0, false
+	}
+	line := row.newLineNo()
+	if line == nil {
+		return 0, false
+	}
+	return *line, true
+}
+
+func (vp *PatchViewport) ScrollToNote(id string) bool {
+	for i, row := range vp.visualRows() {
+		if row.note != nil && row.note.id == id {
+			vp.ScrollOffset = i
+			vp.SyncCurrentHunk()
+			return true
+		}
+	}
+	return false
 }
 
 // Styles for patch rendering.

@@ -80,3 +80,33 @@ func (m Model) handleNotesLoaded(msg notesLoadedMsg) (tea.Model, tea.Cmd) {
 	m.noteState.err = ""
 	return m, nil
 }
+
+func (m Model) attachedNotes(path string) []notes.Note {
+	items := make([]notes.Note, 0)
+	for _, note := range m.noteState.items {
+		if note.File == path && (note.State == notes.StateOpen || note.State == notes.StateResolved) {
+			items = append(items, note)
+		}
+	}
+	return items
+}
+
+func (m Model) staleNotes() []notes.Note {
+	items := make([]notes.Note, 0)
+	for _, note := range m.noteState.items {
+		if note.State == notes.StateStale {
+			items = append(items, note)
+		}
+	}
+	return items
+}
+
+func (m Model) staleNoteCount() int {
+	count := 0
+	for _, note := range m.noteState.items {
+		if note.State == notes.StateStale {
+			count++
+		}
+	}
+	return count
+}

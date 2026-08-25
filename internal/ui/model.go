@@ -581,7 +581,7 @@ func reconcileFileTreeToSelection(state *model.AppState) {
 }
 
 func (m Model) fileTreeProjection() panes.FileTreeProjection {
-	return panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.FileTreeCursor)
+	return panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.FileTreeCursor, m.staleNoteCount())
 }
 
 func (m Model) fileTreeRows() []panes.FileTreeRow {
@@ -601,13 +601,17 @@ func (m Model) selectedPatchPath() (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if row.Kind == panes.FileTreeRowFile {
+	switch row.Kind {
+	case panes.FileTreeRowFile:
 		if row.FileIndex < 0 || row.FileIndex >= len(m.State.Files) {
 			return "", false
 		}
 		return m.State.Files[row.FileIndex].Path, true
+	case panes.FileTreeRowDir:
+		return row.Path, true
+	default:
+		return "", false
 	}
-	return row.Path, true
 }
 
 func (m Model) selectedPatchSummary() (model.FileSummary, bool) {
@@ -617,6 +621,9 @@ func (m Model) selectedPatchSummary() (model.FileSummary, bool) {
 	}
 	if row.Kind == panes.FileTreeRowFile && row.FileIndex >= 0 && row.FileIndex < len(m.State.Files) {
 		return m.State.Files[row.FileIndex], true
+	}
+	if row.Kind != panes.FileTreeRowDir {
+		return model.FileSummary{}, false
 	}
 
 	summary := model.FileSummary{Path: row.Path}
@@ -640,7 +647,7 @@ func (m Model) folderFiles(folder string) []model.FileSummary {
 }
 
 func (m *Model) setFileTreeCursor(cursor int) {
-	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor)
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor, m.staleNoteCount())
 	m.State.FileTreeCursor = proj.Cursor
 	m.State.SelectedFile = proj.SelectedFile
 	if proj.SelectedFile < 0 {
@@ -661,7 +668,7 @@ func (m *Model) syncFileTreeCursorFromSelectedFile() {
 }
 
 func (m *Model) setFileTreeCursorByPath(path string, fallback int) {
-	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, fallback)
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, fallback, m.staleNoteCount())
 	cursor := proj.Cursor
 	if path != "" {
 		for i, row := range proj.Rows {
@@ -702,10 +709,14 @@ func (m Model) moveFileTreeCursor(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) activateFileTreeRow() (tea.Model, tea.Cmd) {
-	if _, ok := m.currentFileTreeRow(); !ok {
+	row, ok := m.currentFileTreeRow()
+	if !ok {
 		return m, nil
 	}
 	m.State.FocusPane = model.PanePatch
+	if row.Kind == panes.FileTreeRowNotes {
+		return m, nil
+	}
 	return m.selectFile()
 }
 
@@ -1629,6 +1640,9 @@ func (m Model) viewPatch() string {
 // renderPatch renders the patch pane content at the given dimensions.
 // outerWidth is the pane's outer width (including borders) for gutter decisions.
 func (m Model) renderPatch(width, height, outerWidth int) string {
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
+		return panes.RenderNoteList(m.staleNotes(), m.noteState.selectedID, nil, width, height, 0)
+	}
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
 	}
@@ -1647,6 +1661,11 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	}
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile {
+		m.patchViewport.SetNotes(m.attachedNotes(m.State.Files[row.FileIndex].Path), m.noteState.selectedID, nil)
+	} else {
+		m.patchViewport.SetNotes(nil, "", nil)
+	}
 	m.patchViewport.SetGutterVisible(m.State.ShowLineNumbers && outerWidth >= 60)
 	m.patchViewport.ClampXOffset()
 	return m.patchViewport.Render()
@@ -1894,6 +1913,7 @@ func (m Model) fileListOpts() panes.FileListOpts {
 		Collapsed:        m.State.FileTreeCollapsed,
 		Cursor:           m.State.FileTreeCursor,
 		UseCursor:        true,
+		StaleNotes:       m.staleNoteCount(),
 	}
 }
 
@@ -1948,6 +1968,9 @@ func (m Model) patchScrollLine(innerHeight int) int {
 
 // patchTitle returns the title for the patch pane (current filename).
 func (m Model) patchTitle() string {
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
+		return "Stale notes"
+	}
 	if path, ok := m.selectedPatchPath(); ok {
 		return path
 	}
