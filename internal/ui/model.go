@@ -293,6 +293,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tooSmall = false
 			m.sizeErr = ""
 		}
+		if m.noteState.composer != nil {
+			m.noteState.composer.input.SetWidth(max(m.noteComposerWidth(), 20))
+		}
 		if m.State.WorktreeMode && m.State.FocusPane == model.PaneDashboard && !m.State.DashboardState.DrillDown {
 			if cmd := m.maybeLoadPreview(); cmd != nil {
 				return m, cmd
@@ -321,6 +324,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case noteEditorClosedMsg:
+		return m.handleNoteEditorClosed(msg)
+
 	case WorktreeRefreshedMsg:
 		return m.handleWorktreeRefreshed(msg)
 
@@ -339,6 +345,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case notesLoadedMsg:
 		return m.handleNotesLoaded(msg)
 
+	case noteMutationMsg:
+		return m.handleNoteMutation(msg)
+
 	case tea.KeyMsg:
 		if m.tooSmall {
 			if msg.String() == "q" {
@@ -346,6 +355,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		}
+		if m.noteState.composer != nil {
+			return m.updateNoteComposer(msg)
+		}
+		if m.noteState.confirmDelete {
+			return m.updateNoteDeleteConfirm(msg)
 		}
 		// Discard confirmation modal consumes y/n/Esc before any other handler.
 		if m.State.ConfirmDiscard {
@@ -417,6 +432,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showHelp {
 			return m.updateHelp(msg)
 		}
+		if m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit && m.State.FocusPane != model.PaneDashboard {
+			switch msg.String() {
+			case "}":
+				return m.moveNoteSelection(1)
+			case "{":
+				return m.moveNoteSelection(-1)
+			case "C":
+				return m.startNoteComposer("")
+			case "E":
+				return m.editSelectedNote()
+			case "R":
+				return m.resolveSelectedNote()
+			case "D":
+				return m.startNoteDeleteConfirm()
+			}
+		}
 		if m.State.FocusPane == model.PaneSearch {
 			return m.updateSearch(msg)
 		}
@@ -435,11 +466,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateFiles(msg)
 	}
+	if m.noteState.composer != nil {
+		var cmd tea.Cmd
+		m.noteState.composer.input, cmd = m.noteState.composer.input.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
 func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.syncFileTreeCursorFromSelectedFile()
+	switch msg.String() {
+	case "g", "G", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "left", "l", "right", "enter", "t", "n", "p", "/":
+		m.noteState.selectedID = ""
+	}
 
 	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
@@ -505,11 +545,11 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput = ""
 			m.searchNotFound = ""
 		}
-	case "n", "}":
+	case "n":
 		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil {
 			m.patchViewport.NextHunk()
 		}
-	case "p", "{":
+	case "p":
 		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
 		}
@@ -528,7 +568,7 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // needsSpinner reports whether any loading state requires spinner animation.
 func (m Model) needsSpinner() bool {
-	if m.noteState.loading {
+	if m.noteState.loading || m.noteState.mutating {
 		return true
 	}
 	if m.State.CommitState.InFlight || m.State.CommitState.Executing {
@@ -1100,6 +1140,7 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 			m.savedScrollDiff = -1
 			m.savedScrollRow = 0
 			m.savedSearchQuery = ""
+			m.syncSelectedNoteViewport()
 		}
 	}
 
@@ -1249,6 +1290,7 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	m.State.Files = msg.Files
 	review.ReconcileSelection(&m.State, selectedPath)
 	reconcileFileTreeToSelection(&m.State)
+	m.positionSelectedNote()
 	review.CompleteRefresh(&m.State)
 
 	// Selected file was evicted for reload; clear viewport.
@@ -1370,6 +1412,10 @@ func buildFallback(summary model.FileSummary, err error) string {
 }
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "g", "G", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "esc", "n", "p", "N", "enter", "/":
+		m.noteState.selectedID = ""
+	}
 	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
 		pending := m.pendingKey
@@ -1441,7 +1487,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.patchViewport != nil {
 			m.patchViewport.PageUp()
 		}
-	case "n", "}":
+	case "n":
 		if m.patchViewport != nil {
 			m.patchViewport.NextHunk()
 		}
@@ -1453,7 +1499,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneSearch
 		m.searchInput = ""
 		m.searchNotFound = ""
-	case "p", "{":
+	case "p":
 		if m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
 		}
@@ -1587,6 +1633,9 @@ func (m Model) View() string {
 	if m.State.ConfirmDiscard {
 		base = m.overlayDiscardConfirm(base)
 	}
+	if m.noteState.confirmDelete {
+		base = panes.OverlayDialog(base, "Delete note?", m.noteDeleteBody(), "y confirm    n/Esc cancel", m.width, m.height-1)
+	}
 
 	var b strings.Builder
 	if m.showHelp {
@@ -1641,7 +1690,8 @@ func (m Model) viewPatch() string {
 // outerWidth is the pane's outer width (including borders) for gutter decisions.
 func (m Model) renderPatch(width, height, outerWidth int) string {
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
-		return panes.RenderNoteList(m.staleNotes(), m.noteState.selectedID, nil, width, height, 0)
+		offset, _ := panes.NoteListOffset(m.staleNotes(), m.noteState.selectedID, width)
+		return panes.RenderNoteList(m.staleNotes(), m.noteState.selectedID, m.noteDraftView(), width, height, offset)
 	}
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
@@ -1662,7 +1712,7 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile {
-		m.patchViewport.SetNotes(m.attachedNotes(m.State.Files[row.FileIndex].Path), m.noteState.selectedID, nil)
+		m.patchViewport.SetNotes(m.attachedNotes(m.State.Files[row.FileIndex].Path), m.noteState.selectedID, m.noteDraftView())
 	} else {
 		m.patchViewport.SetNotes(nil, "", nil)
 	}
@@ -1788,7 +1838,7 @@ func (m Model) viewHelp() string {
 		help = append(help, "  h/Esc     back to file list")
 	}
 	help = append(help,
-		"  n/p }/{   next/previous hunk",
+		"  n/p hunk  }/{ note navigation",
 		"  gg        jump to top",
 		"  G         jump to bottom",
 		"  ctrl+d/u  half-page down/up",
@@ -1808,7 +1858,7 @@ func (m Model) viewHelp() string {
 		"  o         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
-		"  X         discard selected file's changes (confirm y/N)",
+		"  X discard · C/E/R/D create/edit/resolve/delete note",
 	)
 	if m.State.CommitEnabled {
 		help = append(help, "  c         generate commit message")

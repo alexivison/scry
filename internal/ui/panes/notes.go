@@ -47,9 +47,12 @@ func renderNoteCard(note notes.Note, width int, selected bool) []string {
 	return lines
 }
 
-func RenderNoteList(items []notes.Note, selectedID string, _ *NoteDraftView, width, height, offset int) string {
+func RenderNoteList(items []notes.Note, selectedID string, draft *NoteDraftView, width, height, offset int) string {
 	var rows []string
 	for _, note := range orderedNotes(items) {
+		if draft != nil && draft.NoteID == note.ID {
+			note.Body = draft.Body
+		}
 		rows = append(rows, renderNoteCard(note, width, note.ID == selectedID)...)
 	}
 	if len(rows) == 0 || height <= 0 {

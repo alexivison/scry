@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alexivison/scry/internal/notes"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
@@ -70,6 +72,21 @@ func TestNoteSuccessfulReloadClearsPriorError(t *testing.T) {
 	}
 }
 
+func TestNoteReloadKeepsSelectedNoteReachableWhenItBecomesStale(t *testing.T) {
+	m := notePatchModel()
+	note := uiNote("note", "main.go", 2, notes.StateOpen, "body")
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	note.State = notes.StateStale
+
+	updated, _ := m.Update(notesLoadedMsg{notes: []notes.Note{note}, generation: m.noteState.generation})
+	m = updated.(Model)
+	row, ok := m.currentFileTreeRow()
+	if !ok || row.Kind != panes.FileTreeRowNotes || m.noteState.selectedID != note.ID {
+		t.Fatalf("selected stale note became unreachable: row=%#v id=%q", row, m.noteState.selectedID)
+	}
+}
+
 func TestNoteSetupFailureLeavesDiffUsable(t *testing.T) {
 	m := NewModel(sampleState(), WithNoteStore(nil, errors.New("config unavailable")))
 
@@ -120,6 +137,252 @@ func TestStaleNotesRowRendersWithoutGitTarget(t *testing.T) {
 	if !strings.Contains(output, "gone.go:7") || !strings.Contains(output, "Stale body") {
 		t.Fatalf("stale notes view missing content:\n%s", output)
 	}
+}
+
+func TestNoteTargetsFollowFilesThenStale(t *testing.T) {
+	m := NewModel(sampleState())
+	first := uiNote("main-1", "main.go", 2, notes.StateOpen, "one")
+	second := uiNote("main-2", "main.go", 2, notes.StateResolved, "two")
+	second.CreatedAt = first.CreatedAt.Add(time.Second)
+	other := uiNote("new-1", "new.go", 1, notes.StateOpen, "three")
+	stale := uiNote("stale", "gone.go", 1, notes.StateStale, "four")
+	m.noteState.items = []notes.Note{stale, other, second, first}
+
+	targets := m.noteTargets()
+	got := make([]string, len(targets))
+	for i, note := range targets {
+		got[i] = note.ID
+	}
+	if strings.Join(got, ",") != "main-1,main-2,new-1,stale" {
+		t.Fatalf("note target order = %v", got)
+	}
+}
+
+func TestNoteNavigationSelectsCardsAndStaleView(t *testing.T) {
+	m := notePatchModel()
+	first := uiNote("main-1", "main.go", 2, notes.StateOpen, "one")
+	second := uiNote("main-2", "main.go", 2, notes.StateOpen, "two")
+	second.CreatedAt = first.CreatedAt.Add(time.Second)
+	stale := uiNote("stale", "gone.go", 1, notes.StateStale, "three")
+	m.noteState.items = []notes.Note{stale, second, first}
+
+	m, _ = sendKey(m, "}")
+	if m.noteState.selectedID != first.ID {
+		t.Fatalf("first } selected %q, want %q", m.noteState.selectedID, first.ID)
+	}
+	m, _ = sendKey(m, "}")
+	if m.noteState.selectedID != second.ID {
+		t.Fatalf("second } selected %q, want %q", m.noteState.selectedID, second.ID)
+	}
+	m, _ = sendKey(m, "}")
+	row, ok := m.currentFileTreeRow()
+	if m.noteState.selectedID != stale.ID || !ok || row.Kind != panes.FileTreeRowNotes {
+		t.Fatalf("third } did not select stale view: id=%q row=%#v", m.noteState.selectedID, row)
+	}
+	m, _ = sendKey(m, "}")
+	if m.noteState.selectedID != stale.ID {
+		t.Fatalf("navigation wrapped past final note to %q", m.noteState.selectedID)
+	}
+}
+
+func TestNoteComposerCreatesMultilineUserNote(t *testing.T) {
+	store := noteActionStore(t)
+	m := notePatchModel()
+	m.noteState.store = store
+
+	m, _ = sendKey(m, "C")
+	if m.noteState.composer == nil {
+		t.Fatal("C did not open the composer")
+	}
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first")})
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Alt+S did not save the composer")
+	}
+	m = drainCmd(t, m, cmd)
+
+	items, err := store.List(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Body != "first\nsecond" || items[0].Author != notes.AuthorUser || items[0].File != "main.go" || items[0].Line != 2 {
+		t.Fatalf("created notes = %#v", items)
+	}
+	if m.noteState.composer != nil {
+		t.Fatal("successful create left composer open")
+	}
+}
+
+func TestNoteComposerRendersInlineWithControls(t *testing.T) {
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m, _ = sendKey(m, "C")
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("inline draft")})
+
+	patch := m.renderPatch(72, 25, 72)
+	if !strings.Contains(patch, "inline draft") {
+		t.Fatalf("composer was not rendered inline:\n%s", patch)
+	}
+	if status := m.viewStatusBar(); !strings.Contains(status, "Alt+S") || !strings.Contains(status, "Ctrl+G") {
+		t.Fatalf("composer controls missing from status: %s", status)
+	}
+}
+
+func TestNoteComposerRejectsHeaderAndEmptyBody(t *testing.T) {
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m.patchViewport.ScrollOffset = 0
+	m, cmd := sendKey(m, "C")
+	if cmd != nil || m.noteState.composer != nil || !strings.Contains(m.noteState.err, "source line") {
+		t.Fatalf("C on header = composer %#v, err %q", m.noteState.composer, m.noteState.err)
+	}
+
+	m.patchViewport.ScrollOffset = 2
+	m, _ = sendKey(m, "C")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	m = updated.(Model)
+	if cmd != nil || m.noteState.composer == nil || !strings.Contains(m.noteState.err, "empty") {
+		t.Fatalf("empty save = cmd %v, composer %#v, err %q", cmd != nil, m.noteState.composer, m.noteState.err)
+	}
+}
+
+func TestNoteEditRequiresSelectionAndEscapeCancels(t *testing.T) {
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m, cmd := sendKey(m, "E")
+	if cmd != nil || m.noteState.composer != nil || !strings.Contains(m.noteState.err, "Select a note") {
+		t.Fatalf("E without selection = composer %#v, err %q", m.noteState.composer, m.noteState.err)
+	}
+
+	m, _ = sendKey(m, "C")
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft")})
+	m, cmd = sendKey(m, "esc")
+	if cmd != nil || m.noteState.composer != nil {
+		t.Fatal("Esc did not cancel the composer")
+	}
+	items, err := m.noteState.store.List(nil)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("cancel persisted a note: %#v, %v", items, err)
+	}
+}
+
+func TestOrdinaryPatchMovementClearsNoteSelection(t *testing.T) {
+	m := notePatchModel()
+	note := uiNote("note", "main.go", 2, notes.StateOpen, "body")
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+
+	m, _ = sendKey(m, "j")
+	if m.noteState.selectedID != "" {
+		t.Fatalf("patch movement kept note selection %q", m.noteState.selectedID)
+	}
+}
+
+func TestNoteMutationFailureKeepsComposerText(t *testing.T) {
+	store := noteActionStore(t)
+	m := notePatchModel()
+	m.noteState.store = store
+	m, _ = sendKey(m, "C")
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("keep me")})
+	if err := os.Remove(filepath.Join(store.Worktree(), "main.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	m = updated.(Model)
+	m = drainCmd(t, m, cmd)
+	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "keep me" || m.noteState.err == "" {
+		t.Fatalf("failed save lost draft: composer %#v, err %q", m.noteState.composer, m.noteState.err)
+	}
+}
+
+func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
+	store := noteActionStore(t)
+	note, err := store.Add(notes.AddInput{File: "main.go", Line: 2, Body: "original", Author: notes.AuthorAgent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+
+	m, _ = sendKey(m, "E")
+	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "original" {
+		t.Fatal("E did not open selected body")
+	}
+	m.noteState.composer.input.SetValue("edited")
+	m = saveNoteComposer(t, m)
+	edited := m.noteState.items[0]
+	if edited.Body != "edited" || edited.Author != note.Author || edited.File != note.File || edited.Line != note.Line || edited.State != note.State {
+		t.Fatalf("edit changed fields beyond body: %#v", edited)
+	}
+
+	updated, cmd := m.Update(keyMsg('R'))
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("R did not resolve an open note")
+	}
+	m = drainCmd(t, m, cmd)
+	if m.noteState.items[0].State != notes.StateResolved {
+		t.Fatalf("resolved state = %q", m.noteState.items[0].State)
+	}
+
+	m, cmd = sendKey(m, "D")
+	if cmd != nil || !m.noteState.confirmDelete {
+		t.Fatal("D did not open confirmation")
+	}
+	m, cmd = sendKey(m, "y")
+	if cmd == nil {
+		t.Fatal("confirmed delete did not execute")
+	}
+	m = drainCmd(t, m, cmd)
+	if len(m.noteState.items) != 0 || m.noteState.selectedID != "" {
+		t.Fatalf("delete left note state: %#v", m.noteState)
+	}
+}
+
+func notePatchModel() Model {
+	m := NewModel(sampleState())
+	m.width = 100
+	m.height = 30
+	m.State.FocusPane = "patch"
+	m.patchViewport = panes.NewPatchViewport(samplePatch())
+	m.patchViewport.Width = 72
+	m.patchViewport.Height = 25
+	m.patchViewport.ScrollOffset = 2
+	return m
+}
+
+func noteActionStore(t *testing.T) *notes.Store {
+	t.Helper()
+	worktree := t.TempDir()
+	if err := os.WriteFile(filepath.Join(worktree, "main.go"), []byte("package main\nimport \"os\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := notes.NewStore(worktree, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func sendNoteKey(m Model, key tea.KeyMsg) Model {
+	updated, _ := m.Update(key)
+	return updated.(Model)
+}
+
+func saveNoteComposer(t *testing.T, m Model) Model {
+	t.Helper()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Alt+S did not produce a save command")
+	}
+	return drainCmd(t, m, cmd)
 }
 
 func uiNote(id, file string, line int, state notes.State, body string) notes.Note {

@@ -264,14 +264,6 @@ func TestFileListFocusSharedPatchShortcuts(t *testing.T) {
 		if m.patchViewport.CurrentHunk != 0 {
 			t.Fatalf("after p CurrentHunk = %d, want 0", m.patchViewport.CurrentHunk)
 		}
-		m, _ = sendKey(m, "}")
-		if m.patchViewport.CurrentHunk != 1 {
-			t.Fatalf("after } CurrentHunk = %d, want 1", m.patchViewport.CurrentHunk)
-		}
-		m, _ = sendKey(m, "{")
-		if m.patchViewport.CurrentHunk != 0 {
-			t.Fatalf("after { CurrentHunk = %d, want 0", m.patchViewport.CurrentHunk)
-		}
 	})
 }
 

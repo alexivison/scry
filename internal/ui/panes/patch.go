@@ -38,6 +38,7 @@ type PatchViewport struct {
 	syntaxHighlighted *syntax.LineCache
 	notes             []notes.Note
 	selectedNoteID    string
+	noteDraft         *NoteDraftView
 }
 
 const bodyOffsetStep = 8
@@ -137,7 +138,7 @@ func (vp *PatchViewport) SetSyntaxHighlighter(lines *syntax.LineCache) {
 	vp.syntaxHighlighted = lines
 }
 
-func (vp *PatchViewport) SetNotes(items []notes.Note, selectedID string, _ *NoteDraftView) {
+func (vp *PatchViewport) SetNotes(items []notes.Note, selectedID string, draft *NoteDraftView) {
 	vp.notes = append(vp.notes[:0], items...)
 	sort.SliceStable(vp.notes, func(i, j int) bool {
 		if vp.notes[i].Line != vp.notes[j].Line {
@@ -149,6 +150,7 @@ func (vp *PatchViewport) SetNotes(items []notes.Note, selectedID string, _ *Note
 		return vp.notes[i].ID < vp.notes[j].ID
 	})
 	vp.selectedNoteID = selectedID
+	vp.noteDraft = draft
 }
 
 // computeGutterDigits returns the number of digits needed for the largest
@@ -855,7 +857,7 @@ func (vp *PatchViewport) visualRows() []visualRow {
 }
 
 func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
-	if len(vp.notes) == 0 {
+	if len(vp.notes) == 0 && vp.noteDraft == nil {
 		return rows
 	}
 
@@ -871,9 +873,21 @@ func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
 		if line == nil || i+1 < len(rows) && sameSourceLine(row, rows[i+1]) {
 			continue
 		}
+		draftAdded := false
 		for _, note := range byLine[*line] {
-			for _, text := range renderNoteCard(note, vp.Width, note.ID == vp.selectedNoteID) {
+			isDraft := vp.noteDraft != nil && vp.noteDraft.NoteID == note.ID
+			if isDraft {
+				note.Body = vp.noteDraft.Body
+				draftAdded = true
+			}
+			for _, text := range renderNoteCard(note, vp.Width, note.ID == vp.selectedNoteID || isDraft) {
 				out = append(out, visualRow{note: &noteVisualRow{id: note.ID, text: text}})
+			}
+		}
+		if vp.noteDraft != nil && vp.noteDraft.Line == *line && !draftAdded {
+			draft := notes.Note{File: vp.noteDraft.File, Line: vp.noteDraft.Line, Body: vp.noteDraft.Body, Author: notes.AuthorUser, State: notes.StateOpen}
+			for _, text := range renderNoteCard(draft, vp.Width, true) {
+				out = append(out, visualRow{note: &noteVisualRow{text: text}})
 			}
 		}
 	}

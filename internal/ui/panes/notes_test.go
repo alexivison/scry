@@ -68,6 +68,21 @@ func TestPatchViewportResolvedNoteExpandsOnlyWhenSelected(t *testing.T) {
 	}
 }
 
+func TestPatchViewportOrdersNotesOnSameLine(t *testing.T) {
+	first := noteFixture("note-b", 2, notes.StateOpen, "first")
+	second := noteFixture("note-a", 2, notes.StateOpen, "second")
+	second.CreatedAt = first.CreatedAt.Add(time.Second)
+	vp := NewPatchViewport(notePatch())
+	vp.Width = 60
+	vp.Height = 30
+	vp.SetNotes([]notes.Note{second, first}, "", nil)
+
+	output := ansi.Strip(vp.Render())
+	if firstAt, secondAt := strings.Index(output, "first"), strings.Index(output, "second"); firstAt < 0 || secondAt <= firstAt {
+		t.Fatalf("same-line notes rendered out of order:\n%s", output)
+	}
+}
+
 func TestPatchViewportNoteRowsCountTowardHeight(t *testing.T) {
 	vp := NewPatchViewport(notePatch())
 	vp.Width = 44
