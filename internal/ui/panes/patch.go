@@ -32,6 +32,7 @@ type PatchViewport struct {
 	SearchQuery   string      // current search query for highlighting
 	SearchMatch   SearchMatch // current match anchored to a logical diff line
 	GutterVisible bool        // when false, suppress line number gutter (minimal mode)
+	ColorEnabled  bool
 
 	// Pre-computed flat line list for rendering.
 	lines             []patchLine
@@ -74,6 +75,11 @@ type visualRow struct {
 	continuation bool
 	side         *sideBySideRow
 	note         *noteVisualRow
+}
+
+type cursorTarget struct {
+	diffIndex int
+	noteID    string
 }
 
 type noteVisualRow struct {
@@ -133,6 +139,7 @@ func NewPatchViewport(patch model.FilePatch) *PatchViewport {
 		DiffMode:      model.PatchDiffModeUnified,
 		SearchMatch:   NoSearchMatch(),
 		GutterVisible: true,
+		ColorEnabled:  true,
 		sourceCursor:  -1,
 		renderWidth:   -1,
 		renderHeight:  -1,
@@ -491,28 +498,38 @@ func (vp *PatchViewport) PrevHunk() {
 	vp.sourceCursor = -1
 }
 
-func (vp *PatchViewport) MoveSourceCursor(delta int) {
+func (vp *PatchViewport) MoveCursor(delta int) string {
 	vp.manualScroll = false
 	rows := vp.visualRows()
 	vp.ensureSourceCursor(rows)
-	indexes := sourceDiffIndexes(rows)
-	if len(indexes) == 0 {
-		return
+	targets := cursorTargets(rows)
+	if len(targets) == 0 {
+		return vp.selectedNoteID
 	}
-	position := 0
-	for i, index := range indexes {
-		if index == vp.sourceCursor {
+	position := -1
+	for i, target := range targets {
+		noteSelected := vp.selectedNoteID != "" && target.noteID == vp.selectedNoteID
+		sourceSelected := vp.selectedNoteID == "" && target.noteID == "" && target.diffIndex == vp.sourceCursor
+		if noteSelected || sourceSelected {
 			position = i
 			break
 		}
 	}
 	target := position + delta
-	if target < 0 || target >= len(indexes) {
-		return
+	if target < 0 || target >= len(targets) {
+		return vp.selectedNoteID
 	}
-	vp.sourceCursor = indexes[target]
-	vp.ensureSourceCursorVisible(rows)
+	selected := targets[target]
+	if selected.noteID != "" {
+		vp.selectedNoteID = selected.noteID
+		vp.ensureNoteVisible(rows, selected.noteID)
+	} else {
+		vp.selectedNoteID = ""
+		vp.sourceCursor = selected.diffIndex
+		vp.ensureSourceCursorVisible(rows)
+	}
 	vp.SyncCurrentHunk()
+	return vp.selectedNoteID
 }
 
 // ScrollDown moves the viewport one line down. No-op at the bottom.
@@ -886,7 +903,11 @@ func (vp *PatchViewport) Render() string {
 	rendered := make([]string, 0, len(visible))
 	for _, row := range visible {
 		if row.note != nil {
-			rendered = append(rendered, row.note.text)
+			line := row.note.text
+			if vp.selectedNoteID != "" && row.note.id == vp.selectedNoteID {
+				line = vp.renderCursorRow(line)
+			}
+			rendered = append(rendered, line)
 			continue
 		}
 		switch row.line.typ {
@@ -905,7 +926,7 @@ func (vp *PatchViewport) Render() string {
 			}
 			line := vp.renderDiffVisualRow(row, match)
 			if vp.sourceCursorOn(row) {
-				line = renderSourceCursor(line, vp.Width)
+				line = vp.renderCursorRow(line, vp.unifiedCursorMatch(row, match))
 			}
 			rendered = append(rendered, line)
 		}
@@ -955,9 +976,15 @@ func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
 
 	byLine := make(map[int][]notes.Note, len(vp.notes))
 	for _, note := range vp.notes {
+		if note.State != notes.StateOpen {
+			continue
+		}
 		byLine[note.Line] = append(byLine[note.Line], note)
 	}
 
+	indent := vp.noteIndent()
+	noteWidth := max(vp.Width-indent, 0)
+	prefix := strings.Repeat(" ", indent)
 	out := make([]visualRow, 0, len(rows)+len(vp.notes)*3)
 	for i, row := range rows {
 		out = append(out, row)
@@ -972,18 +999,32 @@ func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
 				note.Body = vp.noteDraft.Body
 				draftAdded = true
 			}
-			for _, text := range renderNoteCard(note, vp.Width, note.ID == vp.selectedNoteID || isDraft) {
-				out = append(out, visualRow{note: &noteVisualRow{id: note.ID, text: text}})
+			for _, text := range renderNoteCard(note, noteWidth, note.ID == vp.selectedNoteID || isDraft) {
+				out = append(out, visualRow{note: &noteVisualRow{id: note.ID, text: prefix + text}})
 			}
 		}
 		if vp.noteDraft != nil && vp.noteDraft.Line == *line && !draftAdded {
 			draft := notes.Note{File: vp.noteDraft.File, Line: vp.noteDraft.Line, Body: vp.noteDraft.Body, Author: notes.AuthorUser, State: notes.StateOpen}
-			for _, text := range renderNoteCard(draft, vp.Width, true) {
-				out = append(out, visualRow{note: &noteVisualRow{text: text}})
+			for _, text := range renderNoteCard(draft, noteWidth, true) {
+				out = append(out, visualRow{note: &noteVisualRow{text: prefix + text}})
 			}
 		}
 	}
 	return out
+}
+
+func (vp *PatchViewport) noteIndent() int {
+	indent := 1
+	if vp.DiffMode == model.PatchDiffModeSideBySide {
+		left, _ := sideBySideColumnWidths(vp.Width)
+		indent += left + lipgloss.Width(sideBySideSeparator())
+		if vp.GutterVisible {
+			indent += lipgloss.Width(formatSideGutter(nil, vp.gutterDigits))
+		}
+	} else if vp.GutterVisible {
+		indent += lipgloss.Width(formatGutter(nil, nil, vp.gutterDigits))
+	}
+	return min(indent, max(vp.Width-4, 0))
 }
 
 func sameSourceLine(a, b visualRow) bool {
@@ -1284,20 +1325,123 @@ func (vp *PatchViewport) renderSideBySideVisualRow(row visualRow, sourceCursor b
 	leftWidth, rightWidth := sideBySideColumnWidths(vp.Width)
 	left := vp.renderSideBySideCell(row.side.old, leftWidth, sideOld)
 	right := vp.renderSideBySideCell(row.side.new, rightWidth, sideNew)
-	if sourceCursor {
-		right = renderSourceCursor(right, rightWidth)
-	}
 	line := left + sideBySideSeparator() + right
+	if sourceCursor {
+		separatorWidth := lipgloss.Width(sideBySideSeparator())
+		line = vp.renderCursorRow(line,
+			vp.sideCursorMatch(row.side.old, leftWidth, sideOld, 0),
+			vp.sideCursorMatch(row.side.new, rightWidth, sideNew, leftWidth+separatorWidth),
+		)
+	}
 	if vp.Width > 0 {
 		return truncateToWidth(line, vp.Width)
 	}
 	return line
 }
 
-func renderSourceCursor(line string, width int) string {
+func renderCursorRow(line string, width int) string {
 	if width <= 0 || line == "" {
 		return line
 	}
+	return selectedStyle.Render(cursorRowText(line, width))
+}
+
+type cursorSpan struct {
+	start int
+	end   int
+}
+
+func (vp *PatchViewport) renderCursorRow(line string, spans ...cursorSpan) string {
+	if vp.Width <= 0 || line == "" {
+		return line
+	}
+	text := cursorRowText(line, vp.Width)
+	if !vp.ColorEnabled {
+		return text
+	}
+	return renderCursorSpans(text, spans)
+}
+
+func renderCursorSpans(line string, spans []cursorSpan) string {
+	width := lipgloss.Width(line)
+	valid := spans[:0]
+	for _, span := range spans {
+		span.start = max(span.start, 0)
+		span.end = min(span.end, width)
+		if span.start < span.end {
+			valid = append(valid, span)
+		}
+	}
+	if len(valid) == 0 {
+		return selectedStyle.Render(line)
+	}
+
+	sort.Slice(valid, func(i, j int) bool { return valid[i].start < valid[j].start })
+	var rendered strings.Builder
+	position := 0
+	for _, span := range valid {
+		span.start = max(span.start, position)
+		if span.start >= span.end {
+			continue
+		}
+		if position < span.start {
+			rendered.WriteString(selectedStyle.Render(ansi.Cut(line, position, span.start)))
+		}
+		rendered.WriteString(selectedStyle.Reverse(true).Render(ansi.Cut(line, span.start, span.end)))
+		position = span.end
+	}
+	if position < width {
+		rendered.WriteString(selectedStyle.Render(ansi.Cut(line, position, width)))
+	}
+	return rendered.String()
+}
+
+func (vp *PatchViewport) unifiedCursorMatch(row visualRow, match SearchMatch) cursorSpan {
+	gutterWidth := 0
+	if vp.GutterVisible {
+		gutterWidth = lipgloss.Width(formatGutter(row.line.diff.OldNo, row.line.diff.NewNo, vp.gutterDigits))
+	}
+	bodyStart := gutterWidth + 1
+	return vp.cursorMatch(row.segment, match, bodyStart, vp.Width-bodyStart)
+}
+
+func (vp *PatchViewport) sideCursorMatch(cell *sideBySideCell, width int, side sideBySideSide, offset int) cursorSpan {
+	if cell == nil || vp.SearchQuery == "" || vp.SearchMatch.Line != cell.line.diffIndex {
+		return cursorSpan{}
+	}
+	gutterWidth := 0
+	if vp.GutterVisible {
+		gutterWidth = lipgloss.Width(formatSideGutter(sideBySideLineNo(cell.line.diff, side), vp.gutterDigits))
+	}
+	bodyStart := gutterWidth + 1
+	span := vp.cursorMatch(cell.segment, vp.SearchMatch, bodyStart, width-bodyStart)
+	span.start += offset
+	span.end += offset
+	return span
+}
+
+func (vp *PatchViewport) cursorMatch(segment bodySegment, match SearchMatch, bodyStart, bodyWidth int) cursorSpan {
+	match = segment.matchInSegment(match)
+	if vp.SearchQuery == "" || bodyWidth <= 0 || !match.validForBody(segment.text) {
+		return cursorSpan{}
+	}
+
+	start := lipgloss.Width(segment.text[:match.Start])
+	end := lipgloss.Width(segment.text[:match.End])
+	if vp.LineMode == model.LineModeScroll {
+		start -= vp.XOffset
+		end -= vp.XOffset
+	}
+	start = max(start, 0)
+	end = min(end, bodyWidth)
+	if start >= end {
+		return cursorSpan{}
+	}
+	return cursorSpan{start: bodyStart + start, end: bodyStart + end}
+}
+
+func cursorRowText(line string, width int) string {
+	line = padOrTruncateToWidth(ansi.Strip(line), width)
 	return "▌" + ansi.Cut(line, 1, width)
 }
 
@@ -1929,18 +2073,27 @@ func (r visualRow) sourceDiffIndex() (int, bool) {
 	return r.side.new.line.diffIndex, true
 }
 
-func sourceDiffIndexes(rows []visualRow) []int {
-	indexes := make([]int, 0)
-	last := -1
+func cursorTargets(rows []visualRow) []cursorTarget {
+	targets := make([]cursorTarget, 0)
+	lastDiff := -1
+	lastNote := ""
 	for _, row := range rows {
-		index, ok := row.sourceDiffIndex()
-		if !ok || index == last {
+		if row.note != nil {
+			if row.note.id != "" && row.note.id != lastNote {
+				targets = append(targets, cursorTarget{diffIndex: -1, noteID: row.note.id})
+				lastNote = row.note.id
+			}
 			continue
 		}
-		indexes = append(indexes, index)
-		last = index
+		index, ok := row.sourceDiffIndex()
+		if !ok || index == lastDiff {
+			continue
+		}
+		targets = append(targets, cursorTarget{diffIndex: index})
+		lastDiff = index
+		lastNote = ""
 	}
-	return indexes
+	return targets
 }
 
 func (vp *PatchViewport) ensureSourceCursor(rows []visualRow) {

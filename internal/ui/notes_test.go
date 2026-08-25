@@ -180,6 +180,7 @@ func TestNotesFeedSelectedFileAndStaleProjection(t *testing.T) {
 	m.noteState.items = []notes.Note{
 		uiNote("attached", "main.go", 2, notes.StateOpen, "Attached body"),
 		uiNote("other", "new.go", 2, notes.StateOpen, "Other body"),
+		uiNote("resolved", "main.go", 2, notes.StateResolved, "Resolved body"),
 		uiNote("stale", "gone.go", 7, notes.StateStale, "Stale body"),
 	}
 
@@ -188,12 +189,17 @@ func TestNotesFeedSelectedFileAndStaleProjection(t *testing.T) {
 		t.Fatalf("last row kind = %v, want notes", row.Kind)
 	}
 	output := m.renderPatch(72, 30, 72)
-	if !strings.Contains(output, "Attached body") || strings.Contains(output, "Other body") || strings.Contains(output, "Stale body") {
+	if !strings.Contains(output, "Attached body") || strings.Contains(output, "Other body") || strings.Contains(output, "Resolved body") || strings.Contains(output, "Stale body") {
 		t.Fatalf("selected file received wrong notes:\n%s", output)
+	}
+	m.setFileTreeCursor(len(projection.Rows) - 1)
+	output = m.renderPatch(72, 30, 72)
+	if !strings.Contains(output, "Resolved body") || !strings.Contains(output, "main.go:2") || !strings.Contains(output, "Stale body") {
+		t.Fatalf("bottom notes view missed inactive notes:\n%s", output)
 	}
 }
 
-func TestStaleNotesRowRendersWithoutGitTarget(t *testing.T) {
+func TestNotesRowRendersWithoutGitTarget(t *testing.T) {
 	state := sampleState()
 	state.Files = nil
 	state.SelectedFile = -1
@@ -202,40 +208,40 @@ func TestStaleNotesRowRendersWithoutGitTarget(t *testing.T) {
 	m.setFileTreeCursor(0)
 
 	if _, ok := m.selectedPatchPath(); ok {
-		t.Fatal("stale notes row exposed a Git patch target")
+		t.Fatal("notes row exposed a Git patch target")
 	}
 	output := m.renderPatch(72, 30, 72)
 	if !strings.Contains(output, "gone.go:7") || !strings.Contains(output, "Stale body") {
-		t.Fatalf("stale notes view missing content:\n%s", output)
+		t.Fatalf("notes view missing content:\n%s", output)
 	}
 }
 
-func TestStaleNotesViewScrollsWithoutPatchViewport(t *testing.T) {
+func TestNotesViewCursorSelectsCards(t *testing.T) {
 	state := sampleState()
 	state.Files = nil
 	state.SelectedFile = -1
 	m := NewModel(state)
-	note := uiNote("stale", "gone.go", 7, notes.StateStale, strings.Repeat("line\n", 80))
-	m.noteState.items = []notes.Note{note}
-	m.noteState.selectedID = note.ID
-	m.positionSelectedNote()
+	resolved := uiNote("resolved", "a.go", 2, notes.StateResolved, "resolved")
+	stale := uiNote("stale", "b.go", 7, notes.StateStale, "stale")
+	m.noteState.items = []notes.Note{stale, resolved}
+	m.setFileTreeCursor(0)
 	m.State.FocusPane = model.PanePatch
 
-	for range 200 {
-		m, _ = sendKey(m, "j")
+	m, _ = sendKey(m, "j")
+	if m.noteState.selectedID != resolved.ID {
+		t.Fatalf("first notes-view cursor = %q, want %q", m.noteState.selectedID, resolved.ID)
 	}
-	width, height := m.staleNoteListSize()
-	want := panes.NoteListMaxOffset(m.staleNotes(), width, height)
-	if m.noteState.selectedID != "" || m.noteState.listScroll != want {
-		t.Fatalf("stale scroll selection/offset = %q/%d, want empty/%d", m.noteState.selectedID, m.noteState.listScroll, want)
+	m, _ = sendKey(m, "j")
+	if m.noteState.selectedID != stale.ID {
+		t.Fatalf("second notes-view cursor = %q, want %q", m.noteState.selectedID, stale.ID)
 	}
 	m, _ = sendKey(m, "k")
-	if m.noteState.listScroll != max(want-1, 0) {
-		t.Fatalf("reverse stale scroll remained sticky at %d", m.noteState.listScroll)
+	if m.noteState.selectedID != resolved.ID {
+		t.Fatalf("reverse notes-view cursor = %q, want %q", m.noteState.selectedID, resolved.ID)
 	}
 }
 
-func TestNoteTargetsFollowFilesThenStale(t *testing.T) {
+func TestNoteTargetsFollowOpenFilesThenInactiveNotes(t *testing.T) {
 	m := NewModel(sampleState())
 	first := uiNote("main-1", "main.go", 2, notes.StateOpen, "one")
 	second := uiNote("main-2", "main.go", 2, notes.StateResolved, "two")
@@ -249,7 +255,7 @@ func TestNoteTargetsFollowFilesThenStale(t *testing.T) {
 	for i, note := range targets {
 		got[i] = note.ID
 	}
-	if strings.Join(got, ",") != "main-1,main-2,new-1,stale" {
+	if strings.Join(got, ",") != "main-1,new-1,stale,main-2" {
 		t.Fatalf("note target order = %v", got)
 	}
 }
@@ -325,7 +331,7 @@ func TestComposerOpensAfterDiffModeRoundTrip(t *testing.T) {
 
 	m, _ = sendKey(m, "s")
 	m, _ = sendKey(m, "s")
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	if m.noteState.composer == nil || m.noteState.composer.line != 12 {
 		t.Fatalf("diff-mode round trip lost source anchor: %#v", m.noteState.composer)
 	}
@@ -336,17 +342,17 @@ func TestNoteComposerCreatesMultilineUserNote(t *testing.T) {
 	m := notePatchModel()
 	m.noteState.store = store
 
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	if m.noteState.composer == nil {
-		t.Fatal("C did not open the composer")
+		t.Fatal("c did not open the composer")
 	}
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first")})
-	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("Enter did not save the composer")
+		t.Fatal("Alt+Enter did not save the composer")
 	}
 	m = deepDrain(t, m, cmd)
 
@@ -365,14 +371,14 @@ func TestNoteComposerCreatesMultilineUserNote(t *testing.T) {
 func TestNoteComposerRendersInlineWithControls(t *testing.T) {
 	m := notePatchModel()
 	m.noteState.store = noteActionStore(t)
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("inline draft")})
 
 	patch := m.renderPatch(72, 25, 72)
 	if !strings.Contains(patch, "inline draft") {
 		t.Fatalf("composer was not rendered inline:\n%s", patch)
 	}
-	if status := m.viewStatusBar(); !strings.Contains(status, "Enter save") || !strings.Contains(status, "Alt+Enter newline") || !strings.Contains(status, "Ctrl+G") {
+	if status := m.viewStatusBar(); !strings.Contains(status, "Enter newline") || !strings.Contains(status, "Alt+Enter submit") || !strings.Contains(status, "Ctrl+G") {
 		t.Fatalf("composer controls missing from status: %s", status)
 	}
 }
@@ -392,10 +398,10 @@ func TestNoteComposerScrollsIntoViewAtViewportBottom(t *testing.T) {
 	m.patchViewport.Width = 72
 	m.patchViewport.Height = 5
 	for range 4 {
-		m.patchViewport.MoveSourceCursor(1)
+		m.patchViewport.MoveCursor(1)
 	}
 
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bottom draft")})
 	if output := m.renderPatch(30, 5, 30); !strings.Contains(output, "bottom draft") {
 		t.Fatalf("composer opened below viewport:\n%s", output)
@@ -413,15 +419,15 @@ func TestNoteComposerRejectsHeaderAndEmptyBody(t *testing.T) {
 			Lines:    []model.DiffLine{{Kind: model.LineDeleted, OldNo: intP(1), Text: "removed"}},
 		}},
 	})
-	m, cmd := sendKey(m, "C")
+	m, cmd := sendKey(m, "c")
 	if cmd != nil || m.noteState.composer != nil || !strings.Contains(m.noteState.err, "source line") {
-		t.Fatalf("C without a current-source line = composer %#v, err %q", m.noteState.composer, m.noteState.err)
+		t.Fatalf("c without a current-source line = composer %#v, err %q", m.noteState.composer, m.noteState.err)
 	}
 
 	m.patchViewport = panes.NewPatchViewport(samplePatch())
 	m.patchViewport.ScrollOffset = 2
-	m, _ = sendKey(m, "C")
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = sendKey(m, "c")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	m = updated.(Model)
 	if cmd != nil || m.noteState.composer == nil || !strings.Contains(m.noteState.err, "empty") {
 		t.Fatalf("empty save = cmd %v, composer %#v, err %q", cmd != nil, m.noteState.composer, m.noteState.err)
@@ -436,7 +442,7 @@ func TestNoteEditRequiresSelectionAndEscapeCancels(t *testing.T) {
 		t.Fatalf("E without selection = composer %#v, err %q", m.noteState.composer, m.noteState.err)
 	}
 
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft")})
 	m, cmd = sendKey(m, "esc")
 	if cmd != nil || m.noteState.composer != nil {
@@ -448,15 +454,23 @@ func TestNoteEditRequiresSelectionAndEscapeCancels(t *testing.T) {
 	}
 }
 
-func TestOrdinaryPatchMovementClearsNoteSelection(t *testing.T) {
+func TestPatchCursorSelectsInlineNote(t *testing.T) {
 	m := notePatchModel()
-	note := uiNote("note", "main.go", 2, notes.StateOpen, "body")
+	note := uiNote("note", "main.go", 1, notes.StateOpen, "body")
 	m.noteState.items = []notes.Note{note}
-	m.noteState.selectedID = note.ID
+	m.patchViewport.ScrollOffset = 0
+	m.renderPatch(72, 25, 72)
 
 	m, _ = sendKey(m, "j")
+	if m.noteState.selectedID != note.ID {
+		t.Fatalf("patch cursor selected %q, want note %q", m.noteState.selectedID, note.ID)
+	}
+	m, _ = sendKey(m, "j")
 	if m.noteState.selectedID != "" {
-		t.Fatalf("patch movement kept note selection %q", m.noteState.selectedID)
+		t.Fatalf("moving past note kept selection %q", m.noteState.selectedID)
+	}
+	if line, ok := m.patchViewport.CurrentSourceLine(); !ok || line != 2 {
+		t.Fatalf("source cursor after note = %d, %v; want 2, true", line, ok)
 	}
 }
 
@@ -464,13 +478,13 @@ func TestNoteMutationFailureKeepsComposerText(t *testing.T) {
 	store := noteActionStore(t)
 	m := notePatchModel()
 	m.noteState.store = store
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("keep me")})
 	if err := os.Remove(filepath.Join(store.Worktree(), "main.go")); err != nil {
 		t.Fatal(err)
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	m = updated.(Model)
 	m = deepDrain(t, m, cmd)
 	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "keep me" || m.noteState.err == "" {
@@ -540,7 +554,7 @@ func TestNotePersistenceAcrossModels(t *testing.T) {
 	}
 	m := notePatchModel()
 	m.noteState.store = store
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("survives restart")})
 	m = saveNoteComposer(t, m)
 
@@ -591,6 +605,9 @@ func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
 	if m.noteState.items[0].State != notes.StateResolved {
 		t.Fatalf("resolved state = %q", m.noteState.items[0].State)
 	}
+	if row, ok := m.currentFileTreeRow(); !ok || row.Kind != panes.FileTreeRowNotes {
+		t.Fatalf("resolved note did not move to Notes view: %#v", row)
+	}
 
 	m, cmd = sendKey(m, "D")
 	if cmd != nil || !m.noteState.confirmDelete {
@@ -638,10 +655,10 @@ func sendNoteKey(m Model, key tea.KeyMsg) Model {
 
 func saveNoteComposer(t *testing.T, m Model) Model {
 	t.Helper()
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("Enter did not produce a save command")
+		t.Fatal("Alt+Enter did not produce a save command")
 	}
 	return deepDrain(t, m, cmd)
 }

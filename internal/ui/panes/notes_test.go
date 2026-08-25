@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/model"
@@ -50,21 +51,15 @@ func TestPatchViewportDoesNotAttachNoteToDeletedOnlyLine(t *testing.T) {
 	}
 }
 
-func TestPatchViewportResolvedNoteExpandsOnlyWhenSelected(t *testing.T) {
-	note := noteFixture("note-1", 2, notes.StateResolved, "first line\nsecond line")
+func TestPatchViewportOmitsResolvedNotes(t *testing.T) {
+	note := noteFixture("note-1", 2, notes.StateResolved, "resolved body")
 	vp := NewPatchViewport(notePatch())
 	vp.Width = 60
-	vp.Height = 20
 	vp.Height = 30
 	vp.SetNotes([]notes.Note{note}, "", nil)
 
-	if output := ansi.Strip(vp.Render()); strings.Contains(output, "second line") {
-		t.Fatalf("unselected resolved note was expanded:\n%s", output)
-	}
-
-	vp.SetNotes([]notes.Note{note}, note.ID, nil)
-	if output := ansi.Strip(vp.Render()); !strings.Contains(output, "second line") {
-		t.Fatalf("selected resolved note remained collapsed:\n%s", output)
+	if output := ansi.Strip(vp.Render()); strings.Contains(output, note.Body) {
+		t.Fatalf("resolved note remained inline:\n%s", output)
 	}
 }
 
@@ -117,12 +112,81 @@ func TestPatchViewportRendersSourceCursorOnCurrentLine(t *testing.T) {
 	vp.Height = 20
 
 	first := vp.Render()
-	vp.MoveSourceCursor(1)
+	vp.MoveCursor(1)
 	second := vp.Render()
-	firstCursor := renderedLine(ansi.Strip(first), "▌")
-	secondCursor := renderedLine(ansi.Strip(second), "▌")
+	firstCursor := renderedLine(first, "package main")
+	secondCursor := renderedLine(second, `import "os"`)
 	if !strings.Contains(firstCursor, "package main") || !strings.Contains(secondCursor, `import "os"`) {
 		t.Fatalf("source cursor did not move between current lines: before=%q after=%q", firstCursor, secondCursor)
+	}
+	for _, line := range []string{firstCursor, secondCursor} {
+		if plain := ansi.Strip(line); !strings.HasPrefix(plain, "▌") || lipgloss.Width(line) != vp.Width {
+			t.Fatalf("cursor row was not full-width highlighted: %q", line)
+		}
+		if prefix := stylePrefix(selectedStyle); prefix != "" && !strings.Contains(line, prefix) {
+			t.Fatalf("cursor row missing selected background: %q", line)
+		}
+	}
+}
+
+func TestPatchViewportSideBySideCursorStartsOnLeft(t *testing.T) {
+	vp := NewPatchViewport(notePatch())
+	vp.DiffMode = model.PatchDiffModeSideBySide
+	vp.Width = 72
+	vp.Height = 20
+
+	line := renderedLine(vp.Render(), "package main")
+	if plain := ansi.Strip(line); !strings.HasPrefix(plain, "▌") || lipgloss.Width(line) != vp.Width {
+		t.Fatalf("side-by-side cursor was not on the left full row: %q", line)
+	}
+}
+
+func TestPatchViewportCursorSelectsNotes(t *testing.T) {
+	note := noteFixture("note-1", 1, notes.StateOpen, "select me")
+	vp := NewPatchViewport(notePatch())
+	vp.Width = 60
+	vp.Height = 20
+	vp.SetNotes([]notes.Note{note}, "", nil)
+	vp.Render()
+
+	if selected := vp.MoveCursor(1); selected != note.ID {
+		t.Fatalf("selected note = %q, want %q", selected, note.ID)
+	}
+	line := renderedLine(vp.Render(), note.Body)
+	if plain := ansi.Strip(line); !strings.HasPrefix(plain, "▌") || lipgloss.Width(line) != vp.Width {
+		t.Fatalf("selected note row was not full-width highlighted: %q", line)
+	}
+	if selected := vp.MoveCursor(1); selected != "" {
+		t.Fatalf("moving to next source line kept note selected: %q", selected)
+	}
+	if line, ok := vp.CurrentSourceLine(); !ok || line != 2 {
+		t.Fatalf("source line after note = %d, %v; want 2, true", line, ok)
+	}
+}
+
+func TestPatchViewportIndentsNotesPastLineNumbers(t *testing.T) {
+	note := noteFixture("note-1", 2, notes.StateOpen, "indented")
+	for _, mode := range []model.PatchDiffMode{model.PatchDiffModeUnified, model.PatchDiffModeSideBySide} {
+		vp := NewPatchViewport(notePatch())
+		vp.DiffMode = mode
+		vp.Width = 72
+		vp.Height = 20
+		vp.SetNotes([]notes.Note{note}, "", nil)
+
+		line := ansi.Strip(renderedLine(vp.Render(), "Agent · open"))
+		indent := strings.Index(line, "╭")
+		if mode == model.PatchDiffModeUnified {
+			want := lipgloss.Width(formatGutter(nil, nil, vp.gutterDigits)) + 1
+			if indent != want {
+				t.Fatalf("unified note indent = %d, want %d: %q", indent, want, line)
+			}
+		} else {
+			left, _ := sideBySideColumnWidths(vp.Width)
+			want := left + lipgloss.Width(sideBySideSeparator()) + lipgloss.Width(formatSideGutter(nil, vp.gutterDigits)) + 1
+			if indent != want {
+				t.Fatalf("side-by-side note indent = %d, want %d: %q", indent, want, line)
+			}
+		}
 	}
 }
 
@@ -139,7 +203,7 @@ func TestPatchViewportSourceCursorDistinguishesFolderLines(t *testing.T) {
 	if strings.Count(first, "▌") != 1 || !strings.Contains(renderedLine(first, "▌"), "first") {
 		t.Fatalf("initial folder cursor is ambiguous:\n%s", first)
 	}
-	vp.MoveSourceCursor(1)
+	vp.MoveCursor(1)
 	second := ansi.Strip(vp.Render())
 	if strings.Count(second, "▌") != 1 || !strings.Contains(renderedLine(second, "▌"), "second") {
 		t.Fatalf("folder cursor did not reach second file:\n%s", second)
@@ -159,7 +223,7 @@ func TestPatchViewportKeepsSourceCursorVisibleAcrossDiffModes(t *testing.T) {
 	vp.Width = 80
 	vp.Height = 6
 	for range 10 {
-		vp.MoveSourceCursor(1)
+		vp.MoveCursor(1)
 	}
 
 	vp.SetDiffMode(model.PatchDiffModeUnified)
@@ -211,7 +275,7 @@ func TestPatchViewportNoteRefreshKeepsSourceCursorVisible(t *testing.T) {
 	vp := NewPatchViewport(notePatch())
 	vp.Width = 60
 	vp.Height = 3
-	vp.MoveSourceCursor(1)
+	vp.MoveCursor(1)
 	vp.Render()
 
 	vp.SetNotes([]notes.Note{noteFixture("inserted", 1, notes.StateOpen, strings.Repeat("new card row\n", 10))}, "", nil)
@@ -222,7 +286,7 @@ func TestPatchViewportNoteRefreshKeepsSourceCursorVisible(t *testing.T) {
 
 func renderedLine(output, body string) string {
 	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, body) {
+		if strings.Contains(ansi.Strip(line), body) {
 			return line
 		}
 	}

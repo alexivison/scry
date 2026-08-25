@@ -84,10 +84,11 @@ scry note sync
 scry note remove <note-id>
 ```
 
-Scry shows open and resolved notes inline with the diff and keeps displaced
-notes in a `Stale notes` view. Use `C` to create a note on the current source
-line, `E`, `R`, and `D` to edit, resolve, or delete the selected note, and
-`{` / `}` to move between notes. The existing `r` refresh also loads notes
+Scry shows open notes inline with the diff and keeps resolved and stale notes
+in a bottom `Notes` view. Use `c` to create a note on the selected source line,
+`j` / `k` to move across source lines and inline notes, `E`, `R`, and `D` to
+edit, resolve, or delete the selected note, and `{` / `}` to move between notes.
+The existing `r` refresh also loads notes
 created by an agent through the CLI. Anchor and state repair remain CLI
 operations.
 
@@ -95,7 +96,7 @@ operations.
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Navigate lists / move the current-source cursor |
+| `j` / `k` | Navigate lists / move across source lines and notes |
 | `l` | Expand folder / select file / drill into worktree |
 | `Enter` | Focus selected diff / drill into worktree |
 | `h` / `Esc` | Back to file list / dashboard |
@@ -110,14 +111,13 @@ operations.
 | `b` | Cycle compare basis |
 | `Tab` | Toggle split/modal layout |
 | `o` | Open selected file in nvim |
-| `c` | Generate commit message (when `--commit`) |
+| `c` | Create a note in the patch / generate a commit from the file list |
 | `e` | Edit generated commit message |
 | `r` | Refresh / regenerate commit message |
 | `X` | Discard selected file's changes (modal y/N confirmation) |
-| `C` | Create a note on the current source line |
 | `E` / `R` / `D` | Edit / resolve / delete the selected note |
-| `Enter` | Save the note composer |
-| `Alt+Enter` | Insert a newline in the note composer |
+| `Enter` | Insert a newline in the note composer |
+| `Alt+Enter` | Submit the note composer |
 | `Ctrl+G` | Open the note composer in `$EDITOR` |
 | `?` | Show help |
 | `q` | Quit |

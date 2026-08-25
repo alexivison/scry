@@ -58,7 +58,14 @@ func RenderNoteList(items []notes.Note, selectedID string, draft *NoteDraftView,
 		if draft != nil && draft.NoteID == note.ID {
 			note.Body = draft.Body
 		}
-		rows = append(rows, renderNoteCard(note, width, note.ID == selectedID)...)
+		selected := note.ID == selectedID
+		card := renderNoteCard(note, width, selected)
+		if selected {
+			for i := range card {
+				card[i] = renderCursorRow(card[i], width)
+			}
+		}
+		rows = append(rows, card...)
 	}
 	if len(rows) == 0 || height <= 0 {
 		return ""
@@ -116,7 +123,7 @@ func noteCardTitle(note notes.Note, width int, style lipgloss.Style) string {
 		author = strings.ToUpper(author[:1]) + author[1:]
 	}
 	title := fmt.Sprintf("─ %s · %s ", author, note.State)
-	if note.State == notes.StateStale {
+	if note.State != notes.StateOpen {
 		title = fmt.Sprintf("─ %s · %s · %s:%d ", author, note.State, note.File, note.Line)
 	}
 	inner := width - 2

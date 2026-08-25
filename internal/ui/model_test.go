@@ -284,8 +284,8 @@ func TestModelPlumbsColorProfileIntoSyntaxLineCache(t *testing.T) {
 	none.patchViewport.Height = 1
 	none.patchViewport.GutterVisible = false
 	gotNone := none.patchViewport.Render()
-	if gotNone != "▌"+body {
-		t.Fatalf("ColorNone rendered line = %q, want cursor and raw context body %q", gotNone, "▌"+body)
+	if !strings.HasPrefix(gotNone, "▌"+body) || lipgloss.Width(gotNone) != none.patchViewport.Width {
+		t.Fatalf("ColorNone rendered line = %q, want a full-width cursor row", gotNone)
 	}
 	if strings.Contains(gotNone, "\x1b[") {
 		t.Fatalf("ColorNone rendered syntax escapes: %q", gotNone)

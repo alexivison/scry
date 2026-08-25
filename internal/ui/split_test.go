@@ -583,7 +583,7 @@ func TestModalToSplitPreservesLoadedSourceCursor(t *testing.T) {
 	m.State.FocusPane = model.PanePatch
 	m.State.Patches["main.go"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &patch}
 	m.patchViewport = panes.NewPatchViewport(patch)
-	m.patchViewport.MoveSourceCursor(1)
+	m.patchViewport.MoveCursor(1)
 	m.width = 120
 	m.height = 30
 

@@ -16,9 +16,9 @@
 - Use the existing concrete `*notes.Store`; do not add another storage layer, repository file, Git integration, network service, or one-implementation interface.
 - TUI creation always writes author `user`; TUI editing changes only `body`; TUI resolution changes only `state` to `resolved`.
 - The TUI never changes anchors, reopens resolved notes, or resolves stale notes.
-- Cards use Scry's current theme tokens and appear after current-source lines in unified and side-by-side patches.
+- Open cards use Scry's current theme tokens and appear after current-source lines without covering line-number gutters. Resolved and stale cards appear in the bottom Notes view.
 - `{` and `}` replace their existing hunk aliases; `n` and `p` remain hunk navigation.
-- `C` creates, `E` edits, `R` resolves, and `D` requests confirmed deletion. Composer controls are Enter to save, `Alt+Enter` for a newline, `Ctrl+G`, and Esc.
+- `c` creates, `E` edits, `R` resolves, and `D` requests confirmed deletion. Composer controls are Enter for a newline, `Alt+Enter` to submit, `Ctrl+G`, and Esc.
 - Note I/O must run in `tea.Cmd` functions. A note failure must not block diff review or discard the last good snapshot/draft.
 - Do not add a note watcher, dashboard note counts, a note theme, timestamps, replies, or new dependencies.
 
@@ -128,7 +128,7 @@
 
 - [ ] **Step 1: Write failing pure rendering and projection tests.**
 
-  Cover one open note after the final wrapped row of its matching `NewNo`, several cards on one line in creation/ID order, no card for an old-only row, full-width cards in both diff modes, resolved collapse/selected expansion, and card height in `TotalLines`. Add file-list tests for a final `Stale notes (N)` row, including a worktree with zero changed files, and assert its `FileIndex` remains `-1`.
+  Cover one open note after the final wrapped row of its matching `NewNo`, several cards on one line in creation/ID order, no card for an old-only row, gutter-aligned cards in both diff modes, resolved-note removal from inline diffs, and card height in `TotalLines`. Add file-list tests for a final `Notes (N)` row, including a worktree with zero changed files, and assert its `FileIndex` remains `-1`.
 
 - [ ] **Step 2: Run the pane tests and verify they fail.**
 
@@ -153,7 +153,7 @@
 
   type FileListOpts struct {
       // existing fields
-      StaleNotes int
+      NoteCount int
   }
 
   func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collapsed map[string]bool, cursor, staleNotes int) FileTreeProjection
@@ -189,7 +189,7 @@
 
 - [ ] **Step 5: Feed selected-file notes and stale count from the model.**
 
-  Filter attached cards by selected real file and states `open`/`resolved`. Use all `stale` items for the virtual view. Add the stale count to `fileListOpts` and every model projection call. When the current row is `FileTreeRowNotes`, render `RenderNoteList` and bypass patch loading, source editing, discard, commit targeting, and `C`.
+  Filter attached cards by selected real file and state `open`. Use resolved and stale items for the virtual view. Add the inactive count to `fileListOpts` and every model projection call. When the current row is `FileTreeRowNotes`, render `RenderNoteList` and bypass patch loading, source editing, discard, commit targeting, and `c`.
 
 - [ ] **Step 6: Run focused tests and commit.**
 
@@ -208,13 +208,13 @@
 **Interfaces:**
 
 - Consumes: Task 1 note state/store and Task 2 card/viewport APIs.
-- Produces: direct `C`, `{`, `}`, `E`, `R`, and `D` behavior; inline Bubbles textarea; confirmed deletion; mutation/editor completion messages.
+- Produces: direct `c`, `j`/`k`, `{`, `}`, `E`, `R`, and `D` behavior; inline Bubbles textarea; confirmed deletion; mutation/editor completion messages.
 
 - [ ] **Step 1: Write failing interaction tests before production handlers.**
 
-  Test that `{`/`}` select notes in file/source/creation/ID order, traverse several notes on one line and real-file boundaries, include stale notes last, stop at boundaries, and clear selection on ordinary file/patch movement. Test `C` only on `CurrentSourceLine`; `E` copies only the selected body into the composer; `R` submits only `StateResolved`; and `D` requires confirmation before removal. Assert incompatible or missing targets produce status without a command.
+  Test that `j`/`k` traverses source rows and inline cards, while `{`/`}` selects notes in file/source/creation/ID order across real-file boundaries and the Notes view. Test `c` only on `CurrentSourceLine`; `E` copies only the selected body into the composer; `R` submits only `StateResolved`; and `D` requires confirmation before removal. Assert incompatible or missing targets produce status without a command.
 
-  Add composer tests for Enter save, multiline `Alt+Enter`, `Ctrl+G`, Esc, create author `user`, body-only edit, empty-body failure preservation, mutation failure preservation, and editor failure restoring the pre-launch draft.
+  Add composer tests for Enter newline, `Alt+Enter` submit, `Ctrl+G`, Esc, create author `user`, body-only edit, empty-body failure preservation, mutation failure preservation, and editor failure restoring the pre-launch draft.
 
 - [ ] **Step 2: Run interaction tests and verify they fail.**
 
@@ -250,11 +250,11 @@
   }
   ```
 
-  Add the textarea and draft/delete/loading flags to `noteUIState`. While a draft is active, route all keys to the composer before global commands: Esc cancels, Enter saves, `alt+enter` inserts a newline, `ctrl+g` starts the editor, and every other key updates the textarea. Keep the draft open until a mutation succeeds.
+  Add the textarea and draft/delete/loading flags to `noteUIState`. While a draft is active, route all keys to the composer before global commands: Esc cancels, Enter inserts a newline, `alt+enter` submits, `ctrl+g` starts the editor, and every other key updates the textarea. Keep the draft open until a mutation succeeds.
 
 - [ ] **Step 4: Implement stable cross-file note selection.**
 
-  Build navigation targets from currently attached `open`/`resolved` notes in file-list order, then append stale notes. Sort same-file notes by line, `CreatedAt`, and ID. Store only the selected ID. Moving to another real file updates the file-tree cursor, starts the normal patch load, and scrolls after `PatchLoadedMsg`; moving to stale selects the virtual row and uses `NoteListOffset`.
+  Build cross-file navigation targets from attached open notes in file-list order, then append resolved and stale notes from the Notes view. Within a patch, `j`/`k` traverses source lines and whole open-note cards with one full-row cursor. Sort same-file notes by line, `CreatedAt`, and ID.
 
   Replace `{`/`}` hunk aliases in file and patch handlers with note navigation. Retain `n`/`p` hunk navigation. Ordinary movement calls one `clearNoteSelection` helper.
 
@@ -297,7 +297,7 @@
 
 - [ ] **Step 1: Write failing help, footer, and status tests.**
 
-  Assert help includes the direct note commands and composer controls, patch footer advertises `C` and `{`/`}`, note errors appear without hiding higher-priority destructive-operation errors, and successful note actions clear stale note status. Add a model-level persistence test that creates through the TUI command, constructs a second store/model, and reads the same note.
+  Assert help includes the direct note commands and composer controls, patch footer advertises `c` and `{`/`}`, note errors appear without hiding higher-priority destructive-operation errors, and successful note actions clear stale note status. Add a model-level persistence test that creates through the TUI command, constructs a second store/model, and reads the same note.
 
 - [ ] **Step 2: Run the focused tests and verify they fail.**
 
@@ -311,7 +311,7 @@
 
 - [ ] **Step 3: Add concise help, footer, and README documentation.**
 
-  Document `C`, `{`/`}`, `E`, `R`, `D`, and composer keys in existing help sections. Add one README paragraph after the persistent notes CLI section explaining that Scry shows worktree notes inline, `r` reloads agent notes, and reattachment/state repair remains a CLI operation. Do not promise watch mode or dashboard counts.
+  Document `c`, `j`/`k`, `{`/`}`, `E`, `R`, `D`, and composer keys in existing help sections. Add one README paragraph after the persistent notes CLI section explaining that Scry shows worktree notes inline, `r` reloads agent notes, and reattachment/state repair remains a CLI operation. Do not promise watch mode or dashboard counts.
 
 - [ ] **Step 4: Run automated verification.**
 

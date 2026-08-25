@@ -14,7 +14,7 @@ func TestNoteComposerCtrlGReturnsToDraft(t *testing.T) {
 	t.Setenv("EDITOR", "true")
 	m := notePatchModel()
 	m.noteState.store = noteActionStore(t)
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	m.noteState.composer.input.SetValue("before")
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
@@ -32,7 +32,7 @@ func TestNoteComposerCtrlGReturnsToDraft(t *testing.T) {
 func TestNoteEditorFailurePreservesDraft(t *testing.T) {
 	m := notePatchModel()
 	m.noteState.store = noteActionStore(t)
-	m, _ = sendKey(m, "C")
+	m, _ = sendKey(m, "c")
 	m.noteState.composer.input.SetValue("before")
 
 	updated, _ := m.Update(noteEditorClosedMsg{err: errors.New("editor exited")})

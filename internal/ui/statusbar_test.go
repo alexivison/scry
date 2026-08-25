@@ -141,7 +141,7 @@ func TestStatusBarDestructiveErrorPrecedesNoteError(t *testing.T) {
 func TestPatchFooterAdvertisesNotes(t *testing.T) {
 	m := notePatchModel()
 	footer := m.patchFooter()
-	if !strings.Contains(footer, "C") || !strings.Contains(footer, "}/{") {
+	if !strings.Contains(footer, "c") || !strings.Contains(footer, "}/{") {
 		t.Fatalf("patch footer missing note keys: %q", footer)
 	}
 }

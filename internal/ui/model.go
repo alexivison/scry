@@ -439,8 +439,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.moveNoteSelection(1)
 			case "{":
 				return m.moveNoteSelection(-1)
-			case "C":
-				return m.startNoteComposer("")
+			case "c":
+				if m.State.FocusPane == model.PanePatch && m.pendingKey == 0 {
+					return m.startNoteComposer("")
+				}
 			case "E":
 				return m.editSelectedNote()
 			case "R":
@@ -622,7 +624,7 @@ func reconcileFileTreeToSelection(state *model.AppState) {
 }
 
 func (m Model) fileTreeProjection() panes.FileTreeProjection {
-	return panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.FileTreeCursor, m.staleNoteCount())
+	return panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.FileTreeCursor, m.inactiveNoteCount())
 }
 
 func (m Model) fileTreeRows() []panes.FileTreeRow {
@@ -688,7 +690,7 @@ func (m Model) folderFiles(folder string) []model.FileSummary {
 }
 
 func (m *Model) setFileTreeCursor(cursor int) {
-	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor, m.staleNoteCount())
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor, m.inactiveNoteCount())
 	m.State.FileTreeCursor = proj.Cursor
 	m.State.SelectedFile = proj.SelectedFile
 	if len(proj.Rows) > 0 && proj.Rows[proj.Cursor].Kind == panes.FileTreeRowNotes {
@@ -712,7 +714,7 @@ func (m *Model) syncFileTreeCursorFromSelectedFile() {
 }
 
 func (m *Model) setFileTreeCursorByPath(path string, fallback int) {
-	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, fallback, m.staleNoteCount())
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, fallback, m.inactiveNoteCount())
 	cursor := proj.Cursor
 	if path != "" {
 		for i, row := range proj.Rows {
@@ -1348,6 +1350,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.Width = m.width
 	vp.Height = m.height - 1
 	vp.GutterVisible = m.State.ShowLineNumbers && m.width >= 60
+	vp.ColorEnabled = m.colorProfile != terminal.ColorNone
 	vp.LineMode = m.State.PatchLineMode
 	vp.DiffMode = m.State.PatchDiffMode
 	vp.XOffset = 0
@@ -1417,15 +1420,15 @@ func buildFallback(summary model.FileSummary, err error) string {
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	row, _ := m.currentFileTreeRow()
-	staleNotes := row.Kind == panes.FileTreeRowNotes
-	if staleNotes {
+	notesView := row.Kind == panes.FileTreeRowNotes
+	if notesView {
 		switch msg.String() {
 		case "h", "esc", "n", "p", "N", "enter", "/":
 			m.noteState.selectedID = ""
 		}
 	} else {
 		switch msg.String() {
-		case "g", "G", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "esc", "n", "p", "N", "enter", "/":
+		case "g", "G", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "esc", "n", "p", "N", "enter", "/":
 			m.noteState.selectedID = ""
 		}
 	}
@@ -1435,7 +1438,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingKey = 0
 		switch {
 		case pending == 'g' && msg.String() == "g":
-			if staleNotes {
+			if notesView {
 				m.noteState.selectedID = ""
 				m.noteState.listScroll = 0
 			} else if m.patchViewport != nil {
@@ -1466,66 +1469,60 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchNotFound = ""
 		}
 	case "j", "down":
-		if staleNotes {
-			m.scrollStaleNotes(1)
-			return m, nil
+		if notesView {
+			return m.moveInactiveNoteSelection(1)
 		}
 		if m.patchViewport != nil {
-			m.patchViewport.MoveSourceCursor(1)
+			m.noteState.selectedID = m.patchViewport.MoveCursor(1)
 		}
 	case "k", "up":
-		if staleNotes {
-			m.scrollStaleNotes(-1)
-			return m, nil
+		if notesView {
+			return m.moveInactiveNoteSelection(-1)
 		}
 		if m.patchViewport != nil {
-			m.patchViewport.MoveSourceCursor(-1)
+			m.noteState.selectedID = m.patchViewport.MoveCursor(-1)
 		}
 	case "s":
 		m.togglePatchDiffMode()
-	case "c":
-		if m.State.CommitEnabled && m.commitProvider != nil {
-			return m.startCommitGeneration()
-		}
 	case "g":
 		m.pendingKey = 'g'
 		m.pendingKeySeq++
 		return m, m.pendingKeyTimeout()
 	case "G":
-		if staleNotes {
+		if notesView {
 			m.noteState.selectedID = ""
-			width, height := m.staleNoteListSize()
-			m.noteState.listScroll = panes.NoteListMaxOffset(m.staleNotes(), width, height)
+			width, height := m.inactiveNoteListSize()
+			m.noteState.listScroll = panes.NoteListMaxOffset(m.inactiveNotes(), width, height)
 		} else if m.patchViewport != nil {
 			m.patchViewport.ScrollToBottom()
 		}
 	case "ctrl+d":
-		if staleNotes {
-			m.scrollStaleNotes(max(m.height/2, 1))
+		if notesView {
+			m.scrollInactiveNotes(max(m.height/2, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
 			m.patchViewport.HalfPageDown()
 		}
 	case "ctrl+u":
-		if staleNotes {
-			m.scrollStaleNotes(-max(m.height/2, 1))
+		if notesView {
+			m.scrollInactiveNotes(-max(m.height/2, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
 			m.patchViewport.HalfPageUp()
 		}
 	case "ctrl+f":
-		if staleNotes {
-			m.scrollStaleNotes(max(m.height-3, 1))
+		if notesView {
+			m.scrollInactiveNotes(max(m.height-3, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
 			m.patchViewport.PageDown()
 		}
 	case "ctrl+b":
-		if staleNotes {
-			m.scrollStaleNotes(-max(m.height-3, 1))
+		if notesView {
+			m.scrollInactiveNotes(-max(m.height-3, 1))
 			return m, nil
 		}
 		if m.patchViewport != nil {
@@ -1556,9 +1553,9 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) scrollStaleNotes(delta int) {
-	items := m.staleNotes()
-	width, height := m.staleNoteListSize()
+func (m *Model) scrollInactiveNotes(delta int) {
+	items := m.inactiveNotes()
+	width, height := m.inactiveNoteListSize()
 	if offset, ok := panes.NoteListOffset(items, m.noteState.selectedID, width); ok {
 		m.noteState.listScroll = offset
 	}
@@ -1566,7 +1563,7 @@ func (m *Model) scrollStaleNotes(delta int) {
 	m.noteState.listScroll = min(max(m.noteState.listScroll+delta, 0), panes.NoteListMaxOffset(items, width, height))
 }
 
-func (m Model) staleNoteListSize() (int, int) {
+func (m Model) inactiveNoteListSize() (int, int) {
 	outerWidth := m.width
 	if m.State.Layout == model.LayoutSplit && m.widthTierNow() >= terminal.WidthCompactSplit {
 		availableWidth := m.width - 1
@@ -1754,8 +1751,8 @@ func (m Model) viewPatch() string {
 // outerWidth is the pane's outer width (including borders) for gutter decisions.
 func (m Model) renderPatch(width, height, outerWidth int) string {
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
-		offset, _ := panes.NoteListOffset(m.staleNotes(), m.noteState.selectedID, width)
-		return panes.RenderNoteList(m.staleNotes(), m.noteState.selectedID, m.noteDraftView(), width, height, offset+m.noteState.listScroll)
+		offset, _ := panes.NoteListOffset(m.inactiveNotes(), m.noteState.selectedID, width)
+		return panes.RenderNoteList(m.inactiveNotes(), m.noteState.selectedID, m.noteDraftView(), width, height, offset+m.noteState.listScroll)
 	}
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
@@ -1921,11 +1918,11 @@ func (m Model) viewHelp() string {
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
 		"  X         discard selected file's changes",
-		"  C/E/R/D   create/edit/resolve/delete note",
-		"  Enter save · Alt+Enter newline · Ctrl+G editor · Esc cancel composer",
+		"  c/E/R/D   create/edit/resolve/delete note",
+		"  Enter newline · Alt+Enter submit · Ctrl+G editor · Esc cancel composer",
 	)
 	if m.State.CommitEnabled {
-		help = append(help, "  c         generate commit message")
+		help = append(help, "  c         generate commit message (file list)")
 	}
 	help = append(help,
 		"  ?/Esc     close help",
@@ -2027,7 +2024,7 @@ func (m Model) fileListOpts() panes.FileListOpts {
 		Collapsed:        m.State.FileTreeCollapsed,
 		Cursor:           m.State.FileTreeCursor,
 		UseCursor:        true,
-		StaleNotes:       m.staleNoteCount(),
+		NoteCount:        m.inactiveNoteCount(),
 	}
 }
 
@@ -2083,7 +2080,7 @@ func (m Model) patchScrollLine(innerHeight int) int {
 // patchTitle returns the title for the patch pane (current filename).
 func (m Model) patchTitle() string {
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
-		return "Stale notes"
+		return "Notes"
 	}
 	if path, ok := m.selectedPatchPath(); ok {
 		return path
@@ -2105,7 +2102,7 @@ func (m Model) patchFooter() string {
 			pct = 100
 		}
 	}
-	return fmt.Sprintf("%s · %d%% · C note · }/{ navigate", hunkInfo, pct)
+	return fmt.Sprintf("%s · %d%% · c note · }/{ navigate", hunkInfo, pct)
 }
 
 // syncFileListScroll adjusts fileListScroll so the selected file stays visible

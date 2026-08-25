@@ -132,7 +132,7 @@ func (m *Model) positionSelectedNote() {
 		m.noteState.listScroll = 0
 		return
 	}
-	if note.State == notes.StateStale {
+	if note.State != notes.StateOpen {
 		proj := m.fileTreeProjection()
 		m.setFileTreeCursor(len(proj.Rows) - 1)
 		return
@@ -143,7 +143,7 @@ func (m *Model) positionSelectedNote() {
 func (m Model) attachedNotes(path string) []notes.Note {
 	items := make([]notes.Note, 0)
 	for _, note := range m.noteState.items {
-		if note.File == path && (note.State == notes.StateOpen || note.State == notes.StateResolved) {
+		if note.File == path && note.State == notes.StateOpen {
 			items = append(items, note)
 		}
 	}
@@ -151,20 +151,20 @@ func (m Model) attachedNotes(path string) []notes.Note {
 	return items
 }
 
-func (m Model) staleNotes() []notes.Note {
+func (m Model) inactiveNotes() []notes.Note {
 	items := make([]notes.Note, 0)
 	for _, note := range m.noteState.items {
-		if note.State == notes.StateStale {
+		if note.State != notes.StateOpen {
 			items = append(items, note)
 		}
 	}
 	return items
 }
 
-func (m Model) staleNoteCount() int {
+func (m Model) inactiveNoteCount() int {
 	count := 0
 	for _, note := range m.noteState.items {
-		if note.State == notes.StateStale {
+		if note.State != notes.StateOpen {
 			count++
 		}
 	}
@@ -173,13 +173,12 @@ func (m Model) staleNoteCount() int {
 
 func (m Model) noteTargets() []notes.Note {
 	byFile := make(map[string][]notes.Note)
-	var stale []notes.Note
+	var inactive []notes.Note
 	for _, note := range m.noteState.items {
-		switch note.State {
-		case notes.StateOpen, notes.StateResolved:
+		if note.State == notes.StateOpen {
 			byFile[note.File] = append(byFile[note.File], note)
-		case notes.StateStale:
-			stale = append(stale, note)
+		} else {
+			inactive = append(inactive, note)
 		}
 	}
 
@@ -193,8 +192,8 @@ func (m Model) noteTargets() []notes.Note {
 		sortNotes(items)
 		targets = append(targets, items...)
 	}
-	sortNotes(stale)
-	return append(targets, stale...)
+	sortNotes(inactive)
+	return append(targets, inactive...)
 }
 
 func sortNotes(items []notes.Note) {
@@ -243,7 +242,7 @@ func (m Model) moveNoteSelection(delta int) (tea.Model, tea.Cmd) {
 	m.noteState.selectedID = target.ID
 	m.noteState.err = ""
 	m.State.FocusPane = model.PanePatch
-	if target.State == notes.StateStale {
+	if target.State != notes.StateOpen {
 		proj := m.fileTreeProjection()
 		m.setFileTreeCursor(len(proj.Rows) - 1)
 		return m, nil
@@ -258,6 +257,34 @@ func (m Model) moveNoteSelection(delta int) (tea.Model, tea.Cmd) {
 	m = updated.(Model)
 	m.syncSelectedNoteViewport()
 	return m, cmd
+}
+
+func (m Model) moveInactiveNoteSelection(delta int) (tea.Model, tea.Cmd) {
+	items := m.inactiveNotes()
+	sortNotes(items)
+	if len(items) == 0 {
+		return m, nil
+	}
+	index := -1
+	for i, note := range items {
+		if note.ID == m.noteState.selectedID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		if delta < 0 {
+			index = len(items) - 1
+		} else {
+			index = 0
+		}
+	} else if next := index + delta; next >= 0 && next < len(items) {
+		index = next
+	}
+	m.noteState.selectedID = items[index].ID
+	m.noteState.listScroll = 0
+	m.noteState.err = ""
+	return m, nil
 }
 
 func (m *Model) syncSelectedNoteViewport() {
@@ -350,10 +377,8 @@ func (m Model) updateNoteComposer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.noteState.composer = nil
 		m.noteState.err = ""
 		return m, nil
-	case "enter":
-		return m.saveNoteComposer()
 	case "alt+enter":
-		msg.Alt = false
+		return m.saveNoteComposer()
 	case "ctrl+g":
 		return m.startNoteEditor()
 	}

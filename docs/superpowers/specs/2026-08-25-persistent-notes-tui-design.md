@@ -46,16 +46,16 @@ scroll math. The existing `{` / `}` hunk aliases are reassigned to notes.
 
 `}` selects and reveals the next note, and `{` selects and reveals the previous
 note. Navigation follows file-list order, then source line, creation time, and
-note ID. It includes several notes on one line and the stale-notes entry, can
+note ID. It includes several notes on one line and the bottom Notes entry, can
 load another file when needed, and stops at the first or last note rather than
-wrapping. Ordinary patch or file navigation clears the note selection so a
-later action cannot target an off-screen card accidentally.
+wrapping. File changes and non-cursor patch navigation clear the note selection
+so a later action cannot target an off-screen card accidentally.
 
-Scry renders a virtual `Stale notes (N)` entry after the real worktree files
-when at least one stale note exists. It is a file-list presentation row, not a
-fake `model.FileSummary`, so Git operations cannot target it. Selecting it
-shows every stale note in the active worktree, including notes for files that
-no longer appear in the diff. No stale entry appears on the worktree dashboard.
+Scry renders a virtual `Notes (N)` entry after the real worktree files when at
+least one resolved or stale note exists. It is a file-list presentation row,
+not a fake `model.FileSummary`, so Git operations cannot target it. Selecting
+it shows every resolved and stale note in the active worktree. No notes entry
+appears on the worktree dashboard.
 
 ## Card Presentation
 
@@ -64,9 +64,11 @@ interaction reference only.
 
 - The header identifies `User` or `Agent` and the note state.
 - Open notes show their complete body.
-- Resolved notes are muted and collapsed until selected.
+- Resolved notes leave the inline diff and appear muted in the Notes view.
 - Stale notes show their last recorded `file:line` and remain readable.
-- The selected card uses Scry's existing focused accent.
+- The selected source row or card uses Scry's existing full-row highlight.
+- Inline cards begin after the line-number gutter; side-by-side cards align to
+  the current-source body.
 - Multiple cards on one line render in stable navigation order.
 
 No timestamp, avatar, reply thread, or separate note theme is added in this
@@ -77,17 +79,18 @@ milestone.
 The patch view adds these direct commands:
 
 ```text
-C       create a user note on the current source line
+c       create a user note on the current source line
 { / }   select the previous or next note
 E       edit the selected note body
 R       resolve the selected open note
 D       delete the selected note after confirmation
 ```
 
-The patch pane shows a gutter cursor on the selected current-source line.
-`j` and `k` move it between context and added lines while skipping headers,
-separators, note cards, and deleted-only rows. The cursor survives unified,
-side-by-side, split, and modal layout changes. `C` without a selectable source
+The patch pane highlights the full selected row and marks it at the far left,
+including in side-by-side mode. `j` and `k` move it between context lines,
+added lines, and whole inline note cards while skipping headers, separators,
+and deleted-only rows. The cursor survives unified, side-by-side, split, and
+modal layout changes. `c` without a selectable source
 line leaves the UI unchanged and reports that a current-source line is
 required. `E`, `R`, or `D` without a selected compatible note reports a short
 status message.
@@ -98,13 +101,13 @@ change. The help view and patch footer advertise the new bindings.
 
 ## Composer and External Editor
 
-`C` opens an inline multiline composer after the target source row. `E` opens
+`c` opens an inline multiline composer after the target source row. `E` opens
 the same composer with the selected note body. The composer owns keyboard input
 while active and uses the already-installed Bubbles textarea component.
 
 ```text
-Enter     save
-Alt+Enter insert a newline
+Enter     insert a newline
+Alt+Enter submit
 Ctrl+G    continue editing in $EDITOR
 Esc       cancel
 ```
@@ -198,6 +201,6 @@ The manual acceptance pass must verify:
 1. Add an agent note with the CLI and reveal it in the running TUI with `r`.
 2. Create, edit, resolve, and delete user notes in both patch layouts.
 3. Exit and reopen Scry and confirm persisted state.
-4. Change an open note's source line, refresh, and find it under
-   `Stale notes (N)`.
+4. Resolve a note and find it under `Notes (N)`; then change an open note's
+   source line, refresh, and find the stale note there too.
 5. Drill into two worktrees and confirm their note ledgers remain isolated.
