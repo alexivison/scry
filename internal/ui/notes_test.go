@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/notes"
 	"github.com/alexivison/scry/internal/ui/panes"
 )
@@ -139,6 +140,23 @@ func TestStaleNotesRowRendersWithoutGitTarget(t *testing.T) {
 	}
 }
 
+func TestStaleNotesViewScrollsWithoutPatchViewport(t *testing.T) {
+	state := sampleState()
+	state.Files = nil
+	state.SelectedFile = -1
+	m := NewModel(state)
+	note := uiNote("stale", "gone.go", 7, notes.StateStale, strings.Repeat("line\n", 20))
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	m.positionSelectedNote()
+	m.State.FocusPane = model.PanePatch
+
+	m, _ = sendKey(m, "j")
+	if m.noteState.selectedID != note.ID || m.noteState.listScroll != 1 {
+		t.Fatalf("stale scroll lost selection or offset: id=%q offset=%d", m.noteState.selectedID, m.noteState.listScroll)
+	}
+}
+
 func TestNoteTargetsFollowFilesThenStale(t *testing.T) {
 	m := NewModel(sampleState())
 	first := uiNote("main-1", "main.go", 2, notes.StateOpen, "one")
@@ -182,6 +200,25 @@ func TestNoteNavigationSelectsCardsAndStaleView(t *testing.T) {
 	m, _ = sendKey(m, "}")
 	if m.noteState.selectedID != stale.ID {
 		t.Fatalf("navigation wrapped past final note to %q", m.noteState.selectedID)
+	}
+}
+
+func TestNoteNavigationMovesAcrossCachedFiles(t *testing.T) {
+	m := notePatchModel()
+	mainNote := uiNote("main", "main.go", 2, notes.StateOpen, "main note")
+	newNote := uiNote("new", "new.go", 2, notes.StateOpen, "new note")
+	m.noteState.items = []notes.Note{mainNote, newNote}
+	newPatch := samplePatch()
+	newPatch.Summary.Path = "new.go"
+	m.State.Patches["new.go"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &newPatch, Generation: m.State.CacheGeneration}
+
+	m, _ = sendKey(m, "}")
+	m, cmd := sendKey(m, "}")
+	if cmd != nil {
+		t.Fatal("cached target unexpectedly reloaded")
+	}
+	if m.noteState.selectedID != newNote.ID || m.State.SelectedFile != 1 || m.patchViewport == nil || m.patchViewport.Patch.Summary.Path != "new.go" {
+		t.Fatalf("cross-file navigation missed target: id=%q file=%d patch=%#v", m.noteState.selectedID, m.State.SelectedFile, m.patchViewport)
 	}
 }
 

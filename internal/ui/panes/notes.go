@@ -66,8 +66,9 @@ func RenderNoteList(items []notes.Note, selectedID string, draft *NoteDraftView,
 	if offset < 0 {
 		offset = 0
 	}
-	if offset >= len(rows) {
-		offset = len(rows) - 1
+	maxOffset := max(len(rows)-height, 0)
+	if offset > maxOffset {
+		offset = maxOffset
 	}
 	end := min(offset+height, len(rows))
 	return strings.Join(rows[offset:end], "\n")

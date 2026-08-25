@@ -24,6 +24,7 @@ type noteUIState struct {
 	mutating      bool
 	composer      *noteComposer
 	confirmDelete bool
+	listScroll    int
 }
 
 type noteComposer struct {
@@ -112,6 +113,7 @@ func (m *Model) positionSelectedNote() {
 	note, ok := m.selectedNote()
 	if !ok {
 		m.noteState.selectedID = ""
+		m.noteState.listScroll = 0
 		return
 	}
 	if note.State == notes.StateStale {
@@ -434,6 +436,7 @@ func (m Model) handleNoteMutation(msg noteMutationMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.noteState.selectedID = ""
+		m.noteState.listScroll = 0
 	} else {
 		replaced := false
 		for i := range m.noteState.items {

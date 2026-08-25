@@ -139,7 +139,7 @@ func TestRenderNoteListShowsStaleAnchorAndRespectsOffset(t *testing.T) {
 	if !ok || offset == 0 {
 		t.Fatalf("NoteListOffset = %d, %v; want second card offset", offset, ok)
 	}
-	output := ansi.Strip(RenderNoteList(items, second.ID, nil, 60, 20, offset))
+	output := ansi.Strip(RenderNoteList(items, second.ID, nil, 60, 3, offset))
 	if strings.Contains(output, "first") || !strings.Contains(output, "other.go:9") || !strings.Contains(output, "second") {
 		t.Fatalf("stale note list rendered wrong slice:\n%s", output)
 	}

@@ -690,6 +690,9 @@ func (m *Model) setFileTreeCursor(cursor int) {
 	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor, m.staleNoteCount())
 	m.State.FileTreeCursor = proj.Cursor
 	m.State.SelectedFile = proj.SelectedFile
+	if len(proj.Rows) > 0 && proj.Rows[proj.Cursor].Kind == panes.FileTreeRowNotes {
+		m.noteState.listScroll = 0
+	}
 	if proj.SelectedFile < 0 {
 		m.clearPatchView()
 	}
@@ -1412,9 +1415,13 @@ func buildFallback(summary model.FileSummary, err error) string {
 }
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "g", "G", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "esc", "n", "p", "N", "enter", "/":
-		m.noteState.selectedID = ""
+	row, _ := m.currentFileTreeRow()
+	staleNotes := row.Kind == panes.FileTreeRowNotes
+	if !staleNotes {
+		switch msg.String() {
+		case "g", "G", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "esc", "n", "p", "N", "enter", "/":
+			m.noteState.selectedID = ""
+		}
 	}
 	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
@@ -1450,10 +1457,18 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchNotFound = ""
 		}
 	case "j", "down":
+		if staleNotes {
+			m.noteState.listScroll++
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollDown()
 		}
 	case "k", "up":
+		if staleNotes {
+			m.noteState.listScroll = max(m.noteState.listScroll-1, 0)
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.ScrollUp()
 		}
@@ -1472,18 +1487,34 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.patchViewport.ScrollToBottom()
 		}
 	case "ctrl+d":
+		if staleNotes {
+			m.noteState.listScroll += max(m.height/2, 1)
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.HalfPageDown()
 		}
 	case "ctrl+u":
+		if staleNotes {
+			m.noteState.listScroll = max(m.noteState.listScroll-max(m.height/2, 1), 0)
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.HalfPageUp()
 		}
 	case "ctrl+f":
+		if staleNotes {
+			m.noteState.listScroll += max(m.height-3, 1)
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.PageDown()
 		}
 	case "ctrl+b":
+		if staleNotes {
+			m.noteState.listScroll = max(m.noteState.listScroll-max(m.height-3, 1), 0)
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.PageUp()
 		}
@@ -1691,7 +1722,7 @@ func (m Model) viewPatch() string {
 func (m Model) renderPatch(width, height, outerWidth int) string {
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
 		offset, _ := panes.NoteListOffset(m.staleNotes(), m.noteState.selectedID, width)
-		return panes.RenderNoteList(m.staleNotes(), m.noteState.selectedID, m.noteDraftView(), width, height, offset)
+		return panes.RenderNoteList(m.staleNotes(), m.noteState.selectedID, m.noteDraftView(), width, height, offset+m.noteState.listScroll)
 	}
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
