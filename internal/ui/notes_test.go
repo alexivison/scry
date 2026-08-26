@@ -9,6 +9,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/alexivison/scry/internal/model"
 	"github.com/alexivison/scry/internal/notes"
@@ -103,8 +106,7 @@ func TestSameWorktreeRefreshDoesNotLoseLateMutation(t *testing.T) {
 	updated, reload := m.Update(mutation())
 	m = updated.(Model)
 	m = deepDrain(t, m, reload)
-	selected, ok := m.selectedNote()
-	if !ok || selected.State != notes.StateResolved {
+	if len(m.noteState.items) != 1 || m.noteState.items[0].State != notes.StateResolved {
 		t.Fatalf("late same-worktree mutation was lost: %#v", m.noteState)
 	}
 }
@@ -371,6 +373,7 @@ func TestNoteComposerCreatesMultilineUserNote(t *testing.T) {
 func TestNoteComposerRendersInlineWithControls(t *testing.T) {
 	m := notePatchModel()
 	m.noteState.store = noteActionStore(t)
+	before := m.patchViewport.TotalLines()
 	m, _ = sendKey(m, "c")
 	m = sendNoteKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("inline draft")})
 
@@ -380,6 +383,152 @@ func TestNoteComposerRendersInlineWithControls(t *testing.T) {
 	}
 	if status := m.viewStatusBar(); !strings.Contains(status, "Enter newline") || !strings.Contains(status, "Alt+Enter submit") || !strings.Contains(status, "Ctrl+G") {
 		t.Fatalf("composer controls missing from status: %s", status)
+	}
+	if rows := m.patchViewport.TotalLines() - before; rows != 5 {
+		t.Fatalf("composer card uses %d rows, want 5 (three editable rows plus chrome): %q", rows, m.noteDraftView().Body)
+	}
+}
+
+func TestLongNoteComposerDoesNotLeakANSIFragments(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m, _ = sendKey(m, "c")
+	m.noteState.composer.input.SetValue(strings.Repeat("long note ", 20))
+
+	plain := ansi.Strip(m.renderPatch(30, 25, 30))
+	if strings.Contains(plain, ";") {
+		t.Fatalf("long composer leaked an ANSI fragment:\n%s", plain)
+	}
+}
+
+func TestEditingNotePreservesPatchScroll(t *testing.T) {
+	store := noteActionStore(t)
+	note, err := store.Add(notes.AddInput{File: "main.go", Line: 2, Body: "original", Author: notes.AuthorUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	m.patchViewport.Height = 5
+	m.patchViewport.SetNotes([]notes.Note{note}, note.ID, nil)
+	m.renderPatch(72, 5, 72)
+	m.patchViewport.ScrollOffset = 4
+	m.renderPatch(72, 5, 72)
+
+	m, _ = sendKey(m, "E")
+	if m.patchViewport.ScrollOffset != 4 {
+		t.Fatalf("opening editor moved scroll to %d, want 4", m.patchViewport.ScrollOffset)
+	}
+	m.noteState.composer.input.SetValue("edited")
+	m = saveNoteComposer(t, m)
+	m.renderPatch(72, 5, 72)
+	if m.patchViewport == nil || m.patchViewport.ScrollOffset != 4 {
+		t.Fatalf("saving edit changed patch scroll: %#v", m.patchViewport)
+	}
+}
+
+func TestEditingNotePreservesNotesViewScroll(t *testing.T) {
+	store := noteActionStore(t)
+	items := addResolvedNotes(t, store, "first", "original", "third")
+	m := notePatchModel()
+	m.width = 40
+	m.height = 6
+	m.noteState.store = store
+	m.noteState.items = items
+	m.noteState.selectedID = items[1].ID
+	projection := m.fileTreeProjection()
+	m.setFileTreeCursor(len(projection.Rows) - 1)
+	m.noteState.listScroll = 1
+
+	m, _ = sendKey(m, "E")
+	m.noteState.composer.input.SetValue("edited")
+	m = saveNoteComposer(t, m)
+	plain := ansi.Strip(m.renderPatch(40, 3, 40))
+	if m.noteState.listScroll != 1 || !strings.Contains(plain, "edited") || strings.Contains(plain, "first") {
+		t.Fatalf("editing note changed rendered Notes offset (scroll %d):\n%s", m.noteState.listScroll, plain)
+	}
+}
+
+func TestDeletingLaterNotePreservesRenderedNotesOffset(t *testing.T) {
+	store := noteActionStore(t)
+	items := addResolvedNotes(t, store, "first", "second", "third")
+	m := notePatchModel()
+	m.width = 40
+	m.height = 6
+	m.noteState.store = store
+	m.noteState.items = items
+	m.noteState.selectedID = items[1].ID
+	projection := m.fileTreeProjection()
+	m.setFileTreeCursor(len(projection.Rows) - 1)
+	m.noteState.listScroll = 1
+
+	updated, cmd := m.deleteSelectedNote()
+	m = updated.(Model)
+	m = deepDrain(t, m, cmd)
+	plain := ansi.Strip(m.renderPatch(40, 3, 40))
+	if !strings.Contains(plain, "third") || strings.Contains(plain, "first") {
+		t.Fatalf("deleting later card reset rendered Notes offset:\n%s", plain)
+	}
+}
+
+func addResolvedNotes(t *testing.T, store *notes.Store, bodies ...string) []notes.Note {
+	t.Helper()
+	state := notes.StateResolved
+	items := make([]notes.Note, 0, len(bodies))
+	for _, body := range bodies {
+		note, err := store.Add(notes.AddInput{File: "main.go", Line: 1, Body: body, Author: notes.AuthorUser})
+		if err != nil {
+			t.Fatal(err)
+		}
+		note, err = store.Edit(note.ID, notes.EditInput{State: &state})
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, note)
+	}
+	return items
+}
+
+func TestFailedMutationReloadDoesNotAffectLaterRefresh(t *testing.T) {
+	store := noteActionStore(t)
+	note, err := store.Add(notes.AddInput{File: "main.go", Line: 2, Body: "body", Author: notes.AuthorUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+
+	updated, _ := m.Update(noteMutationMsg{selectedID: note.ID, storeGeneration: m.noteStoreGeneration})
+	m = updated.(Model)
+	updated, _ = m.Update(notesLoadedMsg{
+		generation:      m.noteState.generation,
+		storeGeneration: m.noteStoreGeneration,
+		err:             errors.New("reload failed"),
+	})
+	m = updated.(Model)
+
+	repaired := note
+	repaired.File = "new.go"
+	newPatch := samplePatch()
+	newPatch.Summary.Path = "new.go"
+	m.State.Patches["new.go"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &newPatch, Generation: m.State.CacheGeneration}
+	m.startNoteLoad()
+	updated, _ = m.Update(notesLoadedMsg{
+		notes:           []notes.Note{repaired},
+		generation:      m.noteState.generation,
+		storeGeneration: m.noteStoreGeneration,
+	})
+	m = updated.(Model)
+	if m.State.SelectedFile != 1 || m.patchViewport == nil || m.patchViewport.Patch.Summary.Path != "new.go" {
+		t.Fatalf("failed mutation reload leaked restoration into later refresh: file=%d patch=%#v", m.State.SelectedFile, m.patchViewport)
 	}
 }
 
@@ -519,7 +668,7 @@ func TestSuccessfulMutationReloadsConcurrentCLINotes(t *testing.T) {
 	}
 }
 
-func TestDeleteSelectsNearestRemainingNote(t *testing.T) {
+func TestDeleteReturnsToSourceWithoutChangingScroll(t *testing.T) {
 	store := noteActionStore(t)
 	first, err := store.Add(notes.AddInput{File: "main.go", Line: 1, Body: "first", Author: notes.AuthorUser})
 	if err != nil {
@@ -533,12 +682,21 @@ func TestDeleteSelectsNearestRemainingNote(t *testing.T) {
 	m.noteState.store = store
 	m.noteState.items = []notes.Note{first, second}
 	m.noteState.selectedID = first.ID
+	m.patchViewport.Height = 5
+	m.patchViewport.SetNotes([]notes.Note{first, second}, first.ID, nil)
+	m.renderPatch(72, 5, 72)
+	m.patchViewport.ScrollOffset = 4
+	m.renderPatch(72, 5, 72)
 
 	updated, cmd := m.deleteSelectedNote()
 	m = updated.(Model)
 	m = deepDrain(t, m, cmd)
-	if m.noteState.selectedID != second.ID {
-		t.Fatalf("delete selected %q, want nearest %q", m.noteState.selectedID, second.ID)
+	m.renderPatch(72, 5, 72)
+	if m.noteState.selectedID != "" {
+		t.Fatalf("delete kept note selection %q", m.noteState.selectedID)
+	}
+	if m.patchViewport == nil || m.patchViewport.ScrollOffset != 4 {
+		t.Fatalf("delete changed patch scroll: %#v", m.patchViewport)
 	}
 }
 
@@ -605,10 +763,14 @@ func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
 	if m.noteState.items[0].State != notes.StateResolved {
 		t.Fatalf("resolved state = %q", m.noteState.items[0].State)
 	}
-	if row, ok := m.currentFileTreeRow(); !ok || row.Kind != panes.FileTreeRowNotes {
-		t.Fatalf("resolved note did not move to Notes view: %#v", row)
+	if row, ok := m.currentFileTreeRow(); !ok || row.Kind != panes.FileTreeRowFile {
+		t.Fatalf("resolving note left the patch: %#v", row)
+	}
+	if m.noteState.selectedID != "" {
+		t.Fatalf("resolving note kept selection %q", m.noteState.selectedID)
 	}
 
+	m, _ = sendKey(m, "}")
 	m, cmd = sendKey(m, "D")
 	if cmd != nil || !m.noteState.confirmDelete {
 		t.Fatal("D did not open confirmation")

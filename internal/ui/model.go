@@ -1751,6 +1751,9 @@ func (m Model) viewPatch() string {
 // outerWidth is the pane's outer width (including borders) for gutter decisions.
 func (m Model) renderPatch(width, height, outerWidth int) string {
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
+		if m.noteState.composer != nil {
+			m.noteState.composer.input.SetWidth(max(width-4, 1))
+		}
 		offset, _ := panes.NoteListOffset(m.inactiveNotes(), m.noteState.selectedID, width)
 		return panes.RenderNoteList(m.inactiveNotes(), m.noteState.selectedID, m.noteDraftView(), width, height, offset+m.noteState.listScroll)
 	}
@@ -1772,12 +1775,15 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	}
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
+	m.patchViewport.SetGutterVisible(m.State.ShowLineNumbers && outerWidth >= 60)
+	if m.noteState.composer != nil {
+		m.noteState.composer.input.SetWidth(m.patchViewport.NoteBodyWidth())
+	}
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile {
 		m.patchViewport.SetNotes(m.attachedNotes(m.State.Files[row.FileIndex].Path), m.noteState.selectedID, m.noteDraftView())
 	} else {
 		m.patchViewport.SetNotes(nil, "", nil)
 	}
-	m.patchViewport.SetGutterVisible(m.State.ShowLineNumbers && outerWidth >= 60)
 	m.patchViewport.ClampXOffset()
 	return m.patchViewport.Render()
 }

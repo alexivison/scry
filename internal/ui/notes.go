@@ -25,6 +25,7 @@ type noteUIState struct {
 	composer      *noteComposer
 	confirmDelete bool
 	listScroll    int
+	restoreView   *noteMutationView
 }
 
 type noteComposer struct {
@@ -32,6 +33,13 @@ type noteComposer struct {
 	noteID string
 	file   string
 	line   int
+}
+
+type noteMutationView struct {
+	path        string
+	patchScroll int
+	notes       bool
+	listOffset  int
 }
 
 type notesLoadedMsg struct {
@@ -107,11 +115,15 @@ func (m Model) handleNotesLoaded(msg notesLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.noteState.loading = false
 	if msg.err != nil {
+		m.noteState.restoreView = nil
 		m.noteState.err = fmt.Sprintf("notes refresh failed: %v", msg.err)
 		return m, nil
 	}
 	m.noteState.items = msg.notes
 	m.noteState.err = ""
+	if m.restoreNoteMutationView() {
+		return m, nil
+	}
 	m.positionSelectedNote()
 	if m.noteState.selectedID == "" {
 		return m, nil
@@ -120,6 +132,31 @@ func (m Model) handleNotesLoaded(msg notesLoadedMsg) (tea.Model, tea.Cmd) {
 	m = updated.(Model)
 	m.syncSelectedNoteViewport()
 	return m, cmd
+}
+
+func (m *Model) restoreNoteMutationView() bool {
+	view := m.noteState.restoreView
+	m.noteState.restoreView = nil
+	if view == nil {
+		return false
+	}
+	if _, ok := m.selectedNote(); m.noteState.selectedID != "" && !ok {
+		m.noteState.selectedID = ""
+	}
+	if view.notes {
+		width, height := m.inactiveNoteListSize()
+		base, _ := panes.NoteListOffset(m.inactiveNotes(), m.noteState.selectedID, width)
+		listOffset := min(max(view.listOffset, 0), panes.NoteListMaxOffset(m.inactiveNotes(), width, height))
+		m.noteState.listScroll = max(listOffset-base, 0)
+		return true
+	}
+	current, ok := m.selectedPatchPath()
+	if !ok || current != view.path || m.patchViewport == nil {
+		return true
+	}
+	m.patchViewport.SetNotes(m.attachedNotes(view.path), m.noteState.selectedID, m.noteDraftView())
+	m.patchViewport.KeepScroll(view.patchScroll)
+	return true
 }
 
 func (m *Model) positionSelectedNote() {
@@ -339,7 +376,7 @@ func (m Model) startNoteComposer(noteID string) (tea.Model, tea.Cmd) {
 	input.ShowLineNumbers = false
 	input.FocusedStyle.CursorLine = input.FocusedStyle.CursorLine.Background(theme.SelectedBg)
 	input.SetWidth(max(m.noteComposerWidth(), 20))
-	input.SetHeight(5)
+	input.SetHeight(3)
 	input.SetValue(body)
 	m.noteState.composer = &noteComposer{input: input, noteID: noteID, file: file, line: line}
 	m.noteState.err = ""
@@ -347,7 +384,6 @@ func (m Model) startNoteComposer(noteID string) (tea.Model, tea.Cmd) {
 	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile && m.patchViewport != nil {
 		path := m.State.Files[row.FileIndex].Path
 		m.patchViewport.SetNotes(m.attachedNotes(path), m.noteState.selectedID, m.noteDraftView())
-		m.patchViewport.ScrollToNote(noteID)
 	}
 	return m, focus
 }
@@ -361,6 +397,9 @@ func (m Model) editSelectedNote() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) noteComposerWidth() int {
+	if m.patchViewport != nil {
+		return m.patchViewport.NoteBodyWidth()
+	}
 	width := m.width - 8
 	if m.State.Layout == model.LayoutSplit {
 		width = m.width/2 - 8
@@ -431,7 +470,7 @@ func (m Model) resolveSelectedNote() (tea.Model, tea.Cmd) {
 	m.noteState.err = ""
 	return m, func() tea.Msg {
 		_, err := store.Edit(note.ID, notes.EditInput{State: &state})
-		return noteMutationMsg{selectedID: note.ID, storeGeneration: storeGeneration, err: err}
+		return noteMutationMsg{storeGeneration: storeGeneration, err: err}
 	}
 }
 
@@ -463,29 +502,11 @@ func (m Model) deleteSelectedNote() (tea.Model, tea.Cmd) {
 	}
 	store := m.noteState.store
 	storeGeneration := m.noteStoreGeneration
-	selectedID := m.nearestNoteAfter(note.ID)
 	m.noteState.mutating = true
 	return m, func() tea.Msg {
 		_, err := store.Remove(note.ID)
-		return noteMutationMsg{selectedID: selectedID, storeGeneration: storeGeneration, err: err}
+		return noteMutationMsg{storeGeneration: storeGeneration, err: err}
 	}
-}
-
-func (m Model) nearestNoteAfter(id string) string {
-	targets := m.noteTargets()
-	for i, note := range targets {
-		if note.ID != id {
-			continue
-		}
-		if i+1 < len(targets) {
-			return targets[i+1].ID
-		}
-		if i > 0 {
-			return targets[i-1].ID
-		}
-		break
-	}
-	return ""
 }
 
 func (m Model) selectedNote() (notes.Note, bool) {
@@ -506,8 +527,22 @@ func (m Model) handleNoteMutation(msg noteMutationMsg) (tea.Model, tea.Cmd) {
 		m.noteState.err = fmt.Sprintf("note action failed: %v", msg.err)
 		return m, nil
 	}
+	if row, ok := m.currentFileTreeRow(); ok {
+		switch row.Kind {
+		case panes.FileTreeRowFile:
+			if m.patchViewport != nil {
+				m.noteState.restoreView = &noteMutationView{
+					path:        m.State.Files[row.FileIndex].Path,
+					patchScroll: m.patchViewport.ScrollOffset,
+				}
+			}
+		case panes.FileTreeRowNotes:
+			width, _ := m.inactiveNoteListSize()
+			base, _ := panes.NoteListOffset(m.inactiveNotes(), m.noteState.selectedID, width)
+			m.noteState.restoreView = &noteMutationView{notes: true, listOffset: base + m.noteState.listScroll}
+		}
+	}
 	m.noteState.selectedID = msg.selectedID
-	m.noteState.listScroll = 0
 	if msg.closeComposer {
 		m.noteState.composer = nil
 	}

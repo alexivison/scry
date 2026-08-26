@@ -177,6 +177,16 @@ func (vp *PatchViewport) SetNotes(items []notes.Note, selectedID string, draft *
 	vp.visibilityDirty = vp.visibilityDirty || changed
 }
 
+func (vp *PatchViewport) NoteBodyWidth() int {
+	return max(vp.Width-vp.noteIndent()-4, 1)
+}
+
+func (vp *PatchViewport) KeepScroll(offset int) {
+	vp.ScrollOffset = offset
+	vp.visibilityDirty = false
+	vp.manualScroll = true
+}
+
 func sameNoteDraft(a, b *NoteDraftView) bool {
 	if a == nil || b == nil {
 		return a == b

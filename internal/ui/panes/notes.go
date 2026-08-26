@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/notes"
 	"github.com/alexivison/scry/internal/ui/theme"
@@ -39,12 +40,12 @@ func renderNoteCard(note notes.Note, width int, selected bool) []string {
 	lines := []string{noteCardTitle(note, width, border)}
 	innerWidth := width - 4
 	for _, logicalLine := range strings.Split(body, "\n") {
-		segments := wrapBodySegments(logicalLine, innerWidth)
+		segments := strings.Split(ansi.Wrap(logicalLine, innerWidth, ""), "\n")
 		if collapsed {
 			segments = segments[:1]
 		}
 		for _, segment := range segments {
-			content := padOrTruncateToWidth(segment.text, innerWidth)
+			content := padOrTruncateToWidth(segment, innerWidth)
 			lines = append(lines, border.Render("│ ")+bodyStyle.Render(content)+border.Render(" │"))
 		}
 	}
