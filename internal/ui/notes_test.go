@@ -293,6 +293,74 @@ func TestNotesViewCursorSelectsCards(t *testing.T) {
 	}
 }
 
+func TestNotesViewPagesWithinSelectedResolvedNote(t *testing.T) {
+	state := sampleState()
+	state.Files = nil
+	state.SelectedFile = -1
+	m := NewModel(state)
+	m.width = 40
+	m.height = 6
+	note := uiNote("resolved", "a.go", 2, notes.StateResolved, "first\nsecond\nthird\nfourth\nfifth\nsixth")
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	m.setFileTreeCursor(0)
+	m.State.FocusPane = model.PanePatch
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	m = updated.(Model)
+	plain := ansi.Strip(m.renderPatch(40, 3, 40))
+	if m.noteState.selectedID != note.ID || m.noteState.listScroll == 0 || !strings.Contains(plain, "fourth") {
+		t.Fatalf("page down lost expanded note: selected=%q scroll=%d\n%s", m.noteState.selectedID, m.noteState.listScroll, plain)
+	}
+}
+
+func TestNotesViewPagingClearsOffscreenSelection(t *testing.T) {
+	state := sampleState()
+	state.Files = nil
+	state.SelectedFile = -1
+	m := NewModel(state)
+	m.width = 40
+	m.height = 6
+	first := uiNote("first", "a.go", 1, notes.StateResolved, "first")
+	second := uiNote("second", "b.go", 1, notes.StateResolved, "second")
+	m.noteState.items = []notes.Note{first, second}
+	m.noteState.selectedID = first.ID
+	m.setFileTreeCursor(0)
+	m.State.FocusPane = model.PanePatch
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	m = updated.(Model)
+	if m.noteState.selectedID != "" {
+		t.Fatalf("page down kept offscreen note selected: %q", m.noteState.selectedID)
+	}
+}
+
+func TestNotesViewPagingKeepsOffsetWhenSelectionCollapses(t *testing.T) {
+	state := sampleState()
+	state.Files = nil
+	state.SelectedFile = -1
+	m := NewModel(state)
+	m.width = 40
+	m.height = 6
+	first := uiNote("first", "a.go", 1, notes.StateResolved, "one\ntwo\nthree\nfour\nfive\nsix")
+	second := uiNote("second", "b.go", 1, notes.StateResolved, "second")
+	third := uiNote("third", "c.go", 1, notes.StateResolved, "third")
+	fourth := uiNote("fourth", "d.go", 1, notes.StateResolved, "fourth")
+	m.noteState.items = []notes.Note{first, second, third, fourth}
+	m.noteState.selectedID = first.ID
+	m.setFileTreeCursor(0)
+	m.State.FocusPane = model.PanePatch
+
+	for range 3 {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+		m = updated.(Model)
+	}
+	plain := ansi.Strip(m.renderPatch(40, 3, 40))
+	if m.noteState.selectedID != "" || !strings.Contains(plain, "second") || strings.Contains(plain, "fourth") {
+		t.Fatalf("collapsing offscreen selection changed reader position: selected=%q scroll=%d\n%s", m.noteState.selectedID, m.noteState.listScroll, plain)
+	}
+}
+
 func TestNoteTargetsFollowOpenFilesThenInactiveNotes(t *testing.T) {
 	m := NewModel(sampleState())
 	first := uiNote("main-1", "main.go", 2, notes.StateOpen, "one")
@@ -527,6 +595,31 @@ func TestDeletingLaterNotePreservesRenderedNotesOffset(t *testing.T) {
 	}
 }
 
+func TestDeletingFinalInactiveNoteRestoresFilePatch(t *testing.T) {
+	store := noteActionStore(t)
+	items := addResolvedNotes(t, store, "last resolved")
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = items
+	m.noteState.selectedID = items[0].ID
+	patch := samplePatch()
+	patch.Summary.Path = "old.go"
+	m.State.Patches["old.go"] = model.PatchLoadState{Status: model.LoadLoaded, Patch: &patch, Generation: m.State.CacheGeneration}
+	projection := m.fileTreeProjection()
+	m.setFileTreeCursor(len(projection.Rows) - 1)
+
+	updated, cmd := m.deleteSelectedNote()
+	m = updated.(Model)
+	m = deepDrain(t, m, cmd)
+	row, ok := m.currentFileTreeRow()
+	if !ok || row.Kind != panes.FileTreeRowFile || m.State.SelectedFile != row.FileIndex {
+		t.Fatalf("final note deletion left invalid file selection: row=%#v selected=%d", row, m.State.SelectedFile)
+	}
+	if m.patchViewport == nil || m.patchViewport.Patch.Summary.Path != "old.go" {
+		t.Fatalf("final note deletion did not restore patch: %#v", m.patchViewport)
+	}
+}
+
 func addResolvedNotes(t *testing.T, store *notes.Store, bodies ...string) []notes.Note {
 	t.Helper()
 	state := notes.StateResolved
@@ -754,6 +847,77 @@ func TestDeleteReturnsToSourceWithoutChangingScroll(t *testing.T) {
 	}
 }
 
+func TestFailedDeleteKeepsConfirmationOpen(t *testing.T) {
+	store, configDir := noteActionStoreWithConfig(t)
+	note, err := store.Add(notes.AddInput{File: "main.go", Line: 1, Body: "keep", Author: notes.AuthorUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledgers, err := filepath.Glob(filepath.Join(configDir, "scry", "notes", "v1", "*.json"))
+	if err != nil || len(ledgers) != 1 {
+		t.Fatalf("ledger lookup = %v, %v", ledgers, err)
+	}
+	if err := os.WriteFile(ledgers[0], []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	m, _ = sendKey(m, "d")
+	m, cmd := sendKey(m, "y")
+	if cmd == nil {
+		t.Fatal("confirmed delete did not execute")
+	}
+	m = deepDrain(t, m, cmd)
+	if !m.noteState.confirmDelete || m.noteState.selectedID != note.ID || m.noteState.err == "" {
+		t.Fatalf("failed delete lost context: confirm=%v selected=%q err=%q", m.noteState.confirmDelete, m.noteState.selectedID, m.noteState.err)
+	}
+}
+
+func TestPendingDeleteCannotBeCancelled(t *testing.T) {
+	store := noteActionStore(t)
+	note, err := store.Add(notes.AddInput{File: "main.go", Line: 1, Body: "delete", Author: notes.AuthorUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := notePatchModel()
+	m.noteState.store = store
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	m, _ = sendKey(m, "d")
+	m, cmd := sendKey(m, "y")
+	if cmd == nil || !m.noteState.mutating {
+		t.Fatal("confirmed delete did not start")
+	}
+	m, _ = sendKey(m, "esc")
+	if !m.noteState.confirmDelete {
+		t.Fatal("Esc hid an in-flight delete")
+	}
+	m = deepDrain(t, m, cmd)
+	if m.noteState.confirmDelete || len(m.noteState.items) != 0 {
+		t.Fatalf("completed delete left state: %#v", m.noteState)
+	}
+}
+
+func TestNoteDeleteBodyRemovesTerminalControls(t *testing.T) {
+	m := notePatchModel()
+	note := uiNote("note", "main\x1b]0;owned\x07.go", 1, notes.StateOpen, "before\x1b[2Jafter\rvisible")
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+
+	output := m.noteDeleteBody()
+	for _, control := range []string{"\x1b[2J", "\x1b]0", "\x07", "\r"} {
+		if strings.Contains(output, control) {
+			t.Fatalf("delete confirmation contains terminal control %q: %q", control, output)
+		}
+	}
+	if !strings.Contains(output, "main.go") || !strings.Contains(output, "beforeaftervisible") {
+		t.Fatalf("sanitizing confirmation lost visible text: %q", output)
+	}
+}
+
 func TestNotePersistenceAcrossModels(t *testing.T) {
 	worktree := t.TempDir()
 	configDir := t.TempDir()
@@ -880,16 +1044,22 @@ func folderNotePatchModel() Model {
 }
 
 func noteActionStore(t *testing.T) *notes.Store {
+	store, _ := noteActionStoreWithConfig(t)
+	return store
+}
+
+func noteActionStoreWithConfig(t *testing.T) (*notes.Store, string) {
 	t.Helper()
 	worktree := t.TempDir()
 	if err := os.WriteFile(filepath.Join(worktree, "main.go"), []byte("package main\nimport \"os\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := notes.NewStore(worktree, t.TempDir())
+	configDir := t.TempDir()
+	store, err := notes.NewStore(worktree, configDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store
+	return store, configDir
 }
 
 func sendNoteKey(m Model, key tea.KeyMsg) Model {

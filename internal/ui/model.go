@@ -618,7 +618,7 @@ func reconcileFileTreeToSelection(state *model.AppState) {
 			state.FileTreeCursor = cursor
 		}
 	}
-	proj := panes.ProjectFileTree(state.Files, state.FileFilter, state.FileTreeCollapsed, state.FileTreeCursor)
+	proj := panes.ProjectFileTree(state.Files, state.FileFilter, state.FileTreeCollapsed, state.FileTreeCursor, 0)
 	state.FileTreeCursor = proj.Cursor
 	state.SelectedFile = proj.SelectedFile
 }
@@ -1492,7 +1492,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if notesView {
 			m.noteState.selectedID = ""
 			width, height := m.inactiveNoteListSize()
-			m.noteState.listScroll = panes.NoteListMaxOffset(m.inactiveNotes(), width, height)
+			m.noteState.listScroll = panes.NoteListMaxOffset(m.inactiveNotes(), "", width, height)
 		} else if m.patchViewport != nil {
 			m.patchViewport.ScrollToBottom()
 		}
@@ -1556,11 +1556,24 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) scrollInactiveNotes(delta int) {
 	items := m.inactiveNotes()
 	width, height := m.inactiveNoteListSize()
-	if offset, ok := panes.NoteListOffset(items, m.noteState.selectedID, width); ok {
-		m.noteState.listScroll = offset
+	base, selected := panes.NoteListOffset(items, m.noteState.selectedID, width)
+	offset := m.noteState.listScroll
+	if selected {
+		offset += base
 	}
-	m.noteState.selectedID = ""
-	m.noteState.listScroll = min(max(m.noteState.listScroll+delta, 0), panes.NoteListMaxOffset(items, width, height))
+	offset = min(max(offset+delta, 0), panes.NoteListMaxOffset(items, m.noteState.selectedID, width, height))
+	if selected {
+		visible, collapsedOffset := panes.NoteListSelection(items, m.noteState.selectedID, width, height, offset)
+		if !visible {
+			m.noteState.selectedID = ""
+			m.noteState.listScroll = min(collapsedOffset, panes.NoteListMaxOffset(items, "", width, height))
+			return
+		}
+	}
+	m.noteState.listScroll = offset
+	if selected {
+		m.noteState.listScroll = max(offset-base, 0)
+	}
 }
 
 func (m Model) inactiveNoteListSize() (int, int) {
@@ -2052,7 +2065,7 @@ func fileFilterHeaderLabel(filter model.FileFilter) string {
 }
 
 func aggregateFileCounts(files []model.FileSummary, filter model.FileFilter) model.FileSummary {
-	proj := panes.ProjectFileTree(files, filter, nil, 0)
+	proj := panes.ProjectFileTree(files, filter, nil, 0, 0)
 	var counts model.FileSummary
 	for _, row := range proj.Rows {
 		if row.Kind != panes.FileTreeRowFile {

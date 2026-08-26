@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -13,6 +14,8 @@ import (
 )
 
 func renderNoteCard(note notes.Note, width int, selected bool) []string {
+	note.Body = SafeNoteText(note.Body)
+	note.File = SafeNoteText(note.File)
 	if width < 4 {
 		return []string{padOrTruncateToWidth(note.Body, width)}
 	}
@@ -51,6 +54,15 @@ func renderNoteCard(note notes.Note, width int, selected bool) []string {
 	}
 	lines = append(lines, border.Render("╰"+strings.Repeat("─", width-2)+"╯"))
 	return lines
+}
+
+func SafeNoteText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, ansi.Strip(value))
 }
 
 func RenderNoteList(items []notes.Note, selectedID string, draft *NoteDraftView, width, height, offset int) string {
@@ -93,12 +105,29 @@ func NoteListOffset(items []notes.Note, selectedID string, width int) (int, bool
 	return 0, false
 }
 
-func NoteListMaxOffset(items []notes.Note, width, height int) int {
+func NoteListMaxOffset(items []notes.Note, selectedID string, width, height int) int {
 	rows := 0
 	for _, note := range orderedNotes(items) {
-		rows += len(renderNoteCard(note, width, false))
+		rows += len(renderNoteCard(note, width, note.ID == selectedID))
 	}
 	return max(rows-height, 0)
+}
+
+func NoteListSelection(items []notes.Note, selectedID string, width, height, offset int) (bool, int) {
+	start := 0
+	for _, note := range orderedNotes(items) {
+		selected := note.ID == selectedID
+		rows := len(renderNoteCard(note, width, selected))
+		if selected {
+			visible := start < offset+height && offset < start+rows
+			if !visible && start+rows <= offset {
+				offset -= rows - len(renderNoteCard(note, width, false))
+			}
+			return visible, offset
+		}
+		start += rows
+	}
+	return false, offset
 }
 
 func orderedNotes(items []notes.Note) []notes.Note {

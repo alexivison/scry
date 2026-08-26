@@ -392,6 +392,22 @@ func TestRenderNoteListShowsStaleAnchorAndRespectsOffset(t *testing.T) {
 	}
 }
 
+func TestRenderNoteCardRemovesTerminalControls(t *testing.T) {
+	note := noteFixture("note", 2, notes.StateStale, "before\x1b[2Jafter\x1b]52;c;payload\x07visible\rend")
+	note.File = "main\x1b]0;owned\x07.go"
+	output := strings.Join(renderNoteCard(note, 80, true), "\n")
+
+	for _, control := range []string{"\x1b[2J", "\x1b]52", "\x1b]0", "\x07", "\r"} {
+		if strings.Contains(output, control) {
+			t.Fatalf("rendered note contains terminal control %q: %q", control, output)
+		}
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "beforeaftervisibleend") || !strings.Contains(plain, "main.go") {
+		t.Fatalf("sanitizing controls lost visible text:\n%s", plain)
+	}
+}
+
 func notePatch() model.FilePatch {
 	return model.FilePatch{
 		Summary: model.FileSummary{Path: "main.go", Status: model.StatusModified},

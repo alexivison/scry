@@ -118,7 +118,7 @@ func RenderFileList(files []model.FileSummary, selectedIdx, scrollOffset, width,
 }
 
 // ProjectFileTree builds visible directory and file rows from the flat file list.
-func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collapsed map[string]bool, cursor int, noteCount ...int) FileTreeProjection {
+func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collapsed map[string]bool, cursor, noteCount int) FileTreeProjection {
 	root := &fileTreeNode{dirs: make(map[string]*fileTreeNode)}
 	filtered := 0
 	for i, file := range files {
@@ -131,10 +131,10 @@ func ProjectFileTree(files []model.FileSummary, filter model.FileFilter, collaps
 
 	rows := make([]FileTreeRow, 0, filtered+1)
 	root.appendRows(&rows, files, collapsed, nil)
-	if len(noteCount) > 0 && noteCount[0] > 0 {
+	if noteCount > 0 {
 		rows = append(rows, FileTreeRow{
 			Kind:      FileTreeRowNotes,
-			Label:     fmt.Sprintf("Notes (%d)", noteCount[0]),
+			Label:     fmt.Sprintf("Notes (%d)", noteCount),
 			FileIndex: -1,
 		})
 	}
@@ -174,7 +174,7 @@ func FileTreeCursorForFile(files []model.FileSummary, filter model.FileFilter, c
 	if fileIndex < 0 || fileIndex >= len(files) {
 		return 0, false
 	}
-	proj := ProjectFileTree(files, filter, collapsed, 0)
+	proj := ProjectFileTree(files, filter, collapsed, 0, 0)
 	for i, row := range proj.Rows {
 		if row.Kind == FileTreeRowFile && row.FileIndex == fileIndex {
 			return i, true
@@ -270,13 +270,11 @@ func (n *fileTreeNode) appendRows(rows *[]FileTreeRow, files []model.FileSummary
 	total := len(dirNames) + len(n.files)
 	for i, name := range dirNames {
 		child := n.dirs[name]
-		visibleChild := compactDir(child, collapsed)
-		isCollapsed := collapsed != nil && collapsed[visibleChild.path]
+		isCollapsed := collapsed != nil && collapsed[child.path]
 		last := i == total-1
 		*rows = append(*rows, FileTreeRow{
 			Kind:          FileTreeRowDir,
-			Path:          visibleChild.path,
-			Label:         compactDirLabel(n.path, visibleChild.path, name),
+			Path:          child.path,
 			Depth:         len(continuations),
 			FileIndex:     -1,
 			Collapsed:     isCollapsed,
@@ -285,7 +283,7 @@ func (n *fileTreeNode) appendRows(rows *[]FileTreeRow, files []model.FileSummary
 		})
 		if !isCollapsed {
 			nextContinuations := append(copyContinuations(continuations), !last)
-			visibleChild.appendRows(rows, files, collapsed, nextContinuations)
+			child.appendRows(rows, files, collapsed, nextContinuations)
 		}
 	}
 
@@ -300,30 +298,6 @@ func (n *fileTreeNode) appendRows(rows *[]FileTreeRow, files []model.FileSummary
 			Continuations: copyContinuations(continuations),
 		})
 	}
-}
-
-func compactDir(n *fileTreeNode, collapsed map[string]bool) *fileTreeNode {
-	for n != nil && len(n.files) == 0 && len(n.dirs) == 1 {
-		if collapsed != nil && collapsed[n.path] {
-			return n
-		}
-		for _, child := range n.dirs {
-			n = child
-			break
-		}
-	}
-	return n
-}
-
-func compactDirLabel(parentPath, dirPath, fallback string) string {
-	if parentPath == "" {
-		return dirPath
-	}
-	prefix := parentPath + "/"
-	if label, ok := strings.CutPrefix(dirPath, prefix); ok {
-		return label
-	}
-	return fallback
 }
 
 func copyContinuations(in []bool) []bool {
@@ -382,11 +356,7 @@ func renderFileTreeDirEntry(row FileTreeRow, selected bool, width int) string {
 	if row.Collapsed {
 		marker = "[+]"
 	}
-	label := row.Label
-	if label == "" {
-		label = pathpkg.Base(row.Path)
-	}
-	label += "/"
+	label := pathpkg.Base(row.Path) + "/"
 	connector := treeConnector(row)
 	connectorWidth := lipgloss.Width(connector)
 	rest := marker + " " + label
