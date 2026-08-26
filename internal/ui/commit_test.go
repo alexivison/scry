@@ -94,7 +94,7 @@ func TestCommitUI_CKeyIgnoredWhenNoProvider(t *testing.T) {
 	}
 }
 
-func TestCommitUI_CKeyTriggersGenerationFromPatchPane(t *testing.T) {
+func TestCommitUI_CKeyIsReservedForPatchNotes(t *testing.T) {
 	t.Parallel()
 
 	provider := &mockCommitProvider{message: "feat: add feature"}
@@ -106,14 +106,14 @@ func TestCommitUI_CKeyTriggersGenerationFromPatchPane(t *testing.T) {
 
 	m, cmd := sendKey(m, "c")
 
-	if m.State.FocusPane != model.PaneCommit {
-		t.Errorf("FocusPane = %q, want %q", m.State.FocusPane, model.PaneCommit)
+	if m.State.FocusPane != model.PanePatch {
+		t.Errorf("FocusPane = %q, want %q", m.State.FocusPane, model.PanePatch)
 	}
-	if !m.State.CommitState.InFlight {
-		t.Error("CommitState.InFlight = false, want true")
+	if m.State.CommitState.InFlight {
+		t.Error("patch c unexpectedly started commit generation")
 	}
-	if cmd == nil {
-		t.Fatal("expected async Cmd for commit generation from patch pane")
+	if cmd != nil {
+		t.Fatal("patch c without a note store returned a command")
 	}
 }
 

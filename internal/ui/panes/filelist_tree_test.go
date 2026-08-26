@@ -21,7 +21,7 @@ func TestProjectFileTreeParentBeforeChildAndFileIndices(t *testing.T) {
 		{Path: "internal/model/state.go"},
 	}
 
-	proj := ProjectFileTree(files, model.FileFilterAll, nil, 0)
+	proj := ProjectFileTree(files, model.FileFilterAll, nil, 0, 0)
 
 	assertRowBefore(t, proj.Rows, "cmd", "cmd/scry")
 	assertRowBefore(t, proj.Rows, "cmd/scry", "cmd/scry/main.go")
@@ -46,7 +46,7 @@ func TestProjectFileTreeCollapsedDirectoryHidesDescendants(t *testing.T) {
 		{Path: "README.md"},
 	}
 
-	proj := ProjectFileTree(files, model.FileFilterAll, map[string]bool{"internal": true}, 0)
+	proj := ProjectFileTree(files, model.FileFilterAll, map[string]bool{"internal": true}, 0, 0)
 
 	if !hasRow(proj.Rows, "internal") {
 		t.Fatal("collapsed directory row should remain visible")
@@ -67,7 +67,7 @@ func TestProjectFileTreeCursorMapsDirectoryAndFileRows(t *testing.T) {
 		{Path: "internal/app.go"},
 	}
 
-	proj := ProjectFileTree(files, model.FileFilterAll, nil, 0)
+	proj := ProjectFileTree(files, model.FileFilterAll, nil, 0, 0)
 	if proj.Rows[proj.Cursor].Kind != FileTreeRowDir {
 		t.Fatalf("cursor row kind = %v, want dir", proj.Rows[proj.Cursor].Kind)
 	}
@@ -79,7 +79,7 @@ func TestProjectFileTreeCursorMapsDirectoryAndFileRows(t *testing.T) {
 	if fileCursor < 0 {
 		t.Fatal("missing internal/app.go row")
 	}
-	proj = ProjectFileTree(files, model.FileFilterAll, nil, fileCursor)
+	proj = ProjectFileTree(files, model.FileFilterAll, nil, fileCursor, 0)
 	if proj.SelectedFile != 1 {
 		t.Fatalf("SelectedFile = %d, want original file index 1", proj.SelectedFile)
 	}
@@ -126,7 +126,7 @@ func TestProjectFileTreeFiltersTestsAndNonTests(t *testing.T) {
 		{Path: "web/button.spec.ts"},
 	}
 
-	tests := ProjectFileTree(files, model.FileFilterTests, nil, 0)
+	tests := ProjectFileTree(files, model.FileFilterTests, nil, 0, 0)
 	if tests.FilteredFiles != 2 {
 		t.Fatalf("tests.FilteredFiles = %d, want 2", tests.FilteredFiles)
 	}
@@ -134,7 +134,7 @@ func TestProjectFileTreeFiltersTestsAndNonTests(t *testing.T) {
 		t.Fatal("test filter should exclude non-test files")
 	}
 
-	nonTests := ProjectFileTree(files, model.FileFilterNonTests, nil, 0)
+	nonTests := ProjectFileTree(files, model.FileFilterNonTests, nil, 0, 0)
 	if nonTests.FilteredFiles != 1 {
 		t.Fatalf("nonTests.FilteredFiles = %d, want 1", nonTests.FilteredFiles)
 	}
@@ -142,7 +142,7 @@ func TestProjectFileTreeFiltersTestsAndNonTests(t *testing.T) {
 		t.Fatal("non-test filter should exclude detected test files")
 	}
 
-	empty := ProjectFileTree(files[:1], model.FileFilterTests, nil, 0)
+	empty := ProjectFileTree(files[:1], model.FileFilterTests, nil, 0, 0)
 	if empty.FilteredFiles != 0 || len(empty.Rows) != 0 || empty.SelectedFile != -1 {
 		t.Fatalf("empty test filter should be stable, got %+v", empty)
 	}
@@ -155,7 +155,7 @@ func TestProjectFileTreeCollapsedFolderCanBeSelected(t *testing.T) {
 		{Path: "internal/app.go"},
 	}
 
-	proj := ProjectFileTree(files, model.FileFilterAll, map[string]bool{"internal": true}, 0)
+	proj := ProjectFileTree(files, model.FileFilterAll, map[string]bool{"internal": true}, 0, 0)
 	if proj.Cursor != 0 {
 		t.Fatalf("Cursor = %d, want collapsed folder row 0", proj.Cursor)
 	}

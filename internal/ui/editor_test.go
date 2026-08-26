@@ -1,11 +1,46 @@
 package ui
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestNoteComposerCtrlGReturnsToDraft(t *testing.T) {
+	t.Setenv("EDITOR", "true")
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m, _ = sendKey(m, "c")
+	m.noteState.composer.input.SetValue("before")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	m = updated.(Model)
+	if cmd == nil || m.noteState.composer == nil {
+		t.Fatal("Ctrl+G did not suspend into an editor")
+	}
+	updated, _ = m.Update(noteEditorClosedMsg{body: "after\nwith spaces  "})
+	m = updated.(Model)
+	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "after\nwith spaces  " {
+		t.Fatalf("editor return lost draft: %#v", m.noteState.composer)
+	}
+}
+
+func TestNoteEditorFailurePreservesDraft(t *testing.T) {
+	m := notePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m, _ = sendKey(m, "c")
+	m.noteState.composer.input.SetValue("before")
+
+	updated, _ := m.Update(noteEditorClosedMsg{err: errors.New("editor exited")})
+	m = updated.(Model)
+	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "before" || m.noteState.err == "" {
+		t.Fatalf("editor failure lost draft: composer %#v, err %q", m.noteState.composer, m.noteState.err)
+	}
+}
 
 func TestKeyOFromPatchUsesCurrentLine(t *testing.T) {
 	prevBuilder := buildEditorCommand

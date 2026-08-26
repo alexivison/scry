@@ -183,6 +183,7 @@ func TestWrappedPairedParagraphHighlightsOnlyChangedWords(t *testing.T) {
 			vp.Width = tc.width
 			vp.Height = 20
 			vp.GutterVisible = false
+			vp.selectedNoteID = "suppress-cursor"
 
 			got := vp.Render()
 
@@ -661,6 +662,7 @@ func TestWrapSearchHighlightOnContinuationRow(t *testing.T) {
 	vp.GutterVisible = true
 	vp.SearchQuery = "def"
 	vp.SearchMatch = SearchMatch{Line: 0, Start: matchStart, End: matchStart + len("def")}
+	vp.selectedNoteID = "suppress-cursor"
 
 	lines := strings.Split(vp.Render(), "\n")
 	if len(lines) != 2 {
@@ -671,6 +673,34 @@ func TestWrapSearchHighlightOnContinuationRow(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "\x1b[7") {
 		t.Fatalf("continuation row should contain reversed search highlight: %q", lines[1])
+	}
+}
+
+func TestSourceCursorPreservesSearchHighlight(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	for _, tc := range []struct {
+		name string
+		mode model.PatchDiffMode
+	}{
+		{name: "unified", mode: model.PatchDiffModeUnified},
+		{name: "side-by-side", mode: model.PatchDiffModeSideBySide},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vp := NewPatchViewport(notePatch())
+			vp.DiffMode = tc.mode
+			vp.Width = 72
+			vp.Height = 20
+			vp.SearchQuery = "main"
+			vp.SearchMatch = SearchMatch{Line: 0, Start: len("package "), End: len("package main")}
+
+			line := renderedLine(vp.Render(), "package main")
+			if !strings.Contains(line, ";7;") && !strings.Contains(line, "\x1b[7") {
+				t.Fatalf("selected row lost reversed search match: %q", line)
+			}
+		})
 	}
 }
 

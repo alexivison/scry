@@ -73,8 +73,7 @@ scry --no-dashboard
 ### Persistent notes (CLI)
 
 Persistent notes are private to Scry and the selected local worktree. They are
-stored outside the repository, use JSON by default, and are currently
-CLI-only.
+stored outside the repository and use JSON by default.
 
 ```bash
 # Add a note; the JSON response includes its note ID
@@ -85,15 +84,24 @@ scry note sync
 scry note remove <note-id>
 ```
 
+Scry shows open notes inline with the diff and keeps resolved and stale notes
+in a bottom `Notes` view. Use `c` to create a note on the selected source line,
+`j` / `k` to move across source lines and inline notes, `e`, `R`, and `d` to
+edit, resolve, or delete the selected note, and `{` / `}` to move between notes.
+The existing `r` refresh also loads notes
+created by an agent through the CLI. Anchor and state repair remain CLI
+operations.
+
 ## Keymap
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Navigate file list / worktree list |
+| `j` / `k` | Navigate lists / move across source lines and notes |
 | `l` | Expand folder / select file / drill into worktree |
 | `Enter` | Focus selected diff / drill into worktree |
 | `h` / `Esc` | Back to file list / dashboard |
 | `n` / `p` | Next / previous hunk |
+| `{` / `}` | Previous / next note |
 | `/` | Search in current patch |
 | `Enter` | Next search match |
 | `N` | Previous search match |
@@ -103,10 +111,14 @@ scry note remove <note-id>
 | `b` | Cycle compare basis |
 | `Tab` | Toggle split/modal layout |
 | `o` | Open selected file in nvim |
-| `c` | Generate commit message (when `--commit`) |
+| `c` | Create a note in the patch / generate a commit from the file list |
 | `e` | Edit generated commit message |
 | `r` | Refresh / regenerate commit message |
 | `X` | Discard selected file's changes (modal y/N confirmation) |
+| `e` / `R` / `d` | Edit / resolve / delete the selected note |
+| `Enter` | Insert a newline in the note composer |
+| `Alt+Enter` | Submit the note composer |
+| `Ctrl+G` | Open the note composer in `$EDITOR` |
 | `?` | Show help |
 | `q` | Quit |
 
@@ -123,7 +135,7 @@ These are intentional omissions, not missing features:
 
 - No staging, rebasing, cherry-picking, or conflict resolution. Commit is opt-in via `--commit`; per-file `X` discard is the only other write op and is gated behind a modal y/N confirmation.
 - No hunk-level or bulk discard
-- No GitHub review comments or review-thread management; persistent notes are private Scry-local notes for the selected worktree, stored outside the repository, and managed through the CLI.
+- No GitHub review comments or review-thread management; persistent notes are private Scry-local notes for the selected worktree and stored outside the repository.
 - No plugin system
 - No syntax-aware / AST diff mode
 

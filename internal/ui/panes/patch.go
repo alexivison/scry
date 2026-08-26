@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alexivison/scry/internal/model"
+	"github.com/alexivison/scry/internal/notes"
 	"github.com/alexivison/scry/internal/ui/syntax"
 	"github.com/alexivison/scry/internal/ui/theme"
 )
@@ -30,11 +31,20 @@ type PatchViewport struct {
 	SearchQuery   string      // current search query for highlighting
 	SearchMatch   SearchMatch // current match anchored to a logical diff line
 	GutterVisible bool        // when false, suppress line number gutter (minimal mode)
+	ColorEnabled  bool
 
 	// Pre-computed flat line list for rendering.
 	lines             []patchLine
 	gutterDigits      int // width of each line-number column (min 4)
 	syntaxHighlighted *syntax.LineCache
+	notes             []notes.Note
+	selectedNoteID    string
+	noteDraft         *NoteDraftView
+	sourceCursor      int
+	renderWidth       int
+	renderHeight      int
+	visibilityDirty   bool
+	manualScroll      bool
 }
 
 const bodyOffsetStep = 8
@@ -51,7 +61,8 @@ type patchLine struct {
 	typ       lineType
 	header    string         // only for hunkHeader
 	diff      model.DiffLine // only for diff lines
-	diffIndex int            // logical diff line index, headers excluded
+	file      string
+	diffIndex int // logical diff line index, headers excluded
 	hunkIndex int
 
 	changedSpans []bodySpan
@@ -63,6 +74,12 @@ type visualRow struct {
 	segment      bodySegment
 	continuation bool
 	side         *sideBySideRow
+	note         *noteVisualRow
+}
+
+type cursorTarget struct {
+	diffIndex int
+	noteID    string
 }
 
 type sideBySideRow struct {
@@ -110,6 +127,10 @@ func NewPatchViewport(patch model.FilePatch) *PatchViewport {
 		DiffMode:      model.PatchDiffModeUnified,
 		SearchMatch:   NoSearchMatch(),
 		GutterVisible: true,
+		ColorEnabled:  true,
+		sourceCursor:  -1,
+		renderWidth:   -1,
+		renderHeight:  -1,
 	}
 	vp.lines = vp.buildLines()
 	vp.gutterDigits = vp.computeGutterDigits()
@@ -145,22 +166,26 @@ func (vp *PatchViewport) computeGutterDigits() int {
 func (vp *PatchViewport) buildLines() []patchLine {
 	var lines []patchLine
 	diffIndex := 0
-	filePath := ""
+	filePath := vp.Patch.Summary.Path
+	headerPath := ""
 	for hunkIndex, h := range vp.Patch.Hunks {
-		if h.FilePath != "" && h.FilePath != filePath {
-			lines = append(lines, patchLine{typ: lineTypeFileHeader, header: h.FilePath, diffIndex: -1})
+		if h.FilePath != "" {
 			filePath = h.FilePath
 		}
+		if h.FilePath != "" && h.FilePath != headerPath {
+			lines = append(lines, patchLine{typ: lineTypeFileHeader, header: h.FilePath, diffIndex: -1})
+			headerPath = h.FilePath
+		}
 		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1, hunkIndex: hunkIndex})
-		lines = append(lines, buildPatchLines(h.Lines, hunkIndex, &diffIndex)...)
+		lines = append(lines, buildPatchLines(h.Lines, filePath, hunkIndex, &diffIndex)...)
 	}
 	return lines
 }
 
-func buildPatchLines(diffLines []model.DiffLine, hunkIndex int, diffIndex *int) []patchLine {
+func buildPatchLines(diffLines []model.DiffLine, file string, hunkIndex int, diffIndex *int) []patchLine {
 	lines := make([]patchLine, 0, len(diffLines))
 	for _, dl := range diffLines {
-		lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, diffIndex: *diffIndex, hunkIndex: hunkIndex})
+		lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, file: file, diffIndex: *diffIndex, hunkIndex: hunkIndex})
 		*diffIndex = *diffIndex + 1
 	}
 	annotateIntralineChanges(lines)
@@ -422,6 +447,7 @@ func (vp *PatchViewport) NextHunk() {
 	}
 	vp.CurrentHunk++
 	vp.ScrollOffset = vp.hunkLineOffset(vp.CurrentHunk)
+	vp.sourceCursor = -1
 }
 
 // PrevHunk moves to the previous hunk. No-op at the first hunk.
@@ -431,12 +457,49 @@ func (vp *PatchViewport) PrevHunk() {
 	}
 	vp.CurrentHunk--
 	vp.ScrollOffset = vp.hunkLineOffset(vp.CurrentHunk)
+	vp.sourceCursor = -1
+}
+
+func (vp *PatchViewport) MoveCursor(delta int) string {
+	vp.manualScroll = false
+	rows := vp.visualRows()
+	vp.ensureSourceCursor(rows)
+	targets := cursorTargets(rows)
+	if len(targets) == 0 {
+		return vp.selectedNoteID
+	}
+	position := -1
+	for i, target := range targets {
+		noteSelected := vp.selectedNoteID != "" && target.noteID == vp.selectedNoteID
+		sourceSelected := vp.selectedNoteID == "" && target.noteID == "" && target.diffIndex == vp.sourceCursor
+		if noteSelected || sourceSelected {
+			position = i
+			break
+		}
+	}
+	target := position + delta
+	if target < 0 || target >= len(targets) {
+		return vp.selectedNoteID
+	}
+	selected := targets[target]
+	if selected.noteID != "" {
+		vp.selectedNoteID = selected.noteID
+		vp.ensureNoteVisible(rows, selected.noteID)
+	} else {
+		vp.selectedNoteID = ""
+		vp.sourceCursor = selected.diffIndex
+		vp.ensureSourceCursorVisible(rows)
+	}
+	vp.SyncCurrentHunk()
+	return vp.selectedNoteID
 }
 
 // ScrollDown moves the viewport one line down. No-op at the bottom.
 func (vp *PatchViewport) ScrollDown() {
 	if vp.ScrollOffset < vp.TotalLines()-1 {
 		vp.ScrollOffset++
+		vp.sourceCursor = -1
+		vp.manualScroll = true
 		vp.SyncCurrentHunk()
 	}
 }
@@ -445,6 +508,8 @@ func (vp *PatchViewport) ScrollDown() {
 func (vp *PatchViewport) ScrollUp() {
 	if vp.ScrollOffset > 0 {
 		vp.ScrollOffset--
+		vp.sourceCursor = -1
+		vp.manualScroll = true
 		vp.SyncCurrentHunk()
 	}
 }
@@ -459,6 +524,8 @@ func (vp *PatchViewport) PageDown() {
 	if vp.ScrollOffset > total-1 {
 		vp.ScrollOffset = total - 1
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -468,6 +535,8 @@ func (vp *PatchViewport) PageUp() {
 	if vp.ScrollOffset < 0 {
 		vp.ScrollOffset = 0
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -481,6 +550,8 @@ func (vp *PatchViewport) HalfPageDown() {
 	if vp.ScrollOffset > total-1 {
 		vp.ScrollOffset = total - 1
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -490,6 +561,8 @@ func (vp *PatchViewport) HalfPageUp() {
 	if vp.ScrollOffset < 0 {
 		vp.ScrollOffset = 0
 	}
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -497,6 +570,8 @@ func (vp *PatchViewport) HalfPageUp() {
 func (vp *PatchViewport) ScrollToTop() {
 	vp.ScrollOffset = 0
 	vp.CurrentHunk = 0
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 }
 
 // ScrollToBottom jumps to the end of the patch.
@@ -506,6 +581,8 @@ func (vp *PatchViewport) ScrollToBottom() {
 		max = 0
 	}
 	vp.ScrollOffset = max
+	vp.sourceCursor = -1
+	vp.manualScroll = true
 	vp.SyncCurrentHunk()
 }
 
@@ -644,6 +721,8 @@ func (vp *PatchViewport) SetLineMode(mode model.LineMode) {
 		}
 	}
 	vp.clampScrollOffset()
+	vp.manualScroll = false
+	vp.ensureActiveVisible(vp.visualRows())
 	vp.SyncCurrentHunk()
 }
 
@@ -681,6 +760,8 @@ func (vp *PatchViewport) setLayout(mode model.PatchDiffMode, gutterVisible bool)
 		vp.ScrollOffset = vp.hunkLineOffset(headerHunk)
 	}
 	vp.clampScrollOffset()
+	vp.manualScroll = false
+	vp.ensureActiveVisible(vp.visualRows())
 	vp.SyncCurrentHunk()
 }
 
@@ -770,9 +851,28 @@ func (vp *PatchViewport) Render() string {
 
 	vp.clampScrollOffset()
 	vp.ClampXOffset()
+	rows := vp.visualRows()
+	vp.ensureSourceCursor(rows)
+	resized := vp.Width != vp.renderWidth || vp.Height != vp.renderHeight
+	repairDataVisibility := vp.visibilityDirty && !vp.manualScroll
+	if resized || repairDataVisibility {
+		vp.ensureActiveVisible(rows)
+	}
+	vp.visibilityDirty = false
+	vp.manualScroll = false
+	vp.renderWidth = vp.Width
+	vp.renderHeight = vp.Height
 	visible := vp.visibleRows()
 	rendered := make([]string, 0, len(visible))
 	for _, row := range visible {
+		if row.note != nil {
+			line := row.note.text
+			if vp.selectedNoteID != "" && row.note.id == vp.selectedNoteID {
+				line = vp.renderCursorRow(line)
+			}
+			rendered = append(rendered, line)
+			continue
+		}
 		switch row.line.typ {
 		case lineTypeFileHeader:
 			rendered = append(rendered, renderFileSeparator(row.line.header, vp.Width))
@@ -780,17 +880,29 @@ func (vp *PatchViewport) Render() string {
 			rendered = append(rendered, renderHunkSeparator(row.line.header, vp.Width))
 		case lineTypeDiff:
 			if row.side != nil {
-				rendered = append(rendered, vp.renderSideBySideVisualRow(row))
+				rendered = append(rendered, vp.renderSideBySideVisualRow(row, vp.sourceCursorOn(row)))
 				continue
 			}
 			match := NoSearchMatch()
 			if vp.SearchQuery != "" && vp.SearchMatch.Line == row.line.diffIndex {
 				match = vp.SearchMatch
 			}
-			rendered = append(rendered, vp.renderDiffVisualRow(row, match))
+			line := vp.renderDiffVisualRow(row, match)
+			if vp.sourceCursorOn(row) {
+				line = vp.renderCursorRow(line, vp.unifiedCursorMatch(row, match))
+			}
+			rendered = append(rendered, line)
 		}
 	}
 	return strings.Join(rendered, "\n")
+}
+
+func (vp *PatchViewport) sourceCursorOn(row visualRow) bool {
+	if vp.selectedNoteID != "" || vp.noteDraft != nil {
+		return false
+	}
+	index, ok := row.sourceDiffIndex()
+	return ok && index == vp.sourceCursor
 }
 
 func (vp *PatchViewport) visibleRows() []visualRow {
@@ -811,10 +923,13 @@ func (vp *PatchViewport) visibleRows() []visualRow {
 }
 
 func (vp *PatchViewport) visualRows() []visualRow {
+	var rows []visualRow
 	if vp.DiffMode == model.PatchDiffModeSideBySide {
-		return vp.sideBySideVisualRows()
+		rows = vp.sideBySideVisualRows()
+	} else {
+		rows = vp.unifiedVisualRows()
 	}
-	return vp.unifiedVisualRows()
+	return vp.withNotes(rows)
 }
 
 func (vp *PatchViewport) unifiedVisualRows() []visualRow {
@@ -1106,15 +1221,128 @@ func (vp *PatchViewport) renderDiffVisualRow(row visualRow, match SearchMatch) s
 	)
 }
 
-func (vp *PatchViewport) renderSideBySideVisualRow(row visualRow) string {
+func (vp *PatchViewport) renderSideBySideVisualRow(row visualRow, sourceCursor bool) string {
 	leftWidth, rightWidth := sideBySideColumnWidths(vp.Width)
 	left := vp.renderSideBySideCell(row.side.old, leftWidth, sideOld)
 	right := vp.renderSideBySideCell(row.side.new, rightWidth, sideNew)
 	line := left + sideBySideSeparator() + right
+	if sourceCursor {
+		separatorWidth := lipgloss.Width(sideBySideSeparator())
+		line = vp.renderCursorRow(line,
+			vp.sideCursorMatch(row.side.old, leftWidth, sideOld, 0),
+			vp.sideCursorMatch(row.side.new, rightWidth, sideNew, leftWidth+separatorWidth),
+		)
+	}
 	if vp.Width > 0 {
 		return truncateToWidth(line, vp.Width)
 	}
 	return line
+}
+
+func renderCursorRow(line string, width int) string {
+	if width <= 0 || line == "" {
+		return line
+	}
+	return selectedStyle.Render(cursorRowText(line, width))
+}
+
+type cursorSpan struct {
+	start int
+	end   int
+}
+
+func (vp *PatchViewport) renderCursorRow(line string, spans ...cursorSpan) string {
+	if vp.Width <= 0 || line == "" {
+		return line
+	}
+	text := cursorRowText(line, vp.Width)
+	if !vp.ColorEnabled {
+		return text
+	}
+	return renderCursorSpans(text, spans)
+}
+
+func renderCursorSpans(line string, spans []cursorSpan) string {
+	width := lipgloss.Width(line)
+	valid := spans[:0]
+	for _, span := range spans {
+		span.start = max(span.start, 0)
+		span.end = min(span.end, width)
+		if span.start < span.end {
+			valid = append(valid, span)
+		}
+	}
+	if len(valid) == 0 {
+		return selectedStyle.Render(line)
+	}
+
+	sort.Slice(valid, func(i, j int) bool { return valid[i].start < valid[j].start })
+	var rendered strings.Builder
+	position := 0
+	for _, span := range valid {
+		span.start = max(span.start, position)
+		if span.start >= span.end {
+			continue
+		}
+		if position < span.start {
+			rendered.WriteString(selectedStyle.Render(ansi.Cut(line, position, span.start)))
+		}
+		rendered.WriteString(selectedStyle.Reverse(true).Render(ansi.Cut(line, span.start, span.end)))
+		position = span.end
+	}
+	if position < width {
+		rendered.WriteString(selectedStyle.Render(ansi.Cut(line, position, width)))
+	}
+	return rendered.String()
+}
+
+func (vp *PatchViewport) unifiedCursorMatch(row visualRow, match SearchMatch) cursorSpan {
+	gutterWidth := 0
+	if vp.GutterVisible {
+		gutterWidth = lipgloss.Width(formatGutter(row.line.diff.OldNo, row.line.diff.NewNo, vp.gutterDigits))
+	}
+	bodyStart := gutterWidth + 1
+	return vp.cursorMatch(row.segment, match, bodyStart, vp.Width-bodyStart)
+}
+
+func (vp *PatchViewport) sideCursorMatch(cell *sideBySideCell, width int, side sideBySideSide, offset int) cursorSpan {
+	if cell == nil || vp.SearchQuery == "" || vp.SearchMatch.Line != cell.line.diffIndex {
+		return cursorSpan{}
+	}
+	gutterWidth := 0
+	if vp.GutterVisible {
+		gutterWidth = lipgloss.Width(formatSideGutter(sideBySideLineNo(cell.line.diff, side), vp.gutterDigits))
+	}
+	bodyStart := gutterWidth + 1
+	span := vp.cursorMatch(cell.segment, vp.SearchMatch, bodyStart, width-bodyStart)
+	span.start += offset
+	span.end += offset
+	return span
+}
+
+func (vp *PatchViewport) cursorMatch(segment bodySegment, match SearchMatch, bodyStart, bodyWidth int) cursorSpan {
+	match = segment.matchInSegment(match)
+	if vp.SearchQuery == "" || bodyWidth <= 0 || !match.validForBody(segment.text) {
+		return cursorSpan{}
+	}
+
+	start := lipgloss.Width(segment.text[:match.Start])
+	end := lipgloss.Width(segment.text[:match.End])
+	if vp.LineMode == model.LineModeScroll {
+		start -= vp.XOffset
+		end -= vp.XOffset
+	}
+	start = max(start, 0)
+	end = min(end, bodyWidth)
+	if start >= end {
+		return cursorSpan{}
+	}
+	return cursorSpan{start: bodyStart + start, end: bodyStart + end}
+}
+
+func cursorRowText(line string, width int) string {
+	line = padOrTruncateToWidth(ansi.Strip(line), width)
+	return "▌" + ansi.Cut(line, 1, width)
 }
 
 type sideBySideSide int
@@ -1721,6 +1949,100 @@ func (r visualRow) newLineNo() *int {
 	return nil
 }
 
+func (r visualRow) sourceLine() (int, bool) {
+	if r.note != nil || r.line.typ != lineTypeDiff {
+		return 0, false
+	}
+	line := r.newLineNo()
+	if line == nil {
+		return 0, false
+	}
+	return *line, true
+}
+
+func (r visualRow) sourceFile() string {
+	if r.side != nil && r.side.new != nil {
+		return r.side.new.line.file
+	}
+	return r.line.file
+}
+
+func (r visualRow) sourceDiffIndex() (int, bool) {
+	if _, ok := r.sourceLine(); !ok {
+		return 0, false
+	}
+	if r.side == nil {
+		return r.line.diffIndex, true
+	}
+	if r.side.new == nil {
+		return 0, false
+	}
+	return r.side.new.line.diffIndex, true
+}
+
+func cursorTargets(rows []visualRow) []cursorTarget {
+	targets := make([]cursorTarget, 0)
+	lastDiff := -1
+	lastNote := ""
+	for _, row := range rows {
+		if row.note != nil {
+			if row.note.id != "" && row.note.id != lastNote {
+				targets = append(targets, cursorTarget{diffIndex: -1, noteID: row.note.id})
+				lastNote = row.note.id
+			}
+			continue
+		}
+		index, ok := row.sourceDiffIndex()
+		if !ok || index == lastDiff {
+			continue
+		}
+		targets = append(targets, cursorTarget{diffIndex: index})
+		lastDiff = index
+		lastNote = ""
+	}
+	return targets
+}
+
+func (vp *PatchViewport) ensureSourceCursor(rows []visualRow) {
+	if vp.sourceCursor >= 0 {
+		return
+	}
+	start := min(max(vp.ScrollOffset, 0), len(rows))
+	for i := start; i < len(rows); i++ {
+		if index, ok := rows[i].sourceDiffIndex(); ok {
+			vp.sourceCursor = index
+			return
+		}
+	}
+	for i := start - 1; i >= 0; i-- {
+		if index, ok := rows[i].sourceDiffIndex(); ok {
+			vp.sourceCursor = index
+			return
+		}
+	}
+}
+
+func (vp *PatchViewport) ensureSourceCursorVisible(rows []visualRow) {
+	for i, row := range rows {
+		index, ok := row.sourceDiffIndex()
+		if !ok || index != vp.sourceCursor {
+			continue
+		}
+		if i < vp.ScrollOffset {
+			vp.ScrollOffset = i
+		} else if vp.Height > 0 && i >= vp.ScrollOffset+vp.Height {
+			vp.ScrollOffset = i - vp.Height + 1
+		}
+		return
+	}
+}
+
+func (vp *PatchViewport) SyncSourceCursor() {
+	vp.manualScroll = false
+	vp.sourceCursor = -1
+	vp.ensureSourceCursor(vp.visualRows())
+}
+
 // DiffLineToViewportLine converts a DiffLine index (0-based across all hunks,
 // headers excluded) to the corresponding viewport line index (headers included).
 func (vp *PatchViewport) DiffLineToViewportLine(diffIdx int) int {
@@ -1796,6 +2118,35 @@ func (vp *PatchViewport) CurrentTargetLine() (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// CurrentSourceLine returns the line selected by the current-source cursor.
+func (vp *PatchViewport) CurrentSourceLine() (int, bool) {
+	rows := vp.visualRows()
+	vp.ensureSourceCursor(rows)
+	for _, row := range rows {
+		index, ok := row.sourceDiffIndex()
+		if !ok || index != vp.sourceCursor {
+			continue
+		}
+		return row.sourceLine()
+	}
+	return 0, false
+}
+
+// CurrentSourceAnchor returns the file and line selected by the source cursor.
+func (vp *PatchViewport) CurrentSourceAnchor() (string, int, bool) {
+	rows := vp.visualRows()
+	vp.ensureSourceCursor(rows)
+	for _, row := range rows {
+		index, ok := row.sourceDiffIndex()
+		if !ok || index != vp.sourceCursor {
+			continue
+		}
+		line, ok := row.sourceLine()
+		return row.sourceFile(), line, ok && row.sourceFile() != ""
+	}
+	return "", 0, false
 }
 
 // Styles for patch rendering.

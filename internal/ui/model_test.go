@@ -284,8 +284,8 @@ func TestModelPlumbsColorProfileIntoSyntaxLineCache(t *testing.T) {
 	none.patchViewport.Height = 1
 	none.patchViewport.GutterVisible = false
 	gotNone := none.patchViewport.Render()
-	if gotNone != " "+body {
-		t.Fatalf("ColorNone rendered line = %q, want raw context body %q", gotNone, " "+body)
+	if !strings.HasPrefix(gotNone, "▌"+body) || lipgloss.Width(gotNone) != none.patchViewport.Width {
+		t.Fatalf("ColorNone rendered line = %q, want a full-width cursor row", gotNone)
 	}
 	if strings.Contains(gotNone, "\x1b[") {
 		t.Fatalf("ColorNone rendered syntax escapes: %q", gotNone)
@@ -914,25 +914,25 @@ func TestPatchPaneLineScroll(t *testing.T) {
 		t.Fatalf("initial scroll = %d, want 0", um.patchViewport.ScrollOffset)
 	}
 
-	// j scrolls down
+	// j moves the source cursor while both lines remain visible.
 	updated2, _ := um.Update(keyMsg('j'))
 	um2 := updated2.(Model)
-	if um2.patchViewport.ScrollOffset != 1 {
-		t.Errorf("after j: scroll = %d, want 1", um2.patchViewport.ScrollOffset)
+	if line, ok := um2.patchViewport.CurrentSourceLine(); !ok || line != 2 {
+		t.Errorf("after j: source line = %d, %v; want 2, true", line, ok)
 	}
 
-	// k scrolls back up
+	// k moves the cursor back to the first current-source line.
 	updated3, _ := um2.Update(keyMsg('k'))
 	um3 := updated3.(Model)
-	if um3.patchViewport.ScrollOffset != 0 {
-		t.Errorf("after k: scroll = %d, want 0", um3.patchViewport.ScrollOffset)
+	if line, ok := um3.patchViewport.CurrentSourceLine(); !ok || line != 1 {
+		t.Errorf("after k: source line = %d, %v; want 1, true", line, ok)
 	}
 
-	// k at top is no-op
+	// k at the first source line is a no-op.
 	updated4, _ := um3.Update(keyMsg('k'))
 	um4 := updated4.(Model)
-	if um4.patchViewport.ScrollOffset != 0 {
-		t.Errorf("k at top: scroll = %d, want 0", um4.patchViewport.ScrollOffset)
+	if line, ok := um4.patchViewport.CurrentSourceLine(); !ok || line != 1 {
+		t.Errorf("k at top: source line = %d, %v; want 1, true", line, ok)
 	}
 }
 

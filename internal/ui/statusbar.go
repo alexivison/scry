@@ -41,6 +41,15 @@ func (m Model) viewStatusBar() string {
 	if m.State.DiscardInFlight {
 		return m.renderBar(m.spinner.View()+" Discarding "+m.State.DiscardPath+"...", statusBarStyle)
 	}
+	if m.noteState.mutating {
+		return m.renderBar(m.spinner.View()+" Saving note...", statusBarStyle)
+	}
+	if m.noteState.err != "" {
+		return m.renderErrorBar(m.noteState.err)
+	}
+	if m.noteState.composer != nil {
+		return m.renderBar("Enter newline    Alt+Enter submit    Ctrl+G editor    Esc cancel", statusBarStyle)
+	}
 	if m.refreshErr != "" {
 		return m.renderErrorBar(m.refreshErr)
 	}

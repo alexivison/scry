@@ -125,3 +125,34 @@ func TestStatusBar_NarrowTruncation(t *testing.T) {
 		t.Error("narrow status bar should not be empty")
 	}
 }
+
+func TestStatusBarDestructiveErrorPrecedesNoteError(t *testing.T) {
+	m := NewModel(sampleState())
+	m.width = 100
+	m.State.DiscardErr = "discard failed"
+	m.noteState.err = "note failed"
+
+	bar := m.viewStatusBar()
+	if !strings.Contains(bar, "discard failed") || strings.Contains(bar, "note failed") {
+		t.Fatalf("wrong status precedence: %s", bar)
+	}
+}
+
+func TestPatchFooterAdvertisesNotes(t *testing.T) {
+	m := notePatchModel()
+	footer := m.patchFooter()
+	if !strings.Contains(footer, "c") || !strings.Contains(footer, "}/{") {
+		t.Fatalf("patch footer missing note keys: %q", footer)
+	}
+}
+
+func TestSuccessfulNoteMutationClearsPriorStatus(t *testing.T) {
+	m := notePatchModel()
+	m.noteState.err = "old note failure"
+	m.noteState.mutating = true
+	updated, _ := m.Update(noteMutationMsg{storeGeneration: m.noteStoreGeneration})
+	m = updated.(Model)
+	if m.noteState.err != "" {
+		t.Fatalf("successful mutation kept status %q", m.noteState.err)
+	}
+}

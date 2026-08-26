@@ -100,11 +100,13 @@ type Model struct {
 	commitExecutor CommitExecutor     // optional executor for git commit
 	commitCancel   context.CancelFunc // cancels the in-flight commit generation request
 
-	worktreeLoader    WorktreeLoader    // optional loader for worktree dashboard
-	drillDownProvider DrillDownProvider // optional provider for worktree drill-down
-	worktreeRemover   WorktreeRemover   // optional remover for worktree deletion
-	previewLoader     PreviewLoader     // optional loader for dashboard preview pane
-	fileDiscarder     FileDiscarder     // optional discarder for "discard changes" action
+	worktreeLoader      WorktreeLoader    // optional loader for worktree dashboard
+	drillDownProvider   DrillDownProvider // optional provider for worktree drill-down
+	worktreeRemover     WorktreeRemover   // optional remover for worktree deletion
+	previewLoader       PreviewLoader     // optional loader for dashboard preview pane
+	fileDiscarder       FileDiscarder     // optional discarder for "discard changes" action
+	noteState           noteUIState
+	noteStoreGeneration int
 
 	spinner spinner.Model // shared spinner for loading states
 }
@@ -243,6 +245,9 @@ type FileDiscardedMsg struct {
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.spinner.Tick}
+	if cmd := m.loadNotes(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if m.State.WorktreeMode && m.worktreeLoader != nil {
 		// Fire initial async worktree load so TUI appears instantly.
 		if m.State.RefreshInFlight && len(m.State.DashboardState.Worktrees) == 0 {
@@ -289,6 +294,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tooSmall = false
 			m.sizeErr = ""
 		}
+		if m.noteState.composer != nil {
+			m.noteState.composer.input.SetWidth(max(m.noteComposerWidth(), 20))
+		}
 		if m.State.WorktreeMode && m.State.FocusPane == model.PaneDashboard && !m.State.DashboardState.DrillDown {
 			if cmd := m.maybeLoadPreview(); cmd != nil {
 				return m, cmd
@@ -317,6 +325,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case noteEditorClosedMsg:
+		return m.handleNoteEditorClosed(msg)
+
 	case WorktreeRefreshedMsg:
 		return m.handleWorktreeRefreshed(msg)
 
@@ -332,6 +343,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileDiscardedMsg:
 		return m.handleFileDiscarded(msg)
 
+	case notesLoadedMsg:
+		return m.handleNotesLoaded(msg)
+
+	case noteMutationMsg:
+		return m.handleNoteMutation(msg)
+
 	case tea.KeyMsg:
 		if m.tooSmall {
 			if msg.String() == "q" {
@@ -339,6 +356,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		}
+		if m.noteState.composer != nil {
+			return m.updateNoteComposer(msg)
+		}
+		if m.noteState.confirmDelete {
+			return m.updateNoteDeleteConfirm(msg)
 		}
 		// Discard confirmation modal consumes y/n/Esc before any other handler.
 		if m.State.ConfirmDiscard {
@@ -410,6 +433,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showHelp {
 			return m.updateHelp(msg)
 		}
+		if m.State.FocusPane != model.PaneSearch && m.State.FocusPane != model.PaneCommit && m.State.FocusPane != model.PaneDashboard {
+			switch msg.String() {
+			case "}":
+				return m.moveNoteSelection(1)
+			case "{":
+				return m.moveNoteSelection(-1)
+			case "c":
+				if m.State.FocusPane == model.PanePatch && m.pendingKey == 0 {
+					return m.startNoteComposer("")
+				}
+			case "e":
+				return m.editSelectedNote()
+			case "R":
+				return m.resolveSelectedNote()
+			case "d":
+				return m.startNoteDeleteConfirm()
+			}
+		}
 		if m.State.FocusPane == model.PaneSearch {
 			return m.updateSearch(msg)
 		}
@@ -428,11 +469,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateFiles(msg)
 	}
+	if m.noteState.composer != nil {
+		var cmd tea.Cmd
+		m.noteState.composer.input, cmd = m.noteState.composer.input.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
 func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.syncFileTreeCursorFromSelectedFile()
+	switch msg.String() {
+	case "g", "G", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "left", "l", "right", "enter", "t", "n", "p", "/":
+		m.noteState.selectedID = ""
+	}
 
 	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
@@ -498,11 +548,11 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput = ""
 			m.searchNotFound = ""
 		}
-	case "n", "}":
+	case "n":
 		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil {
 			m.patchViewport.NextHunk()
 		}
-	case "p", "{":
+	case "p":
 		if m.State.Layout == model.LayoutSplit && m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
 		}
@@ -521,6 +571,9 @@ func (m Model) updateFiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // needsSpinner reports whether any loading state requires spinner animation.
 func (m Model) needsSpinner() bool {
+	if m.noteState.loading || m.noteState.mutating {
+		return true
+	}
 	if m.State.CommitState.InFlight || m.State.CommitState.Executing {
 		return true
 	}
@@ -565,13 +618,13 @@ func reconcileFileTreeToSelection(state *model.AppState) {
 			state.FileTreeCursor = cursor
 		}
 	}
-	proj := panes.ProjectFileTree(state.Files, state.FileFilter, state.FileTreeCollapsed, state.FileTreeCursor)
+	proj := panes.ProjectFileTree(state.Files, state.FileFilter, state.FileTreeCollapsed, state.FileTreeCursor, 0)
 	state.FileTreeCursor = proj.Cursor
 	state.SelectedFile = proj.SelectedFile
 }
 
 func (m Model) fileTreeProjection() panes.FileTreeProjection {
-	return panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.FileTreeCursor)
+	return panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, m.State.FileTreeCursor, m.inactiveNoteCount())
 }
 
 func (m Model) fileTreeRows() []panes.FileTreeRow {
@@ -591,13 +644,17 @@ func (m Model) selectedPatchPath() (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if row.Kind == panes.FileTreeRowFile {
+	switch row.Kind {
+	case panes.FileTreeRowFile:
 		if row.FileIndex < 0 || row.FileIndex >= len(m.State.Files) {
 			return "", false
 		}
 		return m.State.Files[row.FileIndex].Path, true
+	case panes.FileTreeRowDir:
+		return row.Path, true
+	default:
+		return "", false
 	}
-	return row.Path, true
 }
 
 func (m Model) selectedPatchSummary() (model.FileSummary, bool) {
@@ -607,6 +664,9 @@ func (m Model) selectedPatchSummary() (model.FileSummary, bool) {
 	}
 	if row.Kind == panes.FileTreeRowFile && row.FileIndex >= 0 && row.FileIndex < len(m.State.Files) {
 		return m.State.Files[row.FileIndex], true
+	}
+	if row.Kind != panes.FileTreeRowDir {
+		return model.FileSummary{}, false
 	}
 
 	summary := model.FileSummary{Path: row.Path}
@@ -630,9 +690,12 @@ func (m Model) folderFiles(folder string) []model.FileSummary {
 }
 
 func (m *Model) setFileTreeCursor(cursor int) {
-	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor)
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, cursor, m.inactiveNoteCount())
 	m.State.FileTreeCursor = proj.Cursor
 	m.State.SelectedFile = proj.SelectedFile
+	if len(proj.Rows) > 0 && proj.Rows[proj.Cursor].Kind == panes.FileTreeRowNotes {
+		m.noteState.listScroll = 0
+	}
 	if proj.SelectedFile < 0 {
 		m.clearPatchView()
 	}
@@ -651,7 +714,7 @@ func (m *Model) syncFileTreeCursorFromSelectedFile() {
 }
 
 func (m *Model) setFileTreeCursorByPath(path string, fallback int) {
-	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, fallback)
+	proj := panes.ProjectFileTree(m.State.Files, m.State.FileFilter, m.State.FileTreeCollapsed, fallback, m.inactiveNoteCount())
 	cursor := proj.Cursor
 	if path != "" {
 		for i, row := range proj.Rows {
@@ -692,10 +755,14 @@ func (m Model) moveFileTreeCursor(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) activateFileTreeRow() (tea.Model, tea.Cmd) {
-	if _, ok := m.currentFileTreeRow(); !ok {
+	row, ok := m.currentFileTreeRow()
+	if !ok {
 		return m, nil
 	}
 	m.State.FocusPane = model.PanePatch
+	if row.Kind == panes.FileTreeRowNotes {
+		return m, nil
+	}
 	return m.selectFile()
 }
 
@@ -1079,6 +1146,7 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 			m.savedScrollDiff = -1
 			m.savedScrollRow = 0
 			m.savedSearchQuery = ""
+			m.syncSelectedNoteViewport()
 		}
 	}
 
@@ -1091,10 +1159,11 @@ func (m Model) handlePatchLoaded(msg PatchLoadedMsg) (tea.Model, tea.Cmd) {
 func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 	review.PrepareRefresh(&m.State)
 	m.refreshErr = ""
+	noteCmd := m.startNoteLoad()
 
 	if m.metadataLoader == nil {
 		m.State.RefreshInFlight = false
-		return m, nil
+		return m, noteCmd
 	}
 
 	gen := m.State.CacheGeneration
@@ -1120,7 +1189,7 @@ func (m Model) startRefresh() (tea.Model, tea.Cmd) {
 		files, err := loader.ListFiles(ctx, cmp)
 		return MetadataLoadedMsg{Compare: resolvedCmp, Files: files, Gen: gen, Err: err}
 	}
-	return m, tea.Batch(cmd, m.spinner.Tick)
+	return m, tea.Batch(cmd, noteCmd, m.spinner.Tick)
 }
 
 // toggleWhitespace flips IgnoreWhitespace, resets the patch cache, and reloads
@@ -1227,6 +1296,7 @@ func (m Model) handleMetadataLoaded(msg MetadataLoadedMsg) (tea.Model, tea.Cmd) 
 	m.State.Files = msg.Files
 	review.ReconcileSelection(&m.State, selectedPath)
 	reconcileFileTreeToSelection(&m.State)
+	m.positionSelectedNote()
 	review.CompleteRefresh(&m.State)
 
 	// Selected file was evicted for reload; clear viewport.
@@ -1280,6 +1350,7 @@ func (m *Model) applyPatchResult(ps model.PatchLoadState) {
 	vp.Width = m.width
 	vp.Height = m.height - 1
 	vp.GutterVisible = m.State.ShowLineNumbers && m.width >= 60
+	vp.ColorEnabled = m.colorProfile != terminal.ColorNone
 	vp.LineMode = m.State.PatchLineMode
 	vp.DiffMode = m.State.PatchDiffMode
 	vp.XOffset = 0
@@ -1348,13 +1419,29 @@ func buildFallback(summary model.FileSummary, err error) string {
 }
 
 func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	row, _ := m.currentFileTreeRow()
+	notesView := row.Kind == panes.FileTreeRowNotes
+	if notesView {
+		switch msg.String() {
+		case "h", "esc", "n", "p", "N", "enter", "/":
+			m.noteState.selectedID = ""
+		}
+	} else {
+		switch msg.String() {
+		case "g", "G", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "h", "esc", "n", "p", "N", "enter", "/":
+			m.noteState.selectedID = ""
+		}
+	}
 	// Handle pending multi-key sequences (]c, [c, gg).
 	if m.pendingKey != 0 {
 		pending := m.pendingKey
 		m.pendingKey = 0
 		switch {
 		case pending == 'g' && msg.String() == "g":
-			if m.patchViewport != nil {
+			if notesView {
+				m.noteState.selectedID = ""
+				m.noteState.listScroll = 0
+			} else if m.patchViewport != nil {
 				m.patchViewport.ScrollToTop()
 			}
 			return m, nil
@@ -1382,44 +1469,66 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchNotFound = ""
 		}
 	case "j", "down":
+		if notesView {
+			return m.moveInactiveNoteSelection(1)
+		}
 		if m.patchViewport != nil {
-			m.patchViewport.ScrollDown()
+			m.noteState.selectedID = m.patchViewport.MoveCursor(1)
 		}
 	case "k", "up":
+		if notesView {
+			return m.moveInactiveNoteSelection(-1)
+		}
 		if m.patchViewport != nil {
-			m.patchViewport.ScrollUp()
+			m.noteState.selectedID = m.patchViewport.MoveCursor(-1)
 		}
 	case "s":
 		m.togglePatchDiffMode()
-	case "c":
-		if m.State.CommitEnabled && m.commitProvider != nil {
-			return m.startCommitGeneration()
-		}
 	case "g":
 		m.pendingKey = 'g'
 		m.pendingKeySeq++
 		return m, m.pendingKeyTimeout()
 	case "G":
-		if m.patchViewport != nil {
+		if notesView {
+			m.noteState.selectedID = ""
+			width, height := m.inactiveNoteListSize()
+			m.noteState.listScroll = panes.NoteListMaxOffset(m.inactiveNotes(), "", width, height)
+		} else if m.patchViewport != nil {
 			m.patchViewport.ScrollToBottom()
 		}
 	case "ctrl+d":
+		if notesView {
+			m.scrollInactiveNotes(max(m.height/2, 1))
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.HalfPageDown()
 		}
 	case "ctrl+u":
+		if notesView {
+			m.scrollInactiveNotes(-max(m.height/2, 1))
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.HalfPageUp()
 		}
 	case "ctrl+f":
+		if notesView {
+			m.scrollInactiveNotes(max(m.height-3, 1))
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.PageDown()
 		}
 	case "ctrl+b":
+		if notesView {
+			m.scrollInactiveNotes(-max(m.height-3, 1))
+			return m, nil
+		}
 		if m.patchViewport != nil {
 			m.patchViewport.PageUp()
 		}
-	case "n", "}":
+	case "n":
 		if m.patchViewport != nil {
 			m.patchViewport.NextHunk()
 		}
@@ -1431,7 +1540,7 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.State.FocusPane = model.PaneSearch
 		m.searchInput = ""
 		m.searchNotFound = ""
-	case "p", "{":
+	case "p":
 		if m.patchViewport != nil {
 			m.patchViewport.PrevHunk()
 		}
@@ -1442,6 +1551,38 @@ func (m Model) updatePatch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = true
 	}
 	return m, nil
+}
+
+func (m *Model) scrollInactiveNotes(delta int) {
+	items := m.inactiveNotes()
+	width, height := m.inactiveNoteListSize()
+	base, selected := panes.NoteListOffset(items, m.noteState.selectedID, width)
+	offset := m.noteState.listScroll
+	if selected {
+		offset += base
+	}
+	offset = min(max(offset+delta, 0), panes.NoteListMaxOffset(items, m.noteState.selectedID, width, height))
+	if selected {
+		visible, collapsedOffset := panes.NoteListSelection(items, m.noteState.selectedID, width, height, offset)
+		if !visible {
+			m.noteState.selectedID = ""
+			m.noteState.listScroll = min(collapsedOffset, panes.NoteListMaxOffset(items, "", width, height))
+			return
+		}
+	}
+	m.noteState.listScroll = offset
+	if selected {
+		m.noteState.listScroll = max(offset-base, 0)
+	}
+}
+
+func (m Model) inactiveNoteListSize() (int, int) {
+	outerWidth := m.width
+	if m.State.Layout == model.LayoutSplit && m.widthTierNow() >= terminal.WidthCompactSplit {
+		availableWidth := m.width - 1
+		outerWidth = availableWidth - min(fileListWidth(availableWidth), availableWidth-1)
+	}
+	return panes.UnboxedSectionDimensions(outerWidth, max(m.height-1, 3))
 }
 
 func (m *Model) togglePatchDiffMode() {
@@ -1496,6 +1637,7 @@ func (m *Model) searchFrom(from int, dir search.SearchDirection) {
 	m.searchNotFound = ""
 	vpLine := m.patchViewport.DiffLineToViewportLine(match.Line)
 	m.patchViewport.ScrollOffset = vpLine
+	m.patchViewport.SyncSourceCursor()
 	m.patchViewport.SyncCurrentHunk()
 	m.patchViewport.SearchMatch = panes.SearchMatch{Line: match.Line, Start: match.Start, End: match.End}
 	m.patchViewport.SearchQuery = m.State.SearchQuery
@@ -1565,6 +1707,9 @@ func (m Model) View() string {
 	if m.State.ConfirmDiscard {
 		base = m.overlayDiscardConfirm(base)
 	}
+	if m.noteState.confirmDelete {
+		base = panes.OverlayDialog(base, "Delete note?", m.noteDeleteBody(), "y confirm    n/Esc cancel", m.width, m.height-1)
+	}
 
 	var b strings.Builder
 	if m.showHelp {
@@ -1618,6 +1763,13 @@ func (m Model) viewPatch() string {
 // renderPatch renders the patch pane content at the given dimensions.
 // outerWidth is the pane's outer width (including borders) for gutter decisions.
 func (m Model) renderPatch(width, height, outerWidth int) string {
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
+		if m.noteState.composer != nil {
+			m.noteState.composer.input.SetWidth(max(width-4, 1))
+		}
+		offset, _ := panes.NoteListOffset(m.inactiveNotes(), m.noteState.selectedID, width)
+		return panes.RenderNoteList(m.inactiveNotes(), m.noteState.selectedID, m.noteDraftView(), width, height, offset+m.noteState.listScroll)
+	}
 	if m.patchErr != "" {
 		return fmt.Sprintf("Error loading patch: %s", m.patchErr)
 	}
@@ -1637,6 +1789,14 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	m.patchViewport.Width = width
 	m.patchViewport.Height = height
 	m.patchViewport.SetGutterVisible(m.State.ShowLineNumbers && outerWidth >= 60)
+	if m.noteState.composer != nil {
+		m.noteState.composer.input.SetWidth(m.patchViewport.NoteBodyWidth())
+	}
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind != panes.FileTreeRowNotes {
+		m.patchViewport.SetNotes(m.attachedNotesForRow(row), m.noteState.selectedID, m.noteDraftView())
+	} else {
+		m.patchViewport.SetNotes(nil, "", nil)
+	}
 	m.patchViewport.ClampXOffset()
 	return m.patchViewport.Render()
 }
@@ -1748,7 +1908,7 @@ func (m Model) viewHelp() string {
 
 	help := []string{
 		"Navigation",
-		"  j/k       scroll / navigate",
+		"  j/k       source cursor / navigate",
 		"  l         expand folder / select file",
 		"  Enter     focus selected diff",
 	}
@@ -1758,11 +1918,9 @@ func (m Model) viewHelp() string {
 		help = append(help, "  h/Esc     back to file list")
 	}
 	help = append(help,
-		"  n/p }/{   next/previous hunk",
-		"  gg        jump to top",
-		"  G         jump to bottom",
-		"  ctrl+d/u  half-page down/up",
-		"  ctrl+f/b  full page down/up",
+		"  n/p hunk  }/{ note navigation",
+		"  gg/G      jump to top/bottom",
+		"  ctrl+d/u · ctrl+f/b page navigation",
 		"  t         cycle file filter",
 		"  s         unified/side-by-side diff",
 		"  L         toggle line numbers",
@@ -1778,10 +1936,12 @@ func (m Model) viewHelp() string {
 		"  o         open file in nvim",
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
-		"  X         discard selected file's changes (confirm y/N)",
+		"  X         discard selected file's changes",
+		"  c/e/R/d   create/edit/resolve/delete note",
+		"  Enter newline · Alt+Enter submit · Ctrl+G editor · Esc cancel composer",
 	)
 	if m.State.CommitEnabled {
-		help = append(help, "  c         generate commit message")
+		help = append(help, "  c         generate commit message (file list)")
 	}
 	help = append(help,
 		"  ?/Esc     close help",
@@ -1883,6 +2043,7 @@ func (m Model) fileListOpts() panes.FileListOpts {
 		Collapsed:        m.State.FileTreeCollapsed,
 		Cursor:           m.State.FileTreeCursor,
 		UseCursor:        true,
+		NoteCount:        m.inactiveNoteCount(),
 	}
 }
 
@@ -1904,7 +2065,7 @@ func fileFilterHeaderLabel(filter model.FileFilter) string {
 }
 
 func aggregateFileCounts(files []model.FileSummary, filter model.FileFilter) model.FileSummary {
-	proj := panes.ProjectFileTree(files, filter, nil, 0)
+	proj := panes.ProjectFileTree(files, filter, nil, 0, 0)
 	var counts model.FileSummary
 	for _, row := range proj.Rows {
 		if row.Kind != panes.FileTreeRowFile {
@@ -1937,6 +2098,9 @@ func (m Model) patchScrollLine(innerHeight int) int {
 
 // patchTitle returns the title for the patch pane (current filename).
 func (m Model) patchTitle() string {
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowNotes {
+		return "Notes"
+	}
 	if path, ok := m.selectedPatchPath(); ok {
 		return path
 	}
@@ -1957,7 +2121,7 @@ func (m Model) patchFooter() string {
 			pct = 100
 		}
 	}
-	return fmt.Sprintf("%s · %d%%", hunkInfo, pct)
+	return fmt.Sprintf("%s · %d%% · c note · }/{ navigate", hunkInfo, pct)
 }
 
 // syncFileListScroll adjusts fileListScroll so the selected file stays visible
@@ -1986,6 +2150,10 @@ func (m Model) toggleLayout() (tea.Model, tea.Cmd) {
 	}
 	m.State.Layout = model.LayoutSplit
 	m.syncFileListScroll()
+	path, selected := m.selectedPatchPath()
+	if selected && m.patchViewport != nil && m.patchViewport.Patch.Summary.Path == path {
+		return m, nil
+	}
 	return m.loadSelectedPatch()
 }
 

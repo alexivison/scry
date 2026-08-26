@@ -5,14 +5,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/alexivison/scry/internal/commit"
 	"github.com/alexivison/scry/internal/model"
 )
 
 type editorClosedMsg struct {
 	err error
+}
+
+type noteEditorClosedMsg struct {
+	body string
+	err  error
 }
 
 var buildEditorCommand = func(path string, line int, hasLine bool) *exec.Cmd {
@@ -70,4 +77,36 @@ func (m Model) selectedEditorFile() (model.FileSummary, bool) {
 		return model.FileSummary{}, false
 	}
 	return m.State.Files[m.State.SelectedFile], true
+}
+
+func (m Model) startNoteEditor() (tea.Model, tea.Cmd) {
+	if m.noteState.composer == nil {
+		return m, nil
+	}
+	cmd, tmpPath, err := commit.PrepareEditorCmd(m.noteState.composer.input.Value())
+	if err != nil {
+		m.noteState.err = fmt.Sprintf("note editor failed: %v", err)
+		return m, nil
+	}
+	return m, tea.ExecProcess(cmd, func(execErr error) tea.Msg {
+		defer os.Remove(tmpPath)
+		if execErr != nil {
+			return noteEditorClosedMsg{err: execErr}
+		}
+		body, readErr := os.ReadFile(tmpPath)
+		return noteEditorClosedMsg{body: strings.TrimRight(string(body), "\r\n"), err: readErr}
+	})
+}
+
+func (m Model) handleNoteEditorClosed(msg noteEditorClosedMsg) (tea.Model, tea.Cmd) {
+	if m.noteState.composer == nil {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.noteState.err = fmt.Sprintf("note editor failed: %v", msg.err)
+		return m, nil
+	}
+	m.noteState.composer.input.SetValue(msg.body)
+	m.noteState.err = ""
+	return m, nil
 }

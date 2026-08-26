@@ -43,6 +43,16 @@ func TestViewHelp_ContainsNewKeys(t *testing.T) {
 	}
 }
 
+func TestHelpDocumentsNoteAndComposerKeys(t *testing.T) {
+	m := NewModel(sampleState())
+	help := m.viewHelp()
+	for _, key := range []string{"}/{", "c/e/R/d", "Enter newline", "Alt+Enter submit", "Ctrl+G"} {
+		if !strings.Contains(help, key) {
+			t.Errorf("help should contain %q", key)
+		}
+	}
+}
+
 func TestGGChord_JumpsToTop(t *testing.T) {
 	t.Parallel()
 
@@ -98,7 +108,7 @@ func TestGShift_JumpsToBottom(t *testing.T) {
 	}
 }
 
-func TestCurlyBraces_JumpHunks(t *testing.T) {
+func TestNPJumpHunks(t *testing.T) {
 	t.Parallel()
 
 	m := modelWithLoader()
@@ -110,19 +120,17 @@ func TestCurlyBraces_JumpHunks(t *testing.T) {
 
 	initial := m.patchViewport.CurrentHunk
 
-	// } should go to next hunk
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'}'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m = updated.(Model)
 
 	if m.patchViewport.CurrentHunk != initial+1 {
-		t.Errorf("after }: CurrentHunk = %d, want %d", m.patchViewport.CurrentHunk, initial+1)
+		t.Errorf("after n: CurrentHunk = %d, want %d", m.patchViewport.CurrentHunk, initial+1)
 	}
 
-	// { should go back
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'{'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m = updated.(Model)
 
 	if m.patchViewport.CurrentHunk != initial {
-		t.Errorf("after {: CurrentHunk = %d, want %d", m.patchViewport.CurrentHunk, initial)
+		t.Errorf("after p: CurrentHunk = %d, want %d", m.patchViewport.CurrentHunk, initial)
 	}
 }
