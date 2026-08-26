@@ -365,11 +365,16 @@ func renderFileTreeRow(files []model.FileSummary, row FileTreeRow, selected bool
 }
 
 func renderFileTreeNotesEntry(row FileTreeRow, selected bool, width int) string {
-	label := padOrTruncateToWidth(row.Label, width)
+	const separator = "── "
+	label := padOrTruncateToWidth(separator+row.Label, width)
 	if selected {
 		return fileSelectedStyle.Width(width).Render(label)
 	}
-	return statusModifiedStyle.Render(label)
+	separatorWidth := lipgloss.Width(separator)
+	if width <= separatorWidth {
+		return treeConnectorStyle.Render(label)
+	}
+	return treeConnectorStyle.Render(separator) + statusModifiedStyle.Render(padOrTruncateToWidth(row.Label, width-separatorWidth))
 }
 
 func renderFileTreeDirEntry(row FileTreeRow, selected bool, width int) string {

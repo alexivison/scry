@@ -86,7 +86,7 @@ scry note remove <note-id>
 
 Scry shows open notes inline with the diff and keeps resolved and stale notes
 in a bottom `Notes` view. Use `c` to create a note on the selected source line,
-`j` / `k` to move across source lines and inline notes, `E`, `R`, and `D` to
+`j` / `k` to move across source lines and inline notes, `e`, `R`, and `d` to
 edit, resolve, or delete the selected note, and `{` / `}` to move between notes.
 The existing `r` refresh also loads notes
 created by an agent through the CLI. Anchor and state repair remain CLI
@@ -115,7 +115,7 @@ operations.
 | `e` | Edit generated commit message |
 | `r` | Refresh / regenerate commit message |
 | `X` | Discard selected file's changes (modal y/N confirmation) |
-| `E` / `R` / `D` | Edit / resolve / delete the selected note |
+| `e` / `R` / `d` | Edit / resolve / delete the selected note |
 | `Enter` | Insert a newline in the note composer |
 | `Alt+Enter` | Submit the note composer |
 | `Ctrl+G` | Open the note composer in `$EDITOR` |

@@ -443,11 +443,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.State.FocusPane == model.PanePatch && m.pendingKey == 0 {
 					return m.startNoteComposer("")
 				}
-			case "E":
+			case "e":
 				return m.editSelectedNote()
 			case "R":
 				return m.resolveSelectedNote()
-			case "D":
+			case "d":
 				return m.startNoteDeleteConfirm()
 			}
 		}
@@ -1779,8 +1779,8 @@ func (m Model) renderPatch(width, height, outerWidth int) string {
 	if m.noteState.composer != nil {
 		m.noteState.composer.input.SetWidth(m.patchViewport.NoteBodyWidth())
 	}
-	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile {
-		m.patchViewport.SetNotes(m.attachedNotes(m.State.Files[row.FileIndex].Path), m.noteState.selectedID, m.noteDraftView())
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind != panes.FileTreeRowNotes {
+		m.patchViewport.SetNotes(m.attachedNotesForRow(row), m.noteState.selectedID, m.noteDraftView())
 	} else {
 		m.patchViewport.SetNotes(nil, "", nil)
 	}
@@ -1924,7 +1924,7 @@ func (m Model) viewHelp() string {
 		"  W         toggle whitespace ignore",
 		"  Tab       toggle split/modal layout",
 		"  X         discard selected file's changes",
-		"  c/E/R/D   create/edit/resolve/delete note",
+		"  c/e/R/d   create/edit/resolve/delete note",
 		"  Enter newline · Alt+Enter submit · Ctrl+G editor · Esc cancel composer",
 	)
 	if m.State.CommitEnabled {

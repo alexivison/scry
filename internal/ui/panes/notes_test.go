@@ -210,6 +210,75 @@ func TestPatchViewportSourceCursorDistinguishesFolderLines(t *testing.T) {
 	}
 }
 
+func TestPatchViewportFolderAnchorIncludesFilePath(t *testing.T) {
+	patch := model.FilePatch{Hunks: []model.Hunk{
+		{FilePath: "internal/a.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "first"}}},
+		{FilePath: "internal/b.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "second"}}},
+	}}
+	for _, tc := range []struct {
+		name string
+		mode model.PatchDiffMode
+	}{
+		{name: "unified", mode: model.PatchDiffModeUnified},
+		{name: "side-by-side", mode: model.PatchDiffModeSideBySide},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vp := NewPatchViewport(patch)
+			vp.DiffMode = tc.mode
+			vp.Width = 60
+			vp.Height = 20
+
+			file, line, ok := vp.CurrentSourceAnchor()
+			if !ok || file != "internal/a.go" || line != 1 {
+				t.Fatalf("first anchor = %q:%d, %v", file, line, ok)
+			}
+			vp.MoveCursor(1)
+			file, line, ok = vp.CurrentSourceAnchor()
+			if !ok || file != "internal/b.go" || line != 1 {
+				t.Fatalf("second anchor = %q:%d, %v", file, line, ok)
+			}
+		})
+	}
+}
+
+func TestPatchViewportFolderNotesMatchFileAndLine(t *testing.T) {
+	patch := model.FilePatch{Hunks: []model.Hunk{
+		{FilePath: "internal/a.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "first"}}},
+		{FilePath: "internal/b.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "second"}}},
+	}}
+	first := noteFixture("first-note", 1, notes.StateOpen, "first note")
+	first.File = "internal/a.go"
+	second := noteFixture("second-note", 1, notes.StateOpen, "second note")
+	second.File = "internal/b.go"
+	for _, tc := range []struct {
+		name string
+		mode model.PatchDiffMode
+	}{
+		{name: "unified", mode: model.PatchDiffModeUnified},
+		{name: "side-by-side", mode: model.PatchDiffModeSideBySide},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vp := NewPatchViewport(patch)
+			vp.DiffMode = tc.mode
+			vp.Width = 60
+			vp.Height = 30
+			vp.SetNotes([]notes.Note{first, second}, "", nil)
+
+			output := ansi.Strip(vp.Render())
+			firstLine := strings.Index(output, "+first")
+			firstNote := strings.Index(output, first.Body)
+			secondLine := strings.Index(output, "+second")
+			secondNote := strings.Index(output, second.Body)
+			if firstLine < 0 || firstNote < firstLine || secondLine < firstNote || secondNote < secondLine {
+				t.Fatalf("folder notes rendered under the wrong file:\n%s", output)
+			}
+			if strings.Count(output, first.Body) != 1 || strings.Count(output, second.Body) != 1 {
+				t.Fatalf("folder notes rendered more than once:\n%s", output)
+			}
+		})
+	}
+}
+
 func TestPatchViewportKeepsSourceCursorVisibleAcrossDiffModes(t *testing.T) {
 	lines := make([]model.DiffLine, 0, 24)
 	for i := 1; i <= 12; i++ {

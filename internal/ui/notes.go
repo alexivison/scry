@@ -154,7 +154,8 @@ func (m *Model) restoreNoteMutationView() bool {
 	if !ok || current != view.path || m.patchViewport == nil {
 		return true
 	}
-	m.patchViewport.SetNotes(m.attachedNotes(view.path), m.noteState.selectedID, m.noteDraftView())
+	row, _ := m.currentFileTreeRow()
+	m.patchViewport.SetNotes(m.attachedNotesForRow(row), m.noteState.selectedID, m.noteDraftView())
 	m.patchViewport.KeepScroll(view.patchScroll)
 	return true
 }
@@ -174,6 +175,9 @@ func (m *Model) positionSelectedNote() {
 		m.setFileTreeCursor(len(proj.Rows) - 1)
 		return
 	}
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowDir && strings.HasPrefix(note.File, row.Path+"/") {
+		return
+	}
 	m.setFileTreeCursorByPath(note.File, m.State.FileTreeCursor)
 }
 
@@ -181,6 +185,25 @@ func (m Model) attachedNotes(path string) []notes.Note {
 	items := make([]notes.Note, 0)
 	for _, note := range m.noteState.items {
 		if note.File == path && note.State == notes.StateOpen {
+			items = append(items, note)
+		}
+	}
+	sortNotes(items)
+	return items
+}
+
+func (m Model) attachedNotesForRow(row panes.FileTreeRow) []notes.Note {
+	if row.Kind == panes.FileTreeRowFile && row.FileIndex >= 0 && row.FileIndex < len(m.State.Files) {
+		return m.attachedNotes(m.State.Files[row.FileIndex].Path)
+	}
+	if row.Kind != panes.FileTreeRowDir {
+		return nil
+	}
+
+	items := make([]notes.Note, 0)
+	prefix := row.Path + "/"
+	for _, note := range m.noteState.items {
+		if note.State == notes.StateOpen && strings.HasPrefix(note.File, prefix) {
 			items = append(items, note)
 		}
 	}
@@ -329,11 +352,10 @@ func (m *Model) syncSelectedNoteViewport() {
 		return
 	}
 	row, ok := m.currentFileTreeRow()
-	if !ok || row.Kind != panes.FileTreeRowFile {
+	if !ok || row.Kind == panes.FileTreeRowNotes {
 		return
 	}
-	path := m.State.Files[row.FileIndex].Path
-	m.patchViewport.SetNotes(m.attachedNotes(path), m.noteState.selectedID, m.noteDraftView())
+	m.patchViewport.SetNotes(m.attachedNotesForRow(row), m.noteState.selectedID, m.noteDraftView())
 	m.patchViewport.ScrollToNote(m.noteState.selectedID)
 }
 
@@ -350,17 +372,16 @@ func (m Model) startNoteComposer(noteID string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		row, ok := m.currentFileTreeRow()
-		if !ok || row.Kind != panes.FileTreeRowFile || m.patchViewport == nil {
+		if !ok || row.Kind == panes.FileTreeRowNotes || m.patchViewport == nil {
 			m.noteState.err = "Select a current source line to add a note"
 			return m, nil
 		}
 		var sourceLine bool
-		line, sourceLine = m.patchViewport.CurrentSourceLine()
+		file, line, sourceLine = m.patchViewport.CurrentSourceAnchor()
 		if !sourceLine {
 			m.noteState.err = "Select a current source line to add a note"
 			return m, nil
 		}
-		file = m.State.Files[row.FileIndex].Path
 	} else {
 		note, ok := m.selectedNote()
 		if !ok || note.ID != noteID {
@@ -381,9 +402,8 @@ func (m Model) startNoteComposer(noteID string) (tea.Model, tea.Cmd) {
 	m.noteState.composer = &noteComposer{input: input, noteID: noteID, file: file, line: line}
 	m.noteState.err = ""
 	focus := m.noteState.composer.input.Focus()
-	if row, ok := m.currentFileTreeRow(); ok && row.Kind == panes.FileTreeRowFile && m.patchViewport != nil {
-		path := m.State.Files[row.FileIndex].Path
-		m.patchViewport.SetNotes(m.attachedNotes(path), m.noteState.selectedID, m.noteDraftView())
+	if row, ok := m.currentFileTreeRow(); ok && row.Kind != panes.FileTreeRowNotes && m.patchViewport != nil {
+		m.patchViewport.SetNotes(m.attachedNotesForRow(row), m.noteState.selectedID, m.noteDraftView())
 	}
 	return m, focus
 }
@@ -529,10 +549,11 @@ func (m Model) handleNoteMutation(msg noteMutationMsg) (tea.Model, tea.Cmd) {
 	}
 	if row, ok := m.currentFileTreeRow(); ok {
 		switch row.Kind {
-		case panes.FileTreeRowFile:
+		case panes.FileTreeRowFile, panes.FileTreeRowDir:
 			if m.patchViewport != nil {
+				path, _ := m.selectedPatchPath()
 				m.noteState.restoreView = &noteMutationView{
-					path:        m.State.Files[row.FileIndex].Path,
+					path:        path,
 					patchScroll: m.patchViewport.ScrollOffset,
 				}
 			}

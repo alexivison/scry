@@ -18,7 +18,7 @@
 - The TUI never changes anchors, reopens resolved notes, or resolves stale notes.
 - Open cards use Scry's current theme tokens and appear after current-source lines without covering line-number gutters. Resolved and stale cards appear in the bottom Notes view.
 - `{` and `}` replace their existing hunk aliases; `n` and `p` remain hunk navigation.
-- `c` creates, `E` edits, `R` resolves, and `D` requests confirmed deletion. Composer controls are Enter for a newline, `Alt+Enter` to submit, `Ctrl+G`, and Esc.
+- `c` creates, `e` edits, `R` resolves, and `d` requests confirmed deletion. Composer controls are Enter for a newline, `Alt+Enter` to submit, `Ctrl+G`, and Esc.
 - Note I/O must run in `tea.Cmd` functions. A note failure must not block diff review or discard the last good snapshot/draft.
 - Do not add a note watcher, dashboard note counts, a note theme, timestamps, replies, or new dependencies.
 
@@ -208,11 +208,11 @@
 **Interfaces:**
 
 - Consumes: Task 1 note state/store and Task 2 card/viewport APIs.
-- Produces: direct `c`, `j`/`k`, `{`, `}`, `E`, `R`, and `D` behavior; inline Bubbles textarea; confirmed deletion; mutation/editor completion messages.
+- Produces: direct `c`, `j`/`k`, `{`, `}`, `e`, `R`, and `d` behavior; inline Bubbles textarea; confirmed deletion; mutation/editor completion messages.
 
 - [ ] **Step 1: Write failing interaction tests before production handlers.**
 
-  Test that `j`/`k` traverses source rows and inline cards, while `{`/`}` selects notes in file/source/creation/ID order across real-file boundaries and the Notes view. Test `c` only on `CurrentSourceLine`; `E` copies only the selected body into the composer; `R` submits only `StateResolved`; and `D` requires confirmation before removal. Assert incompatible or missing targets produce status without a command.
+  Test that `j`/`k` traverses source rows and inline cards, while `{`/`}` selects notes in file/source/creation/ID order across real-file boundaries and the Notes view. Test `c` only on `CurrentSourceLine`; `e` copies only the selected body into the composer; `R` submits only `StateResolved`; and `d` requires confirmation before removal. Assert incompatible or missing targets produce status without a command.
 
   Add composer tests for Enter newline, `Alt+Enter` submit, `Ctrl+G`, Esc, create author `user`, body-only edit, empty-body failure preservation, mutation failure preservation, and editor failure restoring the pre-launch draft.
 
@@ -279,7 +279,60 @@
 
   Run `go test ./internal/ui ./internal/ui/panes`. Commit with `feat(ui): manage persistent notes`.
 
-### Task 4: Finish status/help integration and verify CLI interoperability
+### Task 4: Support notes in aggregate folder patches
+
+**Files:**
+
+- Modify: `internal/ui/panes/patch.go`
+- Modify: `internal/ui/panes/notes_test.go`
+- Modify: `internal/ui/model.go`
+- Modify: `internal/ui/notes.go`
+- Modify: `internal/ui/notes_test.go`
+- Modify: `internal/ui/panes/filelist.go`
+- Modify: `internal/ui/panes/filelist_test.go`
+
+**Interfaces:**
+
+- Consumes: `model.Hunk.FilePath`, the existing source cursor, and the loaded worktree note snapshot.
+- Produces: `PatchViewport.CurrentSourceAnchor() (string, int, bool)` and folder-scoped inline note rendering.
+
+- [x] **Step 1: Write failing folder-anchor, rendering, creation, key-binding, and file-list tests.**
+
+  Assert that notes on the same line in two folder files render only below their matching rows; moving the source cursor changes `CurrentSourceAnchor` from the first `(file, line)` to the second; `c` opens a composer with that exact anchor; `e` and `d` invoke edit and delete while uppercase `E` and `D` do not; and the virtual row renders as a separated `Notes (N)` entry without adding another selectable projection row.
+
+- [x] **Step 2: Run the focused tests and verify the missing behavior fails.**
+
+  Run:
+
+  ```bash
+  go test ./internal/ui/panes ./internal/ui -run 'Test.*Folder.*Note|Test.*Note.*Key|TestFileTree.*Notes'
+  ```
+
+  Expected: FAIL because patch rows do not retain source paths, directory rows clear notes and reject creation, uppercase bindings remain active, and the Notes entry has no separator.
+
+- [x] **Step 3: Preserve file identity through patch geometry.**
+
+  Add the source file path to each diff `patchLine`, populate it from `Hunk.FilePath` with `FilePatch.Summary.Path` as the single-file fallback, and key inserted note cards by both file and current line. Add:
+
+  ```go
+  func (vp *PatchViewport) CurrentSourceAnchor() (string, int, bool)
+  ```
+
+  Keep `CurrentSourceLine` as the existing compatibility wrapper.
+
+- [x] **Step 4: Feed folder notes through the existing model path.**
+
+  For a directory tree row, pass open notes whose paths belong to that folder into `PatchViewport`. Let `c` use `CurrentSourceAnchor` for both file and directory rows. Reuse the same row-aware filtering when showing drafts, restoring mutation scroll, and syncing a selected note; do not add a folder-specific store operation.
+
+- [x] **Step 5: Change the direct bindings and visually separate the Notes entry.**
+
+  Route lowercase `e` and `d` to the existing edit/delete actions and leave uppercase `E` and `D` unbound. Render the existing selectable Notes row with a subdued inline rule so projection size and cursor movement stay unchanged.
+
+- [x] **Step 6: Run focused and full verification, then commit.**
+
+  Run `go test ./internal/ui/panes ./internal/ui`, followed by `go test ./...`. Commit with `feat(ui): support notes in folder patches`.
+
+### Task 5: Finish status/help integration and verify CLI interoperability
 
 **Files:**
 
@@ -311,7 +364,7 @@
 
 - [ ] **Step 3: Add concise help, footer, and README documentation.**
 
-  Document `c`, `j`/`k`, `{`/`}`, `E`, `R`, `D`, and composer keys in existing help sections. Add one README paragraph after the persistent notes CLI section explaining that Scry shows worktree notes inline, `r` reloads agent notes, and reattachment/state repair remains a CLI operation. Do not promise watch mode or dashboard counts.
+  Document `c`, `j`/`k`, `{`/`}`, `e`, `R`, `d`, and composer keys in existing help sections. Add one README paragraph after the persistent notes CLI section explaining that Scry shows worktree notes inline, `r` reloads agent notes, and reattachment/state repair remains a CLI operation. Do not promise watch mode or dashboard counts.
 
 - [ ] **Step 4: Run automated verification.**
 

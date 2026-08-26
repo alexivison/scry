@@ -62,7 +62,8 @@ type patchLine struct {
 	typ       lineType
 	header    string         // only for hunkHeader
 	diff      model.DiffLine // only for diff lines
-	diffIndex int            // logical diff line index, headers excluded
+	file      string
+	diffIndex int // logical diff line index, headers excluded
 	hunkIndex int
 
 	changedSpans []bodySpan
@@ -159,6 +160,9 @@ func (vp *PatchViewport) SetNotes(items []notes.Note, selectedID string, draft *
 	if !slices.Equal(vp.notes, items) {
 		next := append([]notes.Note(nil), items...)
 		sort.SliceStable(next, func(i, j int) bool {
+			if next[i].File != next[j].File {
+				return next[i].File < next[j].File
+			}
 			if next[i].Line != next[j].Line {
 				return next[i].Line < next[j].Line
 			}
@@ -218,22 +222,26 @@ func (vp *PatchViewport) computeGutterDigits() int {
 func (vp *PatchViewport) buildLines() []patchLine {
 	var lines []patchLine
 	diffIndex := 0
-	filePath := ""
+	filePath := vp.Patch.Summary.Path
+	headerPath := ""
 	for hunkIndex, h := range vp.Patch.Hunks {
-		if h.FilePath != "" && h.FilePath != filePath {
-			lines = append(lines, patchLine{typ: lineTypeFileHeader, header: h.FilePath, diffIndex: -1})
+		if h.FilePath != "" {
 			filePath = h.FilePath
 		}
+		if h.FilePath != "" && h.FilePath != headerPath {
+			lines = append(lines, patchLine{typ: lineTypeFileHeader, header: h.FilePath, diffIndex: -1})
+			headerPath = h.FilePath
+		}
 		lines = append(lines, patchLine{typ: lineTypeHunkHeader, header: formatHunkHeader(h), diffIndex: -1, hunkIndex: hunkIndex})
-		lines = append(lines, buildPatchLines(h.Lines, hunkIndex, &diffIndex)...)
+		lines = append(lines, buildPatchLines(h.Lines, filePath, hunkIndex, &diffIndex)...)
 	}
 	return lines
 }
 
-func buildPatchLines(diffLines []model.DiffLine, hunkIndex int, diffIndex *int) []patchLine {
+func buildPatchLines(diffLines []model.DiffLine, file string, hunkIndex int, diffIndex *int) []patchLine {
 	lines := make([]patchLine, 0, len(diffLines))
 	for _, dl := range diffLines {
-		lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, diffIndex: *diffIndex, hunkIndex: hunkIndex})
+		lines = append(lines, patchLine{typ: lineTypeDiff, diff: dl, file: file, diffIndex: *diffIndex, hunkIndex: hunkIndex})
 		*diffIndex = *diffIndex + 1
 	}
 	annotateIntralineChanges(lines)
@@ -984,11 +992,18 @@ func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
 		return rows
 	}
 
+	type anchor struct {
+		file string
+		line int
+	}
+	byAnchor := make(map[anchor][]notes.Note, len(vp.notes))
 	byLine := make(map[int][]notes.Note, len(vp.notes))
 	for _, note := range vp.notes {
 		if note.State != notes.StateOpen {
 			continue
 		}
+		key := anchor{file: note.File, line: note.Line}
+		byAnchor[key] = append(byAnchor[key], note)
 		byLine[note.Line] = append(byLine[note.Line], note)
 	}
 
@@ -1002,8 +1017,13 @@ func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
 		if line == nil || i+1 < len(rows) && sameSourceLine(row, rows[i+1]) {
 			continue
 		}
+		key := anchor{file: row.sourceFile(), line: *line}
+		matching := byAnchor[key]
+		if key.file == "" {
+			matching = byLine[key.line]
+		}
 		draftAdded := false
-		for _, note := range byLine[*line] {
+		for _, note := range matching {
 			isDraft := vp.noteDraft != nil && vp.noteDraft.NoteID == note.ID
 			if isDraft {
 				note.Body = vp.noteDraft.Body
@@ -1013,7 +1033,7 @@ func (vp *PatchViewport) withNotes(rows []visualRow) []visualRow {
 				out = append(out, visualRow{note: &noteVisualRow{id: note.ID, text: prefix + text}})
 			}
 		}
-		if vp.noteDraft != nil && vp.noteDraft.Line == *line && !draftAdded {
+		if vp.noteDraft != nil && (key.file == "" || vp.noteDraft.File == key.file) && vp.noteDraft.Line == key.line && !draftAdded {
 			draft := notes.Note{File: vp.noteDraft.File, Line: vp.noteDraft.Line, Body: vp.noteDraft.Body, Author: notes.AuthorUser, State: notes.StateOpen}
 			for _, text := range renderNoteCard(draft, noteWidth, true) {
 				out = append(out, visualRow{note: &noteVisualRow{text: prefix + text}})
@@ -1039,7 +1059,7 @@ func (vp *PatchViewport) noteIndent() int {
 
 func sameSourceLine(a, b visualRow) bool {
 	aLine, bLine := a.newLineNo(), b.newLineNo()
-	return aLine != nil && bLine != nil && *aLine == *bLine
+	return aLine != nil && bLine != nil && a.sourceFile() == b.sourceFile() && *aLine == *bLine
 }
 
 func (vp *PatchViewport) unifiedVisualRows() []visualRow {
@@ -2070,6 +2090,13 @@ func (r visualRow) sourceLine() (int, bool) {
 	return *line, true
 }
 
+func (r visualRow) sourceFile() string {
+	if r.side != nil && r.side.new != nil {
+		return r.side.new.line.file
+	}
+	return r.line.file
+}
+
 func (r visualRow) sourceDiffIndex() (int, bool) {
 	if _, ok := r.sourceLine(); !ok {
 		return 0, false
@@ -2267,6 +2294,21 @@ func (vp *PatchViewport) CurrentSourceLine() (int, bool) {
 		return row.sourceLine()
 	}
 	return 0, false
+}
+
+// CurrentSourceAnchor returns the file and line selected by the source cursor.
+func (vp *PatchViewport) CurrentSourceAnchor() (string, int, bool) {
+	rows := vp.visualRows()
+	vp.ensureSourceCursor(rows)
+	for _, row := range rows {
+		index, ok := row.sourceDiffIndex()
+		if !ok || index != vp.sourceCursor {
+			continue
+		}
+		line, ok := row.sourceLine()
+		return row.sourceFile(), line, ok && row.sourceFile() != ""
+	}
+	return "", 0, false
 }
 
 func (vp *PatchViewport) ScrollToNote(id string) bool {

@@ -201,6 +201,56 @@ func TestNotesFeedSelectedFileAndStaleProjection(t *testing.T) {
 	}
 }
 
+func TestFolderPatchDisplaysNotesForItsFiles(t *testing.T) {
+	m := folderNotePatchModel()
+	m.noteState.items = []notes.Note{
+		uiNote("first", "internal/a.go", 1, notes.StateOpen, "first note"),
+		uiNote("second", "internal/b.go", 1, notes.StateOpen, "second note"),
+		uiNote("outside", "other.go", 1, notes.StateOpen, "outside note"),
+	}
+
+	output := ansi.Strip(m.renderPatch(72, 30, 72))
+	if strings.Count(output, "first note") != 1 || strings.Count(output, "second note") != 1 || strings.Contains(output, "outside note") {
+		t.Fatalf("folder patch received wrong notes:\n%s", output)
+	}
+}
+
+func TestFolderPatchCreatesNoteAtSelectedFileAnchor(t *testing.T) {
+	m := folderNotePatchModel()
+	m.noteState.store = noteActionStore(t)
+	m, _ = sendKey(m, "j")
+	m, _ = sendKey(m, "c")
+
+	if m.noteState.composer == nil {
+		t.Fatalf("folder create did not open composer: %s", m.noteState.err)
+	}
+	if m.noteState.composer.file != "internal/b.go" || m.noteState.composer.line != 1 {
+		t.Fatalf("folder composer anchor = %q:%d", m.noteState.composer.file, m.noteState.composer.line)
+	}
+}
+
+func TestFolderNoteReloadKeepsAggregatePatchContext(t *testing.T) {
+	m := folderNotePatchModel()
+	note := uiNote("selected", "internal/a.go", 1, notes.StateOpen, "selected note")
+	m.noteState.items = []notes.Note{note}
+	m.noteState.selectedID = note.ID
+	m.renderPatch(72, 30, 72)
+
+	updated, _ := m.Update(notesLoadedMsg{
+		notes:           []notes.Note{note},
+		generation:      m.noteState.generation,
+		storeGeneration: m.noteStoreGeneration,
+	})
+	m = updated.(Model)
+	row, ok := m.currentFileTreeRow()
+	if !ok || row.Kind != panes.FileTreeRowDir || row.Path != "internal" {
+		t.Fatalf("note reload left aggregate patch: %#v", row)
+	}
+	if m.noteState.selectedID != note.ID {
+		t.Fatalf("note reload changed selection to %q", m.noteState.selectedID)
+	}
+}
+
 func TestNotesRowRendersWithoutGitTarget(t *testing.T) {
 	state := sampleState()
 	state.Files = nil
@@ -421,7 +471,7 @@ func TestEditingNotePreservesPatchScroll(t *testing.T) {
 	m.patchViewport.ScrollOffset = 4
 	m.renderPatch(72, 5, 72)
 
-	m, _ = sendKey(m, "E")
+	m, _ = sendKey(m, "e")
 	if m.patchViewport.ScrollOffset != 4 {
 		t.Fatalf("opening editor moved scroll to %d, want 4", m.patchViewport.ScrollOffset)
 	}
@@ -446,7 +496,7 @@ func TestEditingNotePreservesNotesViewScroll(t *testing.T) {
 	m.setFileTreeCursor(len(projection.Rows) - 1)
 	m.noteState.listScroll = 1
 
-	m, _ = sendKey(m, "E")
+	m, _ = sendKey(m, "e")
 	m.noteState.composer.input.SetValue("edited")
 	m = saveNoteComposer(t, m)
 	plain := ansi.Strip(m.renderPatch(40, 3, 40))
@@ -587,8 +637,12 @@ func TestNoteEditRequiresSelectionAndEscapeCancels(t *testing.T) {
 	m := notePatchModel()
 	m.noteState.store = noteActionStore(t)
 	m, cmd := sendKey(m, "E")
+	if cmd != nil || m.noteState.composer != nil || m.noteState.err != "" {
+		t.Fatalf("uppercase E triggered note editing: composer %#v, err %q", m.noteState.composer, m.noteState.err)
+	}
+	m, cmd = sendKey(m, "e")
 	if cmd != nil || m.noteState.composer != nil || !strings.Contains(m.noteState.err, "Select a note") {
-		t.Fatalf("E without selection = composer %#v, err %q", m.noteState.composer, m.noteState.err)
+		t.Fatalf("e without selection = composer %#v, err %q", m.noteState.composer, m.noteState.err)
 	}
 
 	m, _ = sendKey(m, "c")
@@ -743,9 +797,9 @@ func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
 	m.noteState.items = []notes.Note{note}
 	m.noteState.selectedID = note.ID
 
-	m, _ = sendKey(m, "E")
+	m, _ = sendKey(m, "e")
 	if m.noteState.composer == nil || m.noteState.composer.input.Value() != "original" {
-		t.Fatal("E did not open selected body")
+		t.Fatal("e did not open selected body")
 	}
 	m.noteState.composer.input.SetValue("edited")
 	m = saveNoteComposer(t, m)
@@ -772,8 +826,12 @@ func TestNoteEditResolveAndDeleteUseNarrowMutations(t *testing.T) {
 
 	m, _ = sendKey(m, "}")
 	m, cmd = sendKey(m, "D")
+	if cmd != nil || m.noteState.confirmDelete {
+		t.Fatal("uppercase D triggered note deletion")
+	}
+	m, cmd = sendKey(m, "d")
 	if cmd != nil || !m.noteState.confirmDelete {
-		t.Fatal("D did not open confirmation")
+		t.Fatal("d did not open confirmation")
 	}
 	m, cmd = sendKey(m, "y")
 	if cmd == nil {
@@ -794,6 +852,30 @@ func notePatchModel() Model {
 	m.patchViewport.Width = 72
 	m.patchViewport.Height = 25
 	m.patchViewport.ScrollOffset = 2
+	return m
+}
+
+func folderNotePatchModel() Model {
+	state := sampleState()
+	state.Files = []model.FileSummary{
+		{Path: "internal/a.go", Status: model.StatusModified},
+		{Path: "internal/b.go", Status: model.StatusModified},
+	}
+	state.FileTreeCursor = 0
+	state.SelectedFile = -1
+	state.FocusPane = model.PanePatch
+	m := NewModel(state)
+	m.width = 100
+	m.height = 30
+	m.patchViewport = panes.NewPatchViewport(model.FilePatch{
+		Summary: model.FileSummary{Path: "internal"},
+		Hunks: []model.Hunk{
+			{FilePath: "internal/a.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "first"}}},
+			{FilePath: "internal/b.go", Lines: []model.DiffLine{{Kind: model.LineAdded, NewNo: intP(1), Text: "second"}}},
+		},
+	})
+	m.patchViewport.Width = 72
+	m.patchViewport.Height = 25
 	return m
 }
 

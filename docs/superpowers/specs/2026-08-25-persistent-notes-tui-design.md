@@ -14,6 +14,7 @@ restarts, and remain interoperable with `scry note` commands.
 ## Scope
 
 - Show attached notes inline in unified and side-by-side patches.
+- Show and create attached notes in aggregate folder patches.
 - Create `user` notes on current-source lines.
 - Edit note bodies without changing authors, anchors, or states.
 - Resolve open notes and delete any note through direct key bindings.
@@ -33,11 +34,12 @@ restarts, and remain interoperable with `scry note` commands.
 
 ## Navigation and Placement
 
-Scry continues to render one selected file at a time. Attached notes become
+Scry renders the selected file or aggregate folder patch. Attached notes become
 first-class visual rows in `PatchViewport`, directly after the matching
-current-source line. A card spans the patch width in both unified and
-side-by-side layouts. Deleted-only rows cannot own cards because notes anchor
-only to current source.
+current-source line. Folder rows retain their hunk's real file path, so notes
+match on `(file, line)` rather than line number alone. A card spans the patch
+width in both unified and side-by-side layouts. Deleted-only rows cannot own
+cards because notes anchor only to current source.
 
 The viewport row plan owns card height, wrapping, scrolling, and visibility.
 Cards are not ordinary code rows. This keeps source-line targeting and the
@@ -55,7 +57,8 @@ Scry renders a virtual `Notes (N)` entry after the real worktree files when at
 least one resolved or stale note exists. It is a file-list presentation row,
 not a fake `model.FileSummary`, so Git operations cannot target it. Selecting
 it shows every resolved and stale note in the active worktree. No notes entry
-appears on the worktree dashboard.
+appears on the worktree dashboard. A subdued rule in the entry separates this
+section from the file tree without adding another selectable row.
 
 ## Card Presentation
 
@@ -81,9 +84,9 @@ The patch view adds these direct commands:
 ```text
 c       create a user note on the current source line
 { / }   select the previous or next note
-E       edit the selected note body
+e       edit the selected note body
 R       resolve the selected open note
-D       delete the selected note after confirmation
+d       delete the selected note after confirmation
 ```
 
 The patch pane highlights the full selected row and marks it at the far left,
@@ -92,16 +95,16 @@ added lines, and whole inline note cards while skipping headers, separators,
 and deleted-only rows. The cursor survives unified, side-by-side, split, and
 modal layout changes. `c` without a selectable source
 line leaves the UI unchanged and reports that a current-source line is
-required. `E`, `R`, or `D` without a selected compatible note reports a short
+required. `e`, `R`, or `d` without a selected compatible note reports a short
 status message.
-Resolved and stale notes support `E` and `D`; `R` is only valid for open notes.
+Resolved and stale notes support `e` and `d`; `R` is only valid for open notes.
 
 Deletion reuses Scry's confirmation-dialog pattern. Cancelling makes no ledger
 change. The help view and patch footer advertise the new bindings.
 
 ## Composer and External Editor
 
-`c` opens an inline multiline composer after the target source row. `E` opens
+`c` opens an inline multiline composer after the target source row. `e` opens
 the same composer with the selected note body. The composer owns keyboard input
 while active and uses the already-installed Bubbles textarea component.
 
@@ -136,10 +139,11 @@ The UI model owns:
 - the textarea and create/edit target;
 - note loading, mutation, confirmation, and error state.
 
-`PatchViewport` receives presentation-ready notes for the selected file and
-the active draft. It plans and renders cards but never reads or mutates the
-ledger. The file-list projection owns the stale-notes presentation row without
-adding it to the Git-backed file collection.
+`PatchViewport` receives presentation-ready notes for the selected file or
+folder and the active draft. It plans and renders cards but never reads or
+mutates the ledger. Each selectable source row exposes its file and current
+line as the create anchor. The file-list projection owns the stale-notes
+presentation row without adding it to the Git-backed file collection.
 
 All storage operations run in `tea.Cmd` functions so file locking and source
 fingerprinting do not block input or rendering. Existing store locking and
@@ -185,12 +189,13 @@ Focused tests cover:
 - inline placement after current-source rows in unified and side-by-side views;
 - card wrapping and viewport height accounting;
 - no attachment to deleted-only rows;
+- folder-patch placement and creation when different files share a line number;
 - stable ordering and `{` / `}` navigation across files and same-line notes;
 - open, resolved, selected, and stale presentation;
 - the virtual stale-notes row without contaminating Git file operations;
 - create and body-only edit composer behavior;
 - `Enter`, `Alt+Enter`, `Ctrl+G`, and `Esc` draft lifecycle;
-- direct `E`, `R`, and `D` actions and delete confirmation;
+- direct `e`, `R`, and `d` actions and delete confirmation;
 - note refresh, mutation failure preservation, and worktree store switching.
 
 The implementation must pass `go test ./...`, `go test -race ./...`,
@@ -199,7 +204,8 @@ The implementation must pass `go test ./...`, `go test -race ./...`,
 The manual acceptance pass must verify:
 
 1. Add an agent note with the CLI and reveal it in the running TUI with `r`.
-2. Create, edit, resolve, and delete user notes in both patch layouts.
+2. Create, edit, resolve, and delete user notes in both patch layouts and an
+   aggregate folder patch.
 3. Exit and reopen Scry and confirm persisted state.
 4. Resolve a note and find it under `Notes (N)`; then change an open note's
    source line, refresh, and find the stale note there too.

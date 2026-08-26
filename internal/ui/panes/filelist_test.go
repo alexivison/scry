@@ -106,6 +106,20 @@ func TestProjectFileTree_NotesRowIsNotGitFile(t *testing.T) {
 	}
 }
 
+func TestRenderFileList_SeparatesNotesFromTreeWithoutExtraRow(t *testing.T) {
+	files := sampleFileList()
+	projection := ProjectFileTree(files, model.FileFilterAll, nil, 0, 3)
+	output, _ := RenderFileList(files, 0, 0, 60, 20, true, FileListOpts{NoteCount: 3})
+	plain := ansi.Strip(output)
+
+	if !strings.Contains(plain, "── Notes (3)") {
+		t.Fatalf("notes entry has no tree separator: %q", plain)
+	}
+	if len(strings.Split(plain, "\n")) != len(projection.Rows) {
+		t.Fatalf("rendered separator added a selectable row: rows=%d output=%q", len(projection.Rows), plain)
+	}
+}
+
 func TestRenderFileList_ActiveInactive(t *testing.T) {
 	t.Parallel()
 
